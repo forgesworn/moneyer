@@ -37,4 +37,14 @@ describe('lnurlcash-conformance', () => {
     await gradeNote(buildNoteUrl(`${mint.moneyer.url}/w`, k1, 21_000), report)
     expect(failures(report)).toEqual([])
   })
+
+  it('passes the spending checks with a mint fee advertised - exact fee algebra', async () => {
+    const fee = {baseFeeMsat: 1000, feePpm: 5000}
+    const mint = (active = await startMint({mintFee: fee}))
+    const k1 = freshK1()
+    mint.moneyer.store.creditNote(hashK1(k1), 21_000)
+    const report = createReport()
+    await gradeNote(buildNoteUrl(`${mint.moneyer.url}/w`, k1, 21_000), report, {mintFee: fee})
+    expect(failures(report)).toEqual([])
+  })
 })

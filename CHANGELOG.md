@@ -18,6 +18,10 @@ Initial implementation.
   pending-not-guessed, reconciliation at startup and on demand.
 - Passes the lnurlcash-conformance grader, read-only and spending runs;
   the grader executes inside the test suite.
+- The LUD-25 fee algebra on mutations: base_fee_msat deducted from every
+  split's change (never the requested amount), (n-1) base fees refunded
+  into a merge of n notes, 'insufficient value' when change cannot cover
+  the fee or would land at zero.
 - Shared funding sources are a supported deployment: the melt path
   pre-checks the node's payment history and surfaces the node's
   "payment already exists" refusal as a distinct, note-restoring

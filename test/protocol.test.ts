@@ -222,6 +222,51 @@ describe('mutations', () => {
   })
 })
 
+describe('split and merge fees', () => {
+  // LUD-25: a fee-advertising mint deducts base_fee_msat from every
+  // split's change (never the requested amount) and refunds (n - 1) base
+  // fees into a merge of n notes. The proportional part is mint-time only.
+  it('deducts the base fee from change and refunds it on merge', async () => {
+    const fee = {baseFeeMsat: 1000, feePpm: 5000}
+    const mint = await start({mintFee: fee})
+    const pubkey = mint.moneyer.signer!.pubkey
+    const note = creditNote(mint, 21_000)
+    const info = await fetchNoteInfo(note.url)
+
+    const split = await splitNote(info.callback, [note.k1], 8_000)
+    expect(verifyNoteSignature(split.k1, 8_000, split.signature!, pubkey)).toBe(true)
+    expect(verifyNoteSignature(split.change, 12_000, split.changeSignature!, pubkey)).toBe(true)
+    const changeInfo = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, split.change))
+    expect(changeInfo.maxWithdrawable).toBe(12_000)
+
+    const merged = await mergeNotes(info.callback, [split.k1, split.change])
+    const mergedInfo = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, merged.k1))
+    expect(mergedInfo.maxWithdrawable).toBe(21_000)
+    expect(verifyNoteSignature(merged.k1, 21_000, merged.signature!, pubkey)).toBe(true)
+  })
+
+  it('refuses a split whose change cannot cover the fee', async () => {
+    const mint = await start({mintFee: {baseFeeMsat: 1000, feePpm: 0}})
+    const note = creditNote(mint, 10_000)
+    const info = await fetchNoteInfo(note.url)
+    // change before the fee is 500 - cannot cover it
+    await expect(splitNote(info.callback, [note.k1], 9_500)).rejects.toThrow(ServiceRejectedError)
+    // change would land at exactly nothing
+    await expect(splitNote(info.callback, [note.k1], 9_000)).rejects.toThrow(ServiceRejectedError)
+    // the refusals burned nothing
+    expect((await fetchNoteInfo(note.url)).maxWithdrawable).toBe(10_000)
+  })
+
+  it('rotates without charging or refunding - a merge of one', async () => {
+    const mint = await start({mintFee: {baseFeeMsat: 1000, feePpm: 0}})
+    const note = creditNote(mint, 10_000)
+    const info = await fetchNoteInfo(note.url)
+    const rotated = await rotateNote(info.callback, note.k1)
+    const after = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, rotated.k1))
+    expect(after.maxWithdrawable).toBe(10_000)
+  })
+})
+
 describe('melting', () => {
   it('melts a note: OK means in flight, the burn lands on settlement', async () => {
     const mint = await start()

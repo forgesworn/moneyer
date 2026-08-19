@@ -32,10 +32,16 @@ Client library to build against a mint: lnurlcash-kit
    note, and treat the node's "payment already exists" refusal as a
    distinct restorable outcome - never confirm a melt against a payment
    this mint did not initiate.
-6. Reason strings are protocol surface: 'pending',
+6. Fee algebra (LUD-25, when a fee is advertised): base_fee_msat comes
+   out of every split's CHANGE, never the requested amount; a merge of n
+   notes refunds (n-1) base fees; a change that cannot cover the fee or
+   would land at zero refuses with 'insufficient value'. The proportional
+   part applies at mint time only.
+7. Reason strings are protocol surface: 'pending',
    'Invalid or already spent k1.', 'Unknown note.', 'Note already spent.',
-   'missing h', 'missing h2' - wallets classify on them.
-7. minSendable must survive the mint's own fee (grossUpForMintFee of the
+   'missing h', 'missing h2', 'insufficient value' - wallets classify on
+   them.
+8. minSendable must survive the mint's own fee (grossUpForMintFee of the
    dust floor), or the mint advertises an amount it will refuse.
 
 ## Library API

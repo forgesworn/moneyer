@@ -3,7 +3,7 @@ import {bytesToHex, randomBytes} from '@noble/hashes/utils.js'
 import {applyMintFee, grossUpForMintFee, hashK1} from 'lnurlcash-kit'
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import type {MoneyerConfig} from './config.ts'
-import {NotePendingError, NoteStore, NoteUnavailableError, OutputCollisionError, type NoteRow} from './store.ts'
+import {NotePendingError, NoteStore, NoteUnavailableError, type NoteRow} from './store.ts'
 import {createNoteSigner, type NoteSigner} from './signing.ts'
 import {createFakeBackend} from './backends/fake.ts'
 import {createClnBackend} from './backends/cln.ts'
@@ -351,6 +351,8 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         })
       }
 
+      const baseFeeMsat = config.mintFee?.baseFeeMsat ?? 0
+
       // split
       if (amountRaw !== null) {
         const amount = Number(amountRaw)
@@ -358,10 +360,19 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // Change must stay positive: an exact-total split is a rotate, and
         // a zero note is a liability entry nobody can ever want.
         if (amount >= totalMsat) return fail('Invalid amount.')
+        // LUD-25: the flat base fee comes out of CHANGE on every split -
+        // never out of the requested amount - so a holder cannot dodge
+        // per-melt costs by splitting into dust and melting each piece.
+        // The proportional part is never reapplied; it was withheld once,
+        // at mint time.
+        const changeBeforeFeeMsat = totalMsat - amount
+        if (changeBeforeFeeMsat < baseFeeMsat) return fail('insufficient value')
+        const changeMsat = changeBeforeFeeMsat - baseFeeMsat
+        if (changeMsat < 1) return fail('insufficient value')
         try {
           store.swap(inputIds, [
             {id: h!, amountMsat: amount},
-            {id: h2!, amountMsat: totalMsat - amount}
+            {id: h2!, amountMsat: changeMsat}
           ])
         } catch (err) {
           if (err instanceof NotePendingError) return fail('pending')
@@ -371,19 +382,23 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         }
         return send({
           status: 'OK',
-          ...(signer ? {sig: signer.sign(h!, amount), sig2: signer.sign(h2!, totalMsat - amount)} : {})
+          ...(signer ? {sig: signer.sign(h!, amount), sig2: signer.sign(h2!, changeMsat)} : {})
         })
       }
 
-      // rotate (one k1) or merge (several) - the same swap either way
+      // rotate (one k1) or merge (several) - the same swap either way.
+      // LUD-25: a merge of n notes refunds (n - 1) base fees, since this
+      // mint now faces one eventual melt instead of n. A rotate is a merge
+      // of one - the refund is exactly 0.
+      const mergedMsat = totalMsat + (inputIds.length - 1) * baseFeeMsat
       try {
-        store.swap(inputIds, [{id: h!, amountMsat: totalMsat}])
+        store.swap(inputIds, [{id: h!, amountMsat: mergedMsat}])
       } catch (err) {
         if (err instanceof NotePendingError) return fail('pending')
         // same oracle-free reason for a collision as for a dead k1
         return fail('Invalid or already spent k1.')
       }
-      return send({status: 'OK', ...(signer ? {sig: signer.sign(h!, totalMsat)} : {})})
+      return send({status: 'OK', ...(signer ? {sig: signer.sign(h!, mergedMsat)} : {})})
     }
 
     return fail('Not found.', 404)
