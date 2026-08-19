@@ -348,7 +348,8 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           ])
         } catch (err) {
           if (err instanceof NotePendingError) return fail('pending')
-          if (err instanceof OutputCollisionError) return fail('h already in use.')
+          // OutputCollisionError shares the dead-k1 reason on purpose:
+          // which table the id collided with is an oracle nobody is owed.
           return fail('Invalid or already spent k1.')
         }
         return send({
@@ -362,7 +363,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         store.swap(inputIds, [{id: h!, amountMsat: totalMsat}])
       } catch (err) {
         if (err instanceof NotePendingError) return fail('pending')
-        if (err instanceof OutputCollisionError) return fail('h already in use.')
+        // same oracle-free reason for a collision as for a dead k1
         return fail('Invalid or already spent k1.')
       }
       return send({status: 'OK', ...(signer ? {sig: signer.sign(h!, totalMsat)} : {})})
