@@ -81,7 +81,7 @@ against the same endpoints every wallet uses:
   **immediately rotated** - the preimage any invoice-observer could poll
   out of verify is dead before the note is shown. The rotated note's
   signature is verified against the mint's advertised key in front of the
-  user, and the QR sits behind a tap-to-reveal cover.
+  user, and the QR arrives under scratch-off silver foil, rubbed away like a scratch card.
 - **Check a note**: live value, spent/unknown/pending classified in plain
   words, offline signature verification.
 - `MONEYER_WALLET_URL` (optional) links minted notes straight into a

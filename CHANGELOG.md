@@ -25,7 +25,7 @@ Initial implementation.
 - The mint's own website at GET /: mint a note in the browser (invoice
   QR, LUD-21 countdown polling, claim-and-immediately-rotate so the
   verify-exposed preimage dies before the note is shown, offline
-  signature verification in front of the user, tap-to-reveal QR), check
+  signature verification in front of the user, scratch-off silver over the QR), check
   a note (live/spent/unknown/pending in plain words), the terms and the
   funding node. vite + anime.js + lnurlcash-kit, served from memory by
   the mint process; falls back to a self-contained zero-script landing

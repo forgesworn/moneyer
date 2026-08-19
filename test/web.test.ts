@@ -85,8 +85,8 @@ describe('the mint website', () => {
     await until(() => document.querySelector('[data-value]')?.textContent === '21', 'the counted value')
     const walletLink = document.querySelector<HTMLAnchorElement>('a[href^="https://wallet.example/#/claim?u="]')
     expect(walletLink).not.toBeNull()
-    // the revealed QR stays covered until deliberately tapped
-    expect(document.querySelector('.cover')).not.toBeNull()
+    // the code arrives under scratch silver, not in the open
+    expect(document.querySelector('.scratch-foil')).not.toBeNull()
   }, 30_000)
 
   it('classifies an unknown note in the check flow', async () => {

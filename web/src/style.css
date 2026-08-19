@@ -408,23 +408,21 @@ a.qr { line-height: 0; }
 .nb--p .nb-overstamp { inset: 9% 0 auto 0; height: 36%; font-size: 9.5cqw; }
 .nb--l .nb-overstamp { font-size: 7.5cqw; }
 
-/* ---------- the reveal: hold, then the strike ---------- */
-.cover-badge { position: relative; width: 36%; max-width: 92px; aspect-ratio: 1; display: grid; place-items: center; color: var(--nb-blue); }
-.cover-badge svg { width: 100%; height: 100%; color: inherit; }
-.cover-ring { position: absolute; inset: 0; transform: rotate(-90deg); }
-.ring-track { fill: none; stroke: currentColor; opacity: 0.22; stroke-width: 3.5; }
-.ring-fill { fill: none; stroke: currentColor; stroke-width: 5; stroke-linecap: round; stroke-dasharray: 163.36; stroke-dashoffset: 163.36; }
-.cover-bolt { width: 40% !important; height: 40% !important; }
-.strike-flash {
-  position: absolute; inset: 0; z-index: 6; pointer-events: none;
-  background: radial-gradient(circle at 50% 62%, rgba(255, 255, 255, 0.95), rgba(214, 226, 244, 0.5) 55%, transparent 78%);
+/* ---------- the reveal: scratch silver ---------- */
+.nb .covered .qr { filter: none; transform: none; }
+.scratch-foil {
+  position: absolute; inset: 0; z-index: 3;
+  border-radius: 2px; touch-action: none; cursor: pointer; display: block;
+  width: 100%; height: 100%;
+  /* opaque before the first paint - the secret never flashes */
+  background: linear-gradient(135deg, #cfd4db, #eef1f5 25%, #a7b0bc 45%, #dfe3e9 60%, #98a1ad 80%, #d5dae1);
 }
-.strike-bolt {
-  position: absolute; inset: 0; z-index: 7; pointer-events: none;
-  display: grid; place-items: center; color: #ecf3ff;
-  filter: drop-shadow(0 0 20px rgba(110, 155, 220, 0.95)) drop-shadow(0 0 6px rgba(255, 255, 255, 0.9));
+.scratch-foil:focus-visible { outline: 2px solid var(--nb-blue); outline-offset: 2px; }
+.foil-flake {
+  position: absolute; z-index: 4; width: 7px; height: 7px; pointer-events: none;
+  background: linear-gradient(135deg, #e9ecf0, #99a2ae); border-radius: 1px;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.25);
 }
-.strike-bolt svg { width: 52%; height: 52%; }
 .glint::after {
   content: ''; position: absolute; inset: -20%; z-index: 6; pointer-events: none;
   background: linear-gradient(105deg, transparent 42%, rgba(255, 255, 255, 0.55) 50%, transparent 58%);

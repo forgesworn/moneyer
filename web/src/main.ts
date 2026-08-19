@@ -217,125 +217,221 @@ const qrCard = (text: string, href?: string): HTMLElement => {
   return card
 }
 
-// The reveal is a ceremony. A bearer secret should neither flash from one
-// careless tap nor arrive without occasion: HOLD to charge the ring, and
-// the note is STRUCK - lightning, the press, sparks, the foil glint, the
-// seal slamming home. Keyboard activation reveals directly (holding a key
-// is nobody's idea of access).
-const RING_CIRCUMFERENCE = 2 * Math.PI * 26
+// The reveal is a scratch card. The silver series hides its secret under
+// actual scratch silver: an opaque painted foil the holder rubs away with
+// a finger, flakes falling, until enough is gone and the rest dissolves
+// into sparks, the foil glint and the seal. A secret that must be
+// scratched for can never flash from a careless tap - and it is a small
+// ceremony of ownership. Keyboard: Enter reveals at once.
 
-const strike = (root: HTMLElement, cover: HTMLElement, qr: HTMLElement): void => {
-  if (navigator.vibrate) navigator.vibrate([15, 40, 30])
+const paintFoil = (canvas: HTMLCanvasElement): void => {
+  const w = canvas.clientWidth
+  const h = canvas.clientHeight
+  if (!w || !h) return
+  const dpr = Math.min(window.devicePixelRatio || 1, 3)
+  canvas.width = Math.round(w * dpr)
+  canvas.height = Math.round(h * dpr)
+  const ctx = canvas.getContext('2d', {willReadFrequently: true})
+  if (!ctx) return
+  ctx.scale(dpr, dpr)
 
-  // lightning: two flickers of a bolt over the panel
-  const bolt = el(
-    `<div class="strike-bolt" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.5 13.5H11L9.5 22 18 10.5h-6.5L13 2z"/></svg></div>`
-  )
-  root.append(bolt)
-  animate(bolt, {
-    opacity: [0, 1, 0.2, 1, 0],
-    duration: 340,
-    ease: 'linear',
-    onComplete: () => bolt.remove()
-  })
+  // the metal: a diagonal silver gradient
+  const metal = ctx.createLinearGradient(0, 0, w, h)
+  for (const [stop, colour] of [
+    [0, '#cfd4db'],
+    [0.22, '#eef1f5'],
+    [0.42, '#a7b0bc'],
+    [0.58, '#dfe3e9'],
+    [0.78, '#98a1ad'],
+    [1, '#d5dae1']
+  ] as Array<[number, string]>) {
+    metal.addColorStop(stop, colour)
+  }
+  ctx.fillStyle = metal
+  ctx.fillRect(0, 0, w, h)
 
-  // the flash of the press
-  const flash = el('<div class="strike-flash" aria-hidden="true"></div>')
-  root.append(flash)
-  animate(flash, {opacity: [0, 0.9, 0], duration: 260, ease: 'outQuad', onComplete: () => flash.remove()})
+  // brushed grain
+  for (let i = 0; i < 900; i++) {
+    const light = Math.random() > 0.5
+    ctx.fillStyle = light ? `rgba(255,255,255,${Math.random() * 0.1})` : `rgba(40,46,54,${Math.random() * 0.07})`
+    ctx.fillRect(Math.random() * w, Math.random() * h, 2 + Math.random() * 10, 1)
+  }
+  // a sheen band
+  ctx.fillStyle = 'rgba(255,255,255,0.14)'
+  ctx.beginPath()
+  ctx.moveTo(w * 0.15, 0)
+  ctx.lineTo(w * 0.38, 0)
+  ctx.lineTo(w * 0.12, h)
+  ctx.lineTo(-w * 0.1, h)
+  ctx.closePath()
+  ctx.fill()
 
-  // the paper takes the blow
-  animate(root, {
-    scale: [1, 0.972, 1.012, 1],
-    rotate: ['0deg', '-0.5deg', '0.35deg', '0deg'],
-    duration: 460,
-    ease: 'outElastic(1, 0.6)'
-  })
+  // embossed instruction
+  const size = Math.max(11, w * 0.055)
+  ctx.textAlign = 'center'
+  ctx.font = `600 ${size}px 'IBM Plex Mono', monospace`
+  ctx.fillStyle = 'rgba(255,255,255,0.55)'
+  ctx.fillText('SCRATCH TO REVEAL', w / 2, h / 2 + 1)
+  ctx.fillStyle = 'rgba(44,50,58,0.72)'
+  ctx.fillText('SCRATCH TO REVEAL', w / 2, h / 2)
+  ctx.font = `500 ${Math.max(8.5, w * 0.032)}px 'IBM Plex Mono', monospace`
+  ctx.fillStyle = 'rgba(44,50,58,0.6)'
+  ctx.fillText('THE CODE BENEATH IS THE MONEY', w / 2, h / 2 + size * 1.5)
 
-  // the cover shatters off, the code snaps into focus
-  animate(cover, {
+  // hairline frame
+  ctx.strokeStyle = 'rgba(44,50,58,0.4)'
+  ctx.lineWidth = 1
+  ctx.strokeRect(3.5, 3.5, w - 7, h - 7)
+
+  // the CSS gradient only covered the pre-paint frame; from here the
+  // bitmap is the foil, and scratching must open onto the code beneath
+  canvas.style.background = 'none'
+}
+
+// A silver flake spins off the scrub point.
+const flake = (host: HTMLElement, x: number, y: number): void => {
+  const bit = el('<i class="foil-flake" aria-hidden="true"></i>')
+  bit.style.left = `${x}px`
+  bit.style.top = `${y}px`
+  host.append(bit)
+  animate(bit, {
+    x: utils.random(-22, 22),
+    y: utils.random(18, 60),
+    rotate: `${utils.random(-200, 200)}deg`,
     opacity: [1, 0],
-    scale: [1, 1.18],
-    filter: ['blur(0px)', 'blur(8px)'],
-    duration: 300,
-    ease: 'outCubic',
-    onComplete: () => cover.remove()
+    duration: utils.random(400, 750),
+    ease: 'inQuad',
+    onComplete: () => bit.remove()
   })
-  animate(qr, {filter: ['blur(14px)', 'blur(0px)'], scale: [0.94, 1.02, 1], duration: 560, ease: 'outBack(1.6)'})
+}
 
-  // sparks off the die
+// The last of the foil dissolves: sparks, the glint, the seal, the serial.
+const finale = (root: HTMLElement, canvas: HTMLCanvasElement): void => {
+  if (navigator.vibrate) navigator.vibrate([12, 30, 20])
+  animate(canvas, {
+    opacity: [1, 0],
+    scale: [1, 1.05],
+    duration: 380,
+    ease: 'outCubic',
+    onComplete: () => canvas.remove()
+  })
+  const qr = root.querySelector('.covered .qr') as HTMLElement | null
+  if (qr) animate(qr, {scale: [0.985, 1.02, 1], duration: 480, ease: 'outBack(1.6)'})
   const panel = root.querySelector('.nb-panel') as HTMLElement | null
   burst(panel ?? root)
-
-  // the seal slams home, the serial re-inks, the foil glints
   const seal = root.querySelector('.nb-seal') as HTMLElement | null
   if (seal) {
-    animate(seal, {scale: [1.9, 1], opacity: [0, 0.8], rotate: ['-6deg', '8deg'], duration: 520, delay: 320, ease: 'outBack(2)'})
+    animate(seal, {scale: [1.9, 1], opacity: [0, 0.8], rotate: ['-6deg', '8deg'], duration: 520, delay: 260, ease: 'outBack(2)'})
   }
   const serial = root.querySelector('.nb-serial') as HTMLElement | null
-  if (serial) animate(serial, {opacity: [0, 1], y: [4, 0], duration: 420, delay: 480, ease: 'outCubic'})
+  if (serial) animate(serial, {opacity: [0, 1], y: [4, 0], duration: 420, delay: 380, ease: 'outCubic'})
   setTimeout(() => {
     root.classList.add('glint')
     setTimeout(() => root.classList.remove('glint'), 1500)
-  }, 420)
+  }, 320)
 }
 
 const wireCover = (root: HTMLElement): void => {
-  const cover = root.querySelector('.cover') as HTMLElement | null
-  const qr = root.querySelector('.covered .qr') as HTMLElement | null
-  if (!cover || !qr) return
-  const ring = cover.querySelector('.ring-fill') as SVGCircleElement | null
-  const word = cover.querySelector('.cover-word') as HTMLElement | null
-  let holdTimer: ReturnType<typeof setTimeout> | undefined
-  let progressAnim: {pause: () => void} | null = null
+  const canvas = root.querySelector('canvas.scratch-foil') as HTMLCanvasElement | null
+  if (!canvas) return
+  const covered = canvas.parentElement as HTMLElement
   let revealed = false
+  let painted = false
+  let strokes = 0
+  let lastX = 0
+  let lastY = 0
+  let scrubbing = false
 
-  const setRing = (progress: number): void => {
-    ring?.setAttribute('stroke-dashoffset', String(RING_CIRCUMFERENCE * (1 - progress)))
+  // paint once the layout has given the canvas its real size
+  if ('ResizeObserver' in window) {
+    const observer = new ResizeObserver(() => {
+      if (!painted && canvas.clientWidth > 0) {
+        painted = true
+        paintFoil(canvas)
+        observer.disconnect()
+      }
+    })
+    observer.observe(canvas)
+  } else {
+    paintFoil(canvas)
   }
-  setRing(0)
 
   const reveal = (): void => {
     if (revealed) return
     revealed = true
-    strike(root, cover, qr)
+    finale(root, canvas)
   }
 
-  const beginHold = (): void => {
+  const clearedEnough = (): boolean => {
+    const ctx = canvas.getContext('2d', {willReadFrequently: true})
+    if (!ctx || !canvas.width) return false
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+    let clear = 0
+    let total = 0
+    // sample every 23rd pixel - plenty for a fraction
+    for (let i = 3; i < data.length; i += 4 * 23) {
+      total++
+      if (data[i]! < 40) clear++
+    }
+    return total > 0 && clear / total > 0.45
+  }
+
+  const scrub = (x: number, y: number): void => {
+    const ctx = canvas.getContext('2d', {willReadFrequently: true})
+    if (!ctx) return
+    const dpr = canvas.width / canvas.clientWidth
+    const radius = Math.max(16, canvas.clientWidth * 0.09)
+    ctx.save()
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.globalCompositeOperation = 'destination-out'
+    ctx.lineWidth = radius
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.beginPath()
+    ctx.moveTo(lastX, lastY)
+    ctx.lineTo(x, y)
+    ctx.stroke()
+    ctx.restore()
+    strokes++
+    if (strokes % 4 === 0) flake(covered, x, y)
+    if (navigator.vibrate && strokes % 7 === 0) navigator.vibrate(4)
+    if (strokes % 10 === 0 && clearedEnough()) reveal()
+  }
+
+  const local = (event: PointerEvent): {x: number; y: number} => {
+    const rect = canvas.getBoundingClientRect()
+    return {x: event.clientX - rect.left, y: event.clientY - rect.top}
+  }
+
+  canvas.addEventListener('pointerdown', event => {
     if (revealed) return
-    if (navigator.vibrate) navigator.vibrate(8)
-    const state = {p: 0}
-    progressAnim = animate(state, {
-      p: 1,
-      duration: 650,
-      ease: 'inQuad',
-      onUpdate: () => setRing(state.p),
-      onComplete: reveal
+    event.preventDefault()
+    canvas.setPointerCapture(event.pointerId)
+    scrubbing = true
+    const {x, y} = local(event)
+    lastX = x
+    lastY = y
+    scrub(x, y)
+  })
+  canvas.addEventListener('pointermove', event => {
+    if (!scrubbing || revealed) return
+    const {x, y} = local(event)
+    scrub(x, y)
+    lastX = x
+    lastY = y
+  })
+  for (const eventName of ['pointerup', 'pointercancel'] as const) {
+    canvas.addEventListener(eventName, () => {
+      scrubbing = false
+      if (!revealed && clearedEnough()) reveal()
     })
   }
-
-  const endHold = (): void => {
-    if (revealed) return
-    progressAnim?.pause()
-    progressAnim = null
-    // released early: the ring recoils and the word insists
-    setRing(0)
-    if (word) {
-      animate(word, {x: [0, -5, 4, -2, 0], duration: 320, ease: 'inOutQuad'})
+  // keyboard: reveal at once - nobody scratches with a spacebar
+  canvas.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      reveal()
     }
-  }
-
-  cover.addEventListener('pointerdown', event => {
-    event.preventDefault()
-    clearTimeout(holdTimer)
-    beginHold()
-  })
-  for (const eventName of ['pointerup', 'pointerleave', 'pointercancel'] as const) {
-    cover.addEventListener(eventName, endHold)
-  }
-  // keyboard activation (click with no pointer) reveals directly
-  cover.addEventListener('click', event => {
-    if (event.detail === 0) reveal()
   })
 }
 
