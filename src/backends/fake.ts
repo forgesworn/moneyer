@@ -124,7 +124,7 @@ export const createFakeBackend = (): FakeBackend => {
     },
 
     async nodeInfo(): Promise<NodeInfo> {
-      return {alias: 'moneyer (fake funding source)', color: '#b45309'}
+      return {alias: 'moneyer (fake funding source)', color: '#c9ced8'}
     },
 
     control: {

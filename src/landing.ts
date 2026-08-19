@@ -34,25 +34,25 @@ export const landingPage = (args: {
 <title>${escapeHtml(host)} - an LNURLcash mint</title>
 <meta name="description" content="A moneyer strikes Lightning bearer notes. Pay ${escapeHtml(address)} and the invoice's preimage becomes your note."/>
 <style>
-:root{--bg:#100e0b;--raise:#1a1712;--line:rgba(255,244,224,.09);--ink:#f5efe4;--dim:#a89e8c;--gold:#f0a028;--deep:#e2641f}
-@media(prefers-color-scheme:light){:root{--bg:#faf5ec;--raise:#fff;--line:rgba(60,40,10,.11);--ink:#241d12;--dim:#8a7c64;--gold:#c97a10;--deep:#b34d12}}
+:root{--bg:#0e0f12;--raise:#16181d;--line:rgba(226,233,242,.09);--ink:#eef1f6;--dim:#98a0ac;--accent:#c9ced8;--accent-deep:#8f97a4}
+@media(prefers-color-scheme:light){:root{--bg:#f3f4f6;--raise:#fff;--line:rgba(30,38,50,.12);--ink:#1c2027;--dim:#6b7380;--accent:#6f7784;--accent-deep:#4d545f}}
 *{box-sizing:border-box;margin:0}
 body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh;display:grid;place-items:center;padding:28px;
-background-image:radial-gradient(900px 420px at 50% -160px,rgba(240,160,40,.16),transparent 70%)}
+background-image:radial-gradient(900px 420px at 50% -160px,rgba(201,206,216,.13),transparent 70%)}
 main{max-width:560px;width:100%;display:flex;flex-direction:column;gap:18px;animation:rise .6s cubic-bezier(.2,.7,.2,1) both}
 @keyframes rise{from{opacity:0;transform:translateY(16px)}}
-.mark{width:64px;height:64px;color:var(--gold);animation:glow 3.2s ease-in-out infinite}
-@keyframes glow{50%{filter:drop-shadow(0 0 14px rgba(240,160,40,.55))}}
+.mark{width:64px;height:64px;color:var(--accent);animation:glow 3.2s ease-in-out infinite}
+@keyframes glow{50%{filter:drop-shadow(0 0 14px rgba(201,206,216,.5))}}
 h1{font-size:clamp(30px,7vw,40px);letter-spacing:-.5px}
 h1 small{display:block;font-size:16px;color:var(--dim);font-weight:500;margin-top:8px;line-height:1.5}
-.addr{display:flex;align-items:center;gap:12px;background:linear-gradient(135deg,var(--gold),var(--deep));color:#17110a;border-radius:20px;padding:20px 22px;font-weight:750;font-size:clamp(17px,4.6vw,22px);word-break:break-all;box-shadow:0 14px 38px -14px rgba(240,130,30,.55)}
+.addr{display:flex;align-items:center;gap:12px;background:linear-gradient(135deg,var(--accent),var(--accent-deep));color:#14161b;border-radius:20px;padding:20px 22px;font-weight:750;font-size:clamp(17px,4.6vw,22px);word-break:break-all;box-shadow:0 14px 38px -14px rgba(160,170,185,.5)}
 .addr svg{width:26px;height:26px;flex:none}
 .card{background:var(--raise);border:1px solid var(--line);border-radius:20px;padding:20px 22px;display:flex;flex-direction:column;gap:12px}
 .kv{display:flex;justify-content:space-between;gap:16px;font-size:15px}
 .kv span{color:var(--dim)}
 .kv code{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;word-break:break-all;text-align:right}
 p.small{color:var(--dim);font-size:13.5px;line-height:1.65;text-align:center}
-a{color:var(--gold)}
+a{color:var(--accent)}
 </style>
 </head>
 <body>
