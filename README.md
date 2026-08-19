@@ -37,9 +37,19 @@ lesson, that behaviour is kept deliberately and tested.
 
 ## Run
 
+Not on npm yet - build from source, with the sibling repos it links
+against until those publish:
+
+```bash
+git clone https://github.com/TheCryptoDonkey/lnurlcash-kit
+git clone https://github.com/TheCryptoDonkey/lnurlcash-conformance
+git clone https://github.com/forgesworn/moneyer
+cd moneyer && npm install && npm run build
+```
+
 ```bash
 # development: fake funding source, in-memory store, a funded note printed
-npx moneyer --dev
+node dist/cli.js --dev
 
 # production shape
 MONEYER_BACKEND=cln \
@@ -48,7 +58,7 @@ MONEYER_BACKEND_RUNE=... \
 MONEYER_SIGNING_KEY=<32 bytes hex> \
 MONEYER_PUBLIC_ORIGIN=https://mint.example \
 MONEYER_DB=/var/lib/moneyer/mint.sqlite \
-moneyer
+node dist/cli.js
 ```
 
 The mint is then payable at `mint@mint.example` (and the bare-domain `_`

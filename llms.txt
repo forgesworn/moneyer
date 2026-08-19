@@ -4,8 +4,8 @@ LNURLcash (LUD-25) mint for Node 24+. Strikes Lightning bearer notes:
 paying an invoice it issues mints a note whose spend secret IS the
 invoice's payment preimage. ESM-only. MIT.
 
-Install: npm install @forgesworn/moneyer
-Run: npx moneyer --dev   (fake funding source, prints a funded note)
+Install: not yet on npm - build from source (see README)
+Run: node dist/cli.js --dev   (fake funding source, prints a funded note)
 
 Draft spec: https://github.com/lnurl/luds/pull/301
 Conformance: https://github.com/TheCryptoDonkey/lnurlcash-conformance
