@@ -217,14 +217,125 @@ const qrCard = (text: string, href?: string): HTMLElement => {
   return card
 }
 
-// A bearer QR never flashes on screen from one careless tap.
+// The reveal is a ceremony. A bearer secret should neither flash from one
+// careless tap nor arrive without occasion: HOLD to charge the ring, and
+// the note is STRUCK - lightning, the press, sparks, the foil glint, the
+// seal slamming home. Keyboard activation reveals directly (holding a key
+// is nobody's idea of access).
+const RING_CIRCUMFERENCE = 2 * Math.PI * 26
+
+const strike = (root: HTMLElement, cover: HTMLElement, qr: HTMLElement): void => {
+  if (navigator.vibrate) navigator.vibrate([15, 40, 30])
+
+  // lightning: two flickers of a bolt over the panel
+  const bolt = el(
+    `<div class="strike-bolt" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.5 13.5H11L9.5 22 18 10.5h-6.5L13 2z"/></svg></div>`
+  )
+  root.append(bolt)
+  animate(bolt, {
+    opacity: [0, 1, 0.2, 1, 0],
+    duration: 340,
+    ease: 'linear',
+    onComplete: () => bolt.remove()
+  })
+
+  // the flash of the press
+  const flash = el('<div class="strike-flash" aria-hidden="true"></div>')
+  root.append(flash)
+  animate(flash, {opacity: [0, 0.9, 0], duration: 260, ease: 'outQuad', onComplete: () => flash.remove()})
+
+  // the paper takes the blow
+  animate(root, {
+    scale: [1, 0.972, 1.012, 1],
+    rotate: ['0deg', '-0.5deg', '0.35deg', '0deg'],
+    duration: 460,
+    ease: 'outElastic(1, 0.6)'
+  })
+
+  // the cover shatters off, the code snaps into focus
+  animate(cover, {
+    opacity: [1, 0],
+    scale: [1, 1.18],
+    filter: ['blur(0px)', 'blur(8px)'],
+    duration: 300,
+    ease: 'outCubic',
+    onComplete: () => cover.remove()
+  })
+  animate(qr, {filter: ['blur(14px)', 'blur(0px)'], scale: [0.94, 1.02, 1], duration: 560, ease: 'outBack(1.6)'})
+
+  // sparks off the die
+  const panel = root.querySelector('.nb-panel') as HTMLElement | null
+  burst(panel ?? root)
+
+  // the seal slams home, the serial re-inks, the foil glints
+  const seal = root.querySelector('.nb-seal') as HTMLElement | null
+  if (seal) {
+    animate(seal, {scale: [1.9, 1], opacity: [0, 0.8], rotate: ['-6deg', '8deg'], duration: 520, delay: 320, ease: 'outBack(2)'})
+  }
+  const serial = root.querySelector('.nb-serial') as HTMLElement | null
+  if (serial) animate(serial, {opacity: [0, 1], y: [4, 0], duration: 420, delay: 480, ease: 'outCubic'})
+  setTimeout(() => {
+    root.classList.add('glint')
+    setTimeout(() => root.classList.remove('glint'), 1500)
+  }, 420)
+}
+
 const wireCover = (root: HTMLElement): void => {
   const cover = root.querySelector('.cover') as HTMLElement | null
   const qr = root.querySelector('.covered .qr') as HTMLElement | null
   if (!cover || !qr) return
-  cover.addEventListener('click', () => {
-    animate(cover, {opacity: 0, duration: 220, ease: 'outCubic', onComplete: () => cover.remove()})
-    animate(qr, {filter: ['blur(14px)', 'blur(0px)'], scale: [0.985, 1], duration: 420, ease: 'outCubic'})
+  const ring = cover.querySelector('.ring-fill') as SVGCircleElement | null
+  const word = cover.querySelector('.cover-word') as HTMLElement | null
+  let holdTimer: ReturnType<typeof setTimeout> | undefined
+  let progressAnim: {pause: () => void} | null = null
+  let revealed = false
+
+  const setRing = (progress: number): void => {
+    ring?.setAttribute('stroke-dashoffset', String(RING_CIRCUMFERENCE * (1 - progress)))
+  }
+  setRing(0)
+
+  const reveal = (): void => {
+    if (revealed) return
+    revealed = true
+    strike(root, cover, qr)
+  }
+
+  const beginHold = (): void => {
+    if (revealed) return
+    if (navigator.vibrate) navigator.vibrate(8)
+    const state = {p: 0}
+    progressAnim = animate(state, {
+      p: 1,
+      duration: 650,
+      ease: 'inQuad',
+      onUpdate: () => setRing(state.p),
+      onComplete: reveal
+    })
+  }
+
+  const endHold = (): void => {
+    if (revealed) return
+    progressAnim?.pause()
+    progressAnim = null
+    // released early: the ring recoils and the word insists
+    setRing(0)
+    if (word) {
+      animate(word, {x: [0, -5, 4, -2, 0], duration: 320, ease: 'inOutQuad'})
+    }
+  }
+
+  cover.addEventListener('pointerdown', event => {
+    event.preventDefault()
+    clearTimeout(holdTimer)
+    beginHold()
+  })
+  for (const eventName of ['pointerup', 'pointerleave', 'pointercancel'] as const) {
+    cover.addEventListener(eventName, endHold)
+  }
+  // keyboard activation (click with no pointer) reveals directly
+  cover.addEventListener('click', event => {
+    if (event.detail === 0) reveal()
   })
 }
 
