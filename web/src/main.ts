@@ -474,9 +474,11 @@ const boot = async (): Promise<void> => {
     // A proofing press for the live note's print, no invoice needed: the
     // secret is a constant, so this is never a spendable note.
     if (location.hash === '#/proof') {
+      // Six hundred billion sats: a denomination absurd enough that nobody
+      // mistakes the proofing press for money.
       viewNote({
-        url: buildNoteUrl(payInfo.withdrawLink ?? `lnurlw://${HOST}/w`, '11'.repeat(32), 21_000),
-        amountMsat: 21_000,
+        url: buildNoteUrl(payInfo.withdrawLink ?? `lnurlw://${HOST}/w`, '11'.repeat(32), 600_000_000_000_000),
+        amountMsat: 600_000_000_000_000,
         verified: true,
         secured: true
       })
@@ -875,12 +877,16 @@ const viewNote = (args: {url: string; amountMsat: number; verified: boolean; sec
 
     // the strike: the note lands and the corners count up
     animate(note, {scale: [0.96, 1], y: [10, 0], duration: 600, ease: 'outBack(1.4)'})
+    // corners past a million print compact (600B) - counting up would
+    // overwrite them with long digits
     const counterEl = note.querySelector('[data-value]')
-    if (counterEl) {
+    if (counterEl && args.amountMsat < 1_000_000_000_000) {
       setTimeout(() => {
         countTo(counterEl, args.amountMsat)
         burst(body)
       }, 250)
+    } else {
+      setTimeout(() => burst(body), 300)
     }
     return view
   })

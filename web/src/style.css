@@ -357,7 +357,9 @@ a.qr { line-height: 0; }
 .nb--l .nb-title { font-size: 2cqw; }
 .nb-words { font-family: var(--display); font-weight: 700; line-height: 1.08; letter-spacing: 0.03em; text-wrap: balance; }
 .nb--p .nb-words { font-size: 7.2cqw; margin-top: 0.6cqw; }
+.nb--p .nb-words.long { font-size: 5.6cqw; }
 .nb--l .nb-words { font-size: 5.4cqw; }
+.nb--l .nb-words.long { font-size: 4cqw; }
 .nb-sats { font-family: var(--display); font-weight: 400; letter-spacing: 0.55em; text-indent: 0.55em; }
 .nb--p .nb-sats { font-size: 3cqw; }
 .nb--l .nb-sats { font-size: 2.4cqw; }

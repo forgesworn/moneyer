@@ -21,13 +21,21 @@ const belowThousand = (n: number): string => {
 }
 
 export const amountInWords = (sats: number): string => {
-  if (!Number.isSafeInteger(sats) || sats < 1 || sats > 999_999) {
+  if (!Number.isSafeInteger(sats) || sats < 1 || sats > 999_999_999_999) {
     return sats.toLocaleString('en-GB').replace(/,/g, ' ')
   }
-  const thousands = Math.floor(sats / 1000)
-  const rest = sats % 1000
   const parts: string[] = []
-  if (thousands) parts.push(`${belowThousand(thousands)} THOUSAND`)
+  const groups: Array<[number, string]> = [
+    [1_000_000_000, 'BILLION'],
+    [1_000_000, 'MILLION'],
+    [1_000, 'THOUSAND']
+  ]
+  let rest = sats
+  for (const [size, name] of groups) {
+    const count = Math.floor(rest / size)
+    if (count) parts.push(`${belowThousand(count)} ${name}`)
+    rest %= size
+  }
   if (rest) parts.push(belowThousand(rest))
   return parts.join(' ')
 }

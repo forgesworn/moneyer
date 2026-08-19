@@ -29,8 +29,20 @@ const seal = (): string => {
   </svg>`
 }
 
+// Corner numerals compact past a million - fifteen digits in a forty-pixel
+// medallion is nobody's denomination.
+const cornerText = (sats: number): string => {
+  const compact = (value: number, suffix: string): string => {
+    const short = value >= 100 ? String(Math.round(value)) : String(Math.round(value * 10) / 10)
+    return `${short}${suffix}`
+  }
+  if (sats >= 1_000_000_000) return compact(sats / 1_000_000_000, 'B')
+  if (sats >= 1_000_000) return compact(sats / 1_000_000, 'M')
+  return sats.toLocaleString('en-GB').replace(/,/g, ' ')
+}
+
 const corner = (sats: number, at: 'tl' | 'tr', withValue: boolean): string => {
-  const text = sats.toLocaleString('en-GB').replace(/,/g, ' ')
+  const text = cornerText(sats)
   const size = Math.min(4.6, 26 / Math.max(text.length, 2))
   return `<b class="nb-corner ${at}" style="font-size:${size.toFixed(2)}cqw"${withValue ? ' data-value' : ''}>${text}</b>`
 }
@@ -53,7 +65,7 @@ export const banknote = (args: BanknoteArgs): HTMLElement => {
   const cartouche = (foot: boolean, withHost: boolean): string => `
     <div class="nb-cartouche">
       <div class="nb-title">LNURLCASH<br/> BEARER NOTE</div>
-      <div class="nb-words">${esc(words)}</div>
+      <div class="nb-words${words.length > 14 ? ' long' : ''}">${esc(words)}</div>
       <div class="nb-sats">SATS</div>
       <div class="nb-promise">Pays the bearer on demand,<br/>no questions asked</div>
       ${foot ? `<div class="nb-foot">32 BYTES · A CLAIM ON A VERY SMALL NODE<br/>NOT LEGAL TENDER</div>` : ''}
