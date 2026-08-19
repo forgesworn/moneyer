@@ -10,6 +10,7 @@ import {createClnBackend} from './backends/cln.ts'
 import {createLndBackend} from './backends/lnd.ts'
 import type {LightningBackend, NodeInfo} from './backends/types.ts'
 import {reconcilePendingMelts, runMelt} from './melt.ts'
+import {landingPage} from './landing.ts'
 
 const HEX32 = /^[0-9a-f]{64}$/
 
@@ -111,6 +112,13 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     const fail = (reason: string, status = 200): void => send({status: 'ERROR', reason}, status)
 
     const knownUser = (user: string): boolean => user === config.username || user === '_'
+
+    // ---- the mint's face ----
+    if (requestUrl.pathname === '/' && (req.method === 'GET' || req.method === 'HEAD')) {
+      res.writeHead(200, {'content-type': 'text/html; charset=utf-8'})
+      res.end(landingPage({config, host, mintPubkey: signer?.pubkey ?? null, nodeInfo}))
+      return
+    }
 
     // ---- LUD-16 payRequest: paying this mints a note ----
     const lnurlpMatch = requestUrl.pathname.match(/^\/\.well-known\/lnurlp\/(.+)$/)
