@@ -214,12 +214,19 @@ const boot = async (): Promise<void> => {
     show(() => {
       const view = el(`<div class="view center" style="justify-content:center">
         <div class="result bad">${icons.x}<b>The mint is not answering</b><p></p>
-        <button class="btn">${icons.refresh}<span>Try again</span></button></div>
+        <p class="pulse" style="color:var(--dim);font-size:13.5px">retrying on its own…</p>
+        <button class="btn">${icons.refresh}<span>Try again now</span></button></div>
       </div>`)
       view.querySelector('p')!.textContent = (err as Error).message || 'Could not reach the mint.'
       view.querySelector('button')!.addEventListener('click', () => void boot())
       return view
     })
+    // A front page heals itself: one flaky moment on the visitor's path
+    // must not leave a dead screen waiting for a human.
+    const epoch = viewEpoch
+    setTimeout(() => {
+      if (viewEpoch === epoch) void boot()
+    }, 6000)
   }
 }
 
