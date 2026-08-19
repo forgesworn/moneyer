@@ -54,6 +54,16 @@ describe('discovery', () => {
     expect(info.callback).toBe(`${mint.moneyer.url}/p/cb`)
   })
 
+  it('ships security headers on the landing page and the API', async () => {
+    const mint = await start({}, {webAssets: null})
+    const page = await fetch(`${mint.moneyer.url}/`)
+    expect(page.headers.get('content-security-policy')).toContain("default-src 'none'")
+    expect(page.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(page.headers.get('x-frame-options')).toBe('DENY')
+    const api = await fetch(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
+    expect(api.headers.get('x-content-type-options')).toBe('nosniff')
+  })
+
   it('advertises mint fees through metadata the kit parses back', async () => {
     const mint = await start({mintFee: {baseFeeMsat: 1000, feePpm: 5000}})
     const info = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)

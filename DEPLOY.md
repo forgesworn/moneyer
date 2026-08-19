@@ -57,11 +57,20 @@ MONEYER_DB=/var/lib/moneyer/mint.sqlite
 MONEYER_HOST=127.0.0.1
 MONEYER_PORT=3737
 MONEYER_USERNAME=mint
+MONEYER_WALLET_URL=https://wallet.example         # optional: links minted notes into a web wallet
 # start small until the deployment has earned trust:
 MONEYER_MAX_SENDABLE_MSAT=1000000                 # 1000 sats
 MONEYER_BASE_FEE_MSAT=1000
 MONEYER_FEE_PPM=1000
 ```
+
+The base fee is not just revenue: it is what funds the melt's routing-fee
+budget, which is floored at 0.5% of the amount or 5000 msat so that even a
+fee-free mint still routes. A fee-free mint pays that floor out of its own
+channel balance on every melt, and nothing stops a griefer cycling
+mint-and-melt at minimum amounts to bleed it - each round trip returns
+their sats and costs the mint up to the floor in routing. Set
+MONEYER_BASE_FEE_MSAT to at least cover it.
 
 ## 4. systemd
 
@@ -82,8 +91,9 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
-Pending melts reconcile automatically at startup, so a restart mid-melt
-resolves itself against lnd rather than guessing.
+Pending melts reconcile automatically at startup and every five minutes
+afterwards, so a restart mid-melt resolves itself against lnd rather than
+guessing.
 
 ## 5. TLS front
 
@@ -98,6 +108,13 @@ mint.example {
 
 Wallets require https for clearnet mints - there is no plain-http mode to
 misconfigure.
+
+**Rate limit at this layer.** Every unauthenticated GET to `/p/cb` creates
+a real invoice on the funding node, and nodes keep invoices forever:
+without a limit, one scripted loop grows both the node's database and
+moneyer's `mint_invoices` table without bound, and can pile up concurrent
+RPCs against the node. A few requests per second per IP on `/p/cb` (and a
+generous ceiling on the rest) is enough - wallets call it once per mint.
 
 ## 6. Shakedown before real limits
 

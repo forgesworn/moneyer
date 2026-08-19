@@ -17,7 +17,9 @@ invoice preimages at the funding source and in holders' wallets.
 **A holder replaying or racing mutations.** Every mutation validates and
 transitions state in one synchronous SQLite transaction with no await
 inside it; two concurrent callbacks for the same k1 cannot both win. A
-burned k1 answers `Invalid or already spent k1.` atomically.
+burned k1 answers `Invalid or already spent k1.` atomically. And every
+LNURL endpoint answers GET only, so a preflight or any other non-GET
+request carrying a callback's query string cannot mutate anything.
 
 **A holder inflating a merge or split with a repeated k1.** Duplicated k1
 parameters in one request are refused outright; they would otherwise count
@@ -88,6 +90,13 @@ the spec and enforced by the companion wallet.
 - The cln and lnd backends are unexercised against live nodes (direct
   ports of the reference mint's logic). Run `--dev` traffic and the
   conformance grader against a staging deployment before taking real money.
-- No rate limiting is built in; put it at the proxy.
+- No rate limiting is built in; put it at the proxy. This is load-bearing
+  for `/p/cb` specifically: each unauthenticated call creates a real,
+  permanent invoice at the funding source, so an unthrottled mint lets a
+  script grow both databases without bound.
+- A fee-free configuration pays the melt routing-fee floor (0.5% of the
+  amount or 5000 msat) out of its own channel balance, and mint-and-melt
+  cycling costs a griefer nothing. Set `MONEYER_BASE_FEE_MSAT` to cover the
+  floor before taking real traffic.
 - `node:sqlite` is a single-writer store; moneyer is a single-process
   service by design. Do not run two instances against one database.

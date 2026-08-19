@@ -31,6 +31,9 @@ export type MoneyerConfig = {
   // LUD-21 verify endpoint. Off means 404: the preimage it serves IS a
   // bearer secret, so the off switch has to be real.
   verify: boolean
+  // A companion web wallet the mint's site links notes into, e.g.
+  // https://wallet.example. Unset means the site offers copy/QR only.
+  walletUrl?: string
   maxK1s: number
   // Winding down: refuse anything that grows liabilities (mints and
   // splits). Rotate, merge and melt stay available so holders can leave.
@@ -105,10 +108,25 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     throw new Error('MONEYER_MIN_SENDABLE_MSAT exceeds MONEYER_MAX_SENDABLE_MSAT.')
   }
 
+  // Wallets are sent to this origin for every callback, so a malformed one
+  // must fail at startup, not as a 500 on the first request.
+  const publicOrigin = env.MONEYER_PUBLIC_ORIGIN
+  if (publicOrigin) {
+    let protocol: string
+    try {
+      protocol = new URL(publicOrigin).protocol
+    } catch {
+      throw new Error(`MONEYER_PUBLIC_ORIGIN is not a URL: ${JSON.stringify(publicOrigin)}.`)
+    }
+    if (protocol !== 'https:' && protocol !== 'http:') {
+      throw new Error(`MONEYER_PUBLIC_ORIGIN must be http or https, got ${JSON.stringify(publicOrigin)}.`)
+    }
+  }
+
   return {
     host: env.MONEYER_HOST ?? DEFAULTS.host,
     port: int(env.MONEYER_PORT, DEFAULTS.port),
-    ...(env.MONEYER_PUBLIC_ORIGIN ? {publicOrigin: env.MONEYER_PUBLIC_ORIGIN} : {}),
+    ...(publicOrigin ? {publicOrigin} : {}),
     username: env.MONEYER_USERNAME ?? DEFAULTS.username,
     description: env.MONEYER_DESCRIPTION ?? DEFAULTS.description,
     minSendableMsat,
@@ -119,6 +137,7 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     dbPath: env.MONEYER_DB ?? DEFAULTS.dbPath,
     backend,
     verify: flag(env.MONEYER_VERIFY, DEFAULTS.verify),
+    ...(env.MONEYER_WALLET_URL ? {walletUrl: env.MONEYER_WALLET_URL.replace(/\/+$/, '')} : {}),
     maxK1s: int(env.MONEYER_MAX_K1S, DEFAULTS.maxK1s),
     sunset: flag(env.MONEYER_SUNSET, DEFAULTS.sunset)
   }

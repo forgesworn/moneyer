@@ -11,6 +11,7 @@ import {createLndBackend} from './backends/lnd.ts'
 import {PaymentPendingError, type LightningBackend, type NodeInfo} from './backends/types.ts'
 import {reconcilePendingMelts, runMelt} from './melt.ts'
 import {landingPage} from './landing.ts'
+import {CONFIG_TOKEN, loadWebAssets, type WebAssets} from './web-assets.ts'
 
 const HEX32 = /^[0-9a-f]{64}$/
 
@@ -31,6 +32,9 @@ export type MoneyerDeps = {
   log?: (message: string) => void
   // See melt.ts - tests shrink these.
   confirmDelaysMs?: number[]
+  // The built website to serve at GET /. Omitted means load web/dist from
+  // disk; null means serve the self-contained landing page instead.
+  webAssets?: WebAssets | null
 }
 
 const backendFor = (config: MoneyerConfig): LightningBackend => {
@@ -49,6 +53,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   const store = deps.store ?? new NoteStore(config.dbPath)
   const backend = deps.backend ?? backendFor(config)
   const signer = config.signingKey ? createNoteSigner(config.signingKey) : null
+  const webAssets = deps.webAssets === undefined ? loadWebAssets() : deps.webAssets
 
   // Node identity for the discovery endpoint, fetched once, best-effort: a
   // funding source that cannot answer does not stop the mint serving.
@@ -105,7 +110,8 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     const send = (body: unknown, status = 200): void => {
       res.writeHead(status, {
         'content-type': 'application/json',
-        'access-control-allow-origin': '*'
+        'access-control-allow-origin': '*',
+        'x-content-type-options': 'nosniff'
       })
       res.end(JSON.stringify(body))
     }
@@ -115,10 +121,52 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
 
     // ---- the mint's face ----
     if (requestUrl.pathname === '/' && (req.method === 'GET' || req.method === 'HEAD')) {
-      res.writeHead(200, {'content-type': 'text/html; charset=utf-8'})
-      res.end(landingPage({config, host, mintPubkey: signer?.pubkey ?? null, nodeInfo}))
+      if (webAssets) {
+        res.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'x-content-type-options': 'nosniff',
+          'x-frame-options': 'DENY',
+          'referrer-policy': 'no-referrer'
+        })
+        // Runtime identity the static build cannot know. `<` is escaped so
+        // no value can close the script element it is injected into.
+        const injected = JSON.stringify({
+          username: config.username,
+          ...(config.walletUrl ? {walletUrl: config.walletUrl} : {}),
+          ...(config.sunset ? {sunset: true} : {})
+        }).replace(/</g, '\\u003c')
+        res.end(webAssets.indexHtml.replace(CONFIG_TOKEN, `<script>window.__MINT__=${injected}</script>`))
+      } else {
+        res.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          // The fallback page is self-contained: inline style only, no
+          // scripts, no external assets. The CSP says exactly that.
+          'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'",
+          'x-content-type-options': 'nosniff',
+          'x-frame-options': 'DENY',
+          'referrer-policy': 'no-referrer'
+        })
+        res.end(landingPage({config, host, mintPubkey: signer?.pubkey ?? null, nodeInfo}))
+      }
       return
     }
+    if (webAssets && (req.method === 'GET' || req.method === 'HEAD')) {
+      const asset = webAssets.get(requestUrl.pathname)
+      if (asset) {
+        res.writeHead(200, {
+          'content-type': asset.type,
+          'x-content-type-options': 'nosniff',
+          'cache-control': asset.immutable ? 'public, max-age=31536000, immutable' : 'public, max-age=300'
+        })
+        res.end(req.method === 'HEAD' ? undefined : asset.body)
+        return
+      }
+    }
+
+    // Every LNURL endpoint below is a GET. The method matters: /w/cb
+    // mutates on whatever arrives, and an OPTIONS preflight or a stray
+    // retry carrying the same query string must never burn a note.
+    if (req.method !== 'GET') return fail('Not found.', 404)
 
     // ---- LUD-16 payRequest: paying this mints a note ----
     const lnurlpMatch = requestUrl.pathname.match(/^\/\.well-known\/lnurlp\/(.+)$/)
@@ -158,7 +206,10 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         ...(signer ? {mintPubkey: signer.pubkey} : {}),
         ...(nodeInfo.alias ? {nodeAlias: nodeInfo.alias} : {}),
         ...(nodeInfo.uri ? {nodeUri: nodeInfo.uri} : {}),
-        ...(nodeInfo.color ? {nodeColor: nodeInfo.color} : {})
+        ...(nodeInfo.color ? {nodeColor: nodeInfo.color} : {}),
+        ...(nodeInfo.capacityMsat !== undefined ? {nodeCapacityMsat: nodeInfo.capacityMsat} : {}),
+        ...(nodeInfo.numChannels !== undefined ? {nodeNumChannels: nodeInfo.numChannels} : {}),
+        ...(nodeInfo.numPeers !== undefined ? {nodeNumPeers: nodeInfo.numPeers} : {})
       })
     }
 
@@ -408,7 +459,11 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     handle(req, res).catch(err => {
       log(`internal error: ${(err as Error).stack ?? err}`)
       if (!res.headersSent) {
-        res.writeHead(200, {'content-type': 'application/json', 'access-control-allow-origin': '*'})
+        res.writeHead(200, {
+          'content-type': 'application/json',
+          'access-control-allow-origin': '*',
+          'x-content-type-options': 'nosniff'
+        })
       }
       if (!res.writableEnded) res.end(JSON.stringify({status: 'ERROR', reason: 'Internal error.'}))
     })
@@ -422,6 +477,17 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   // melts against the same notes.
   await reconcilePendingMelts(store, backend, inFlight, log)
 
+  // ...and keep resolving: a melt whose outcome stays unconfirmable would
+  // otherwise park its note until the next restart. Five minutes is a
+  // compromise between a holder's stuck funds and funding-source chatter;
+  // unref'd so the timer never keeps the process alive.
+  const reconcileTimer = setInterval(() => {
+    reconcilePendingMelts(store, backend, inFlight, log).catch(err =>
+      log(`reconcile failed: ${(err as Error).message}`)
+    )
+  }, 300_000)
+  reconcileTimer.unref()
+
   return {
     url: `http://${config.host}:${port}`,
     port,
@@ -431,6 +497,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     signer,
     reconcile: () => reconcilePendingMelts(store, backend, inFlight, log),
     close: async () => {
+      clearInterval(reconcileTimer)
       await new Promise<void>((resolve, reject) => server.close(err => (err ? reject(err) : resolve())))
       await backend.close?.()
       store.close()

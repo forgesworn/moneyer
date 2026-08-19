@@ -10,6 +10,11 @@ export type NodeInfo = {
   alias?: string
   uri?: string
   color?: string
+  // Best-effort node statistics for the discovery endpoint; a backend that
+  // cannot answer cheaply just leaves these out.
+  capacityMsat?: number
+  numChannels?: number
+  numPeers?: number
 }
 
 export type PaymentOutcome = {

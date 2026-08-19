@@ -22,6 +22,17 @@ Initial implementation.
   split's change (never the requested amount), (n-1) base fees refunded
   into a merge of n notes, 'insufficient value' when change cannot cover
   the fee or would land at zero.
+- The mint's own website at GET /: mint a note in the browser (invoice
+  QR, LUD-21 countdown polling, claim-and-immediately-rotate so the
+  verify-exposed preimage dies before the note is shown, offline
+  signature verification in front of the user, tap-to-reveal QR), check
+  a note (live/spent/unknown/pending in plain words), the terms and the
+  funding node. vite + anime.js + lnurlcash-kit, served from memory by
+  the mint process; falls back to a self-contained zero-script landing
+  page when no web build exists. `MONEYER_WALLET_URL` links minted notes
+  into a companion wallet's claim route.
+- Node statistics (capacity, channels, peers) on the discovery endpoint,
+  best-effort from the funding source.
 - Shared funding sources are a supported deployment: the melt path
   pre-checks the node's payment history and surfaces the node's
   "payment already exists" refusal as a distinct, note-restoring

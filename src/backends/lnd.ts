@@ -181,10 +181,27 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
       if (!res.ok) return {}
       const uris: string[] = res.json?.uris ?? []
       const color = typeof res.json?.color === 'string' ? `#${res.json.color.replace(/^#/, '')}` : undefined
+      const numChannels = Number(res.json?.num_active_channels)
+      const numPeers = Number(res.json?.num_peers)
+      // Total public capacity, best-effort: the macaroon may not carry
+      // offchain:read, and the discovery endpoint works fine without it.
+      let capacityMsat: number | undefined
+      const channels = await json('/v1/channels')
+      if (channels.ok && Array.isArray(channels.json?.channels)) {
+        capacityMsat = channels.json.channels.reduce(
+          (sum: number, channel: {capacity?: string}) => sum + Number(channel.capacity ?? 0) * 1000,
+          0
+        )
+      }
       return {
         ...(res.json?.alias ? {alias: res.json.alias} : {}),
         ...(uris[0] || res.json?.identity_pubkey ? {uri: uris[0] ?? res.json.identity_pubkey} : {}),
-        ...(color && /^#[0-9a-fA-F]{6}$/.test(color) ? {color} : {})
+        ...(color && /^#[0-9a-fA-F]{6}$/.test(color) ? {color} : {}),
+        // !== undefined narrows for exactOptionalPropertyTypes; the isFinite
+        // half keeps a NaN from an unparseable channel capacity out.
+        ...(capacityMsat !== undefined && Number.isFinite(capacityMsat) ? {capacityMsat} : {}),
+        ...(Number.isSafeInteger(numChannels) ? {numChannels} : {}),
+        ...(Number.isSafeInteger(numPeers) ? {numPeers} : {})
       }
     }
   }

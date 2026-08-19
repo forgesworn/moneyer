@@ -20,6 +20,7 @@
   },
   "files": [
     "dist",
+    "web/dist",
     "LICENSE",
     "README.md",
     "CHANGELOG.md",
@@ -34,7 +35,11 @@
     "typecheck": "tsc --noEmit",
     "dev": "node --experimental-strip-types src/cli.ts --dev",
     "conform": "node test/run-grader.mjs",
-    "check": "npm run typecheck && npm test && npm run build && npm pack --dry-run"
+    "check": "npm run typecheck && npm run typecheck:web && npm test && npm run build && npm run web:build && npm pack --dry-run",
+    "web:dev": "vite web",
+    "web:build": "vite build web",
+    "web:preview": "vite preview web",
+    "typecheck:web": "tsc -p web"
   },
   "dependencies": {
     "@noble/curves": "^2.3.0",
@@ -47,6 +52,10 @@
     "@types/node": "^24.0.0",
     "lnurlcash-conformance": "file:../lnurlcash-conformance",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "animejs": "^4.0.0",
+    "happy-dom": "^20.0.0",
+    "uqr": "^0.1.2",
+    "vite": "^7.0.0"
   }
 }

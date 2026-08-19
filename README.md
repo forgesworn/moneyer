@@ -45,7 +45,7 @@ git clone https://github.com/TheCryptoDonkey/lnurlcash-kit
 git clone https://github.com/TheCryptoDonkey/lnurlcash-conformance
 git clone https://github.com/forgesworn/moneyer
 (cd lnurlcash-kit && npm install && npm run build)
-cd moneyer && npm install && npm run build
+cd moneyer && npm install && npm run build && npm run web:build
 ```
 
 ```bash
@@ -67,6 +67,28 @@ alias). Configuration is environment-only; see `src/config.ts` for the
 full `MONEYER_*` set including fees (`MONEYER_BASE_FEE_MSAT`,
 `MONEYER_FEE_PPM`), limits, and `MONEYER_SUNSET` for winding down without
 stranding holders.
+
+## The website
+
+`GET /` serves the mint's own site (`web/`, vite + anime.js, built by
+`npm run web:build` into memory-served static files). It is a wallet-grade
+LNURLcash client in its own right, driven entirely by `lnurlcash-kit`
+against the same endpoints every wallet uses:
+
+- **Mint a note in the browser**: amount in, fee grossed up and shown
+  before the invoice exists, invoice QR (tap opens a wallet), LUD-21
+  polling with a countdown, and on settlement the note is claimed and
+  **immediately rotated** - the preimage any invoice-observer could poll
+  out of verify is dead before the note is shown. The rotated note's
+  signature is verified against the mint's advertised key in front of the
+  user, and the QR sits behind a tap-to-reveal cover.
+- **Check a note**: live value, spent/unknown/pending classified in plain
+  words, offline signature verification.
+- `MONEYER_WALLET_URL` (optional) links minted notes straight into a
+  companion web wallet's `#/claim` route.
+
+Without a web build the server falls back to a self-contained, zero-script
+landing page, so an npm-installed mint still has a face.
 
 As a library:
 

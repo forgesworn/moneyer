@@ -35,6 +35,9 @@ export const startMint = async (
   const moneyer = await createMoneyer(testConfig(overrides), {
     backend,
     confirmDelaysMs: [0, 10, 20],
+    // Hermetic by default: a web build lying around must not change what
+    // tests see. web-serving.test.ts opts back in with a stub dist.
+    webAssets: null,
     ...deps
   })
   return {moneyer, backend}

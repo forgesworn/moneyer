@@ -126,10 +126,14 @@ export const createClnBackend = (config: {url: string; rune: string}): Lightning
       const uri =
         id && address?.address && address?.port ? `${id}@${address.address}:${address.port}` : id
       const color = typeof info?.color === 'string' ? `#${info.color.replace(/^#/, '')}` : undefined
+      const numChannels = Number(info?.num_active_channels)
+      const numPeers = Number(info?.num_peers)
       return {
         ...(info?.alias ? {alias: info.alias} : {}),
         ...(uri ? {uri} : {}),
-        ...(color && /^#[0-9a-fA-F]{6}$/.test(color) ? {color} : {})
+        ...(color && /^#[0-9a-fA-F]{6}$/.test(color) ? {color} : {}),
+        ...(Number.isSafeInteger(numChannels) ? {numChannels} : {}),
+        ...(Number.isSafeInteger(numPeers) ? {numPeers} : {})
       }
     }
   }
