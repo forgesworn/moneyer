@@ -224,6 +224,28 @@ export class NoteStore {
     }
   }
 
+  // Every unsettled mint invoice, for the expiry sweep. An unsettled row
+  // past its bolt11 expiry can never settle - the funding source refuses
+  // expired invoices - so it is dead weight, and every /p/cb call adds one.
+  unsettledMintInvoices(): MintInvoiceRow[] {
+    const rows = this.db
+      .prepare('SELECT payment_hash, pr, gross_msat, net_msat, settled FROM mint_invoices WHERE settled = 0')
+      .all() as Array<{payment_hash: string; pr: string; gross_msat: number; net_msat: number; settled: number}>
+    return rows.map(row => ({
+      paymentHash: row.payment_hash,
+      pr: row.pr,
+      grossMsat: row.gross_msat,
+      netMsat: row.net_msat,
+      settled: false
+    }))
+  }
+
+  // Conditional on STILL unsettled: a settle landing between the sweep's
+  // check and this delete must win, always.
+  deleteUnsettledMintInvoice(paymentHash: string): void {
+    this.db.prepare('DELETE FROM mint_invoices WHERE payment_hash = ? AND settled = 0').run(paymentHash)
+  }
+
   // Paying a mint invoice is what brings its note into existence. Safe to
   // call twice: the second settle finds the note already minted.
   settleMintInvoice(paymentHash: string): void {

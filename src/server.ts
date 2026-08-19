@@ -473,20 +473,22 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   const address = server.address()
   const port = typeof address === 'object' && address ? address.port : config.port
 
-  // Resolve anything an earlier process left pending before serving new
-  // melts against the same notes.
-  await reconcilePendingMelts(store, backend, inFlight, log)
-
-  // ...and keep resolving: a melt whose outcome stays unconfirmable would
-  // otherwise park its note until the next restart. Five minutes is a
-  // compromise between a holder's stuck funds and funding-source chatter;
-  // unref'd so the timer never keeps the process alive.
-  const reconcileTimer = setInterval(() => {
-    reconcilePendingMelts(store, backend, inFlight, log).catch(err =>
-      log(`reconcile failed: ${(err as Error).message}`)
-    )
+  // Housekeeping, at startup and every five minutes after: resolve melts an
+  // earlier process left pending, and sweep mint invoices whose bolt11
+  // expiry has passed. A melt whose outcome stays unconfirmable would
+  // otherwise park its note until the next restart; an unswept table would
+  // otherwise grow by one dead row per /p/cb call forever. The timer is
+  // unref'd so it never keeps the process alive.
+  const housekeeping = async (): Promise<void> => {
+    const swept = sweepExpiredMintInvoices(store)
+    if (swept > 0) log(`swept ${swept} expired mint invoice${swept === 1 ? '' : 's'}`)
+    await reconcilePendingMelts(store, backend, inFlight, log)
+  }
+  await housekeeping()
+  const housekeepingTimer = setInterval(() => {
+    housekeeping().catch(err => log(`housekeeping failed: ${(err as Error).message}`))
   }, 300_000)
-  reconcileTimer.unref()
+  housekeepingTimer.unref()
 
   return {
     url: `http://${config.host}:${port}`,
@@ -497,10 +499,30 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     signer,
     reconcile: () => reconcilePendingMelts(store, backend, inFlight, log),
     close: async () => {
-      clearInterval(reconcileTimer)
+      clearInterval(housekeepingTimer)
       await new Promise<void>((resolve, reject) => server.close(err => (err ? reject(err) : resolve())))
       await backend.close?.()
       store.close()
     }
   }
+}
+
+// Deletes unsettled mint invoices whose bolt11 expiry is comfortably past,
+// returning the count swept. The invoice's own timestamp + expiry are the
+// proof - a funding source refuses to settle an expired invoice, so the
+// row can never mint a note again. The hour's margin keeps the delete
+// unambiguously behind every implementation's reading of that expiry, and
+// an undecodable invoice is kept: no proof, no delete. The delete itself is
+// conditional on the row still being unsettled, so a settle racing the
+// sweep always wins.
+export const sweepExpiredMintInvoices = (store: NoteStore, nowMs: number = Date.now()): number => {
+  const stale: string[] = []
+  for (const invoice of store.unsettledMintInvoices()) {
+    const decoded = tryDecodeBolt11(invoice.pr)
+    if (!decoded) continue
+    const expiresAtMs = (decoded.timestamp + decoded.expirySeconds) * 1000
+    if (nowMs > expiresAtMs + 3_600_000) stale.push(invoice.paymentHash)
+  }
+  for (const paymentHash of stale) store.deleteUnsettledMintInvoice(paymentHash)
+  return stale.length
 }

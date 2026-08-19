@@ -110,11 +110,12 @@ Wallets require https for clearnet mints - there is no plain-http mode to
 misconfigure.
 
 **Rate limit at this layer.** Every unauthenticated GET to `/p/cb` creates
-a real invoice on the funding node, and nodes keep invoices forever:
-without a limit, one scripted loop grows both the node's database and
-moneyer's `mint_invoices` table without bound, and can pile up concurrent
-RPCs against the node. A few requests per second per IP on `/p/cb` (and a
-generous ceiling on the rest) is enough - wallets call it once per mint.
+a real invoice on the funding node. moneyer sweeps its own unsettled rows
+once their bolt11 expiry has passed, but the node keeps its side of every
+invoice until you clean it (cln's autoclean plugin, or a cron), and an
+unthrottled loop can still pile up concurrent RPCs against the node. A few
+requests per second per IP on `/p/cb` (and a generous ceiling on the rest)
+is enough - wallets call it once per mint.
 
 ## 6. Shakedown before real limits
 

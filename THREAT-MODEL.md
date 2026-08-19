@@ -90,10 +90,12 @@ the spec and enforced by the companion wallet.
 - The cln and lnd backends are unexercised against live nodes (direct
   ports of the reference mint's logic). Run `--dev` traffic and the
   conformance grader against a staging deployment before taking real money.
-- No rate limiting is built in; put it at the proxy. This is load-bearing
-  for `/p/cb` specifically: each unauthenticated call creates a real,
-  permanent invoice at the funding source, so an unthrottled mint lets a
-  script grow both databases without bound.
+- No rate limiting is built in; put it at the proxy. This matters most for
+  `/p/cb`: each unauthenticated call creates a real invoice at the funding
+  source. moneyer sweeps its own unsettled invoices once their bolt11
+  expiry has passed, but the node's side of that growth is the operator's
+  to bound (cln's autoclean, or an equivalent cron) - and a proxy limit is
+  what keeps the RPC pile-up and the node database from growing at all.
 - A fee-free configuration pays the melt routing-fee floor (0.5% of the
   amount or 5000 msat) out of its own channel balance, and mint-and-melt
   cycling costs a griefer nothing. Set `MONEYER_BASE_FEE_MSAT` to cover the
