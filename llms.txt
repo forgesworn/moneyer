@@ -1,0 +1,53 @@
+# moneyer
+
+LNURLcash (LUD-25) mint for Node 24+. Strikes Lightning bearer notes:
+paying an invoice it issues mints a note whose spend secret IS the
+invoice's payment preimage. ESM-only. MIT.
+
+Install: npm install @forgesworn/moneyer
+Run: npx moneyer --dev   (fake funding source, prints a funded note)
+
+Draft spec: https://github.com/lnurl/luds/pull/301
+Conformance: https://github.com/TheCryptoDonkey/lnurlcash-conformance
+Companion wallet: @forgesworn/notecase
+Client library to build against a mint: lnurlcash-kit
+
+## Rules this SERVICE follows (and any mint MUST)
+
+1. A mint invoice's preimage is the note secret - the funding source must
+   accept a caller-supplied preimage (cln and lnd do; phoenixd and NIP-47
+   make_invoice do not, and cannot back a mint).
+2. Mutations are atomic: all named k1 burn and all outputs mint, or
+   nothing happens. Duplicate k1 in one request is refused.
+3. h/h2 are WALLET-supplied hashes; the mint never generates a
+   replacement secret, and refuses output ids that already exist as notes
+   or as mint-invoice payment hashes.
+4. Melt OK means IN FLIGHT. The note burns only on confirmed payment,
+   restores only on confirmed non-payment, and stays pending otherwise.
+   A clean failure REPORT is not confirmation (hodl invoices).
+5. A melt invoice must equal the note total exactly, must not be one this
+   mint issued, and must not repeat an earlier melt's payment hash.
+6. Reason strings are protocol surface: 'pending',
+   'Invalid or already spent k1.', 'Unknown note.', 'Note already spent.',
+   'missing h', 'missing h2' - wallets classify on them.
+7. minSendable must survive the mint's own fee (grossUpForMintFee of the
+   dust floor), or the mint advertises an amount it will refuse.
+
+## Library API
+
+createMoneyer(config, deps?) -> {url, port, store, backend, signer, reconcile, close}
+configFromEnv(env?) -> MoneyerConfig     MONEYER_* environment variables
+createFakeBackend() -> LightningBackend with .control test hooks
+createClnBackend({url, rune}) / createLndBackend({url, macaroon})
+createNoteSigner(privHex) -> {pubkey, sign(noteId, amountMsat)}
+fakeBolt11({amountMsat, paymentHashHex, memo?}) -> decodable, unpayable invoice
+NoteStore - SQLite store; notes by sha256(k1), never secrets
+
+## Endpoints
+
+/.well-known/lnurlp/{user}  LUD-16 payRequest (mints)
+/.well-known/lnurlw/{user}  LUD-25 mint address (experimental)
+/p/cb                       LUD-06 pay callback
+/verify/{payment_hash}      LUD-21 verify (mint invoices AND melt payments)
+/w                          LUD-03 informational GET
+/w/cb                       melt / rotate / split / merge

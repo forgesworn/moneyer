@@ -1,0 +1,257 @@
+import {DatabaseSync} from 'node:sqlite'
+
+// The store holds note IDs - sha256(k1) - and never a secret. A freshly
+// minted note's id is exactly the payment hash of the invoice that funded
+// it, so the spend secret lives only with the payer (and, until claimed,
+// with the funding source, which is why wallets rotate immediately).
+//
+// Everything here is synchronous on purpose: a mutation's validate-and-
+// transition happens in one SQLite transaction with no await inside it, so
+// two concurrent callbacks racing for the same note cannot both win.
+
+export type NoteState = 'outstanding' | 'pending' | 'burned'
+export type NoteRow = {id: string; amountMsat: number; state: NoteState}
+export type MintInvoiceRow = {
+  paymentHash: string
+  pr: string
+  grossMsat: number
+  netMsat: number
+  settled: boolean
+}
+export type MeltRow = {
+  paymentHash: string
+  noteId: string
+  pr: string
+  amountMsat: number
+  outcome: 'paid' | 'restored' | null
+}
+
+// A note named by the request is reserved by an in-flight melt. The wire
+// reply for this is the exact reason string "pending".
+export class NotePendingError extends Error {}
+// A note named by the request is burned or was never minted. The callback
+// cannot say which without leaking, so the wire reply is the atomic
+// "Invalid or already spent k1."
+export class NoteUnavailableError extends Error {}
+// A requested output id already names a note or a mint invoice. Refused
+// before anything burns: minting "over" an existing id would let whoever
+// can learn that id's preimage take the output.
+export class OutputCollisionError extends Error {}
+
+export class NoteStore {
+  private db: DatabaseSync
+
+  constructor(path: string) {
+    this.db = new DatabaseSync(path)
+    this.db.exec('PRAGMA journal_mode = WAL')
+    this.db.exec('PRAGMA foreign_keys = ON')
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS notes (
+        id TEXT PRIMARY KEY,
+        amount_msat INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('outstanding','pending','burned')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS mint_invoices (
+        payment_hash TEXT PRIMARY KEY,
+        pr TEXT NOT NULL,
+        gross_msat INTEGER NOT NULL,
+        net_msat INTEGER NOT NULL,
+        settled INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS melts (
+        payment_hash TEXT PRIMARY KEY,
+        note_id TEXT NOT NULL,
+        pr TEXT NOT NULL,
+        amount_msat INTEGER NOT NULL,
+        outcome TEXT CHECK (outcome IN ('paid','restored')),
+        created_at INTEGER NOT NULL,
+        resolved_at INTEGER
+      );
+    `)
+  }
+
+  private tx<T>(fn: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = fn()
+      this.db.exec('COMMIT')
+      return result
+    } catch (err) {
+      this.db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  noteById(id: string): NoteRow | null {
+    const row = this.db
+      .prepare('SELECT id, amount_msat, state FROM notes WHERE id = ?')
+      .get(id) as {id: string; amount_msat: number; state: NoteState} | undefined
+    return row ? {id: row.id, amountMsat: row.amount_msat, state: row.state} : null
+  }
+
+  private insertNote(id: string, amountMsat: number): void {
+    const now = Date.now()
+    this.db
+      .prepare('INSERT INTO notes (id, amount_msat, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run(id, amountMsat, 'outstanding', now, now)
+  }
+
+  private setNoteState(id: string, state: NoteState): void {
+    this.db.prepare('UPDATE notes SET state = ?, updated_at = ? WHERE id = ?').run(state, Date.now(), id)
+  }
+
+  // An output id may not collide with any existing note OR any mint
+  // invoice's payment hash, settled or not. The invoice case is the subtle
+  // one: /verify hands out a settled mint invoice's preimage, and that
+  // preimage is the k1 of whatever note carries the invoice's payment hash
+  // as its id - so letting a mutation claim such an id would point a future
+  // payer's money at a stranger's note.
+  private assertOutputIdFree(id: string): void {
+    const asNote = this.db.prepare('SELECT 1 FROM notes WHERE id = ?').get(id)
+    const asInvoice = this.db.prepare('SELECT 1 FROM mint_invoices WHERE payment_hash = ?').get(id)
+    if (asNote || asInvoice) throw new OutputCollisionError(`output id ${id} is already in use`)
+  }
+
+  private assertOutstanding(id: string): NoteRow {
+    const note = this.noteById(id)
+    if (!note) throw new NoteUnavailableError(`no note ${id}`)
+    if (note.state === 'pending') throw new NotePendingError(`note ${id} has a melt in flight`)
+    if (note.state !== 'outstanding') throw new NoteUnavailableError(`note ${id} is ${note.state}`)
+    return note
+  }
+
+  // The atomic mutation behind rotate, split and merge: burn every input,
+  // mint every output, or do nothing at all.
+  swap(inputIds: string[], outputs: Array<{id: string; amountMsat: number}>): void {
+    this.tx(() => {
+      for (const id of inputIds) this.assertOutstanding(id)
+      for (const output of outputs) this.assertOutputIdFree(output.id)
+      for (const id of inputIds) this.setNoteState(id, 'burned')
+      for (const output of outputs) this.insertNote(output.id, output.amountMsat)
+    })
+  }
+
+  // Reserves a note for a melt and records the melt, atomically. The melts
+  // row is keyed by the invoice's payment hash; a duplicate hash means an
+  // earlier melt already used this invoice and the INSERT itself refuses.
+  markPending(noteId: string, paymentHash: string, pr: string, amountMsat: number): void {
+    this.tx(() => {
+      this.assertOutstanding(noteId)
+      this.db
+        .prepare('INSERT INTO melts (payment_hash, note_id, pr, amount_msat, outcome, created_at) VALUES (?, ?, ?, ?, NULL, ?)')
+        .run(paymentHash, noteId, pr, amountMsat, Date.now())
+      this.setNoteState(noteId, 'pending')
+    })
+  }
+
+  finalizeMelt(paymentHash: string): void {
+    this.tx(() => {
+      const melt = this.meltByHash(paymentHash)
+      if (!melt || melt.outcome !== null) return
+      this.db
+        .prepare('UPDATE melts SET outcome = ?, resolved_at = ? WHERE payment_hash = ?')
+        .run('paid', Date.now(), paymentHash)
+      this.setNoteState(melt.noteId, 'burned')
+    })
+  }
+
+  restoreMelt(paymentHash: string): void {
+    this.tx(() => {
+      const melt = this.meltByHash(paymentHash)
+      if (!melt || melt.outcome !== null) return
+      this.db
+        .prepare('UPDATE melts SET outcome = ?, resolved_at = ? WHERE payment_hash = ?')
+        .run('restored', Date.now(), paymentHash)
+      const note = this.noteById(melt.noteId)
+      if (note?.state === 'pending') this.setNoteState(melt.noteId, 'outstanding')
+    })
+  }
+
+  meltByHash(paymentHash: string): MeltRow | null {
+    const row = this.db
+      .prepare('SELECT payment_hash, note_id, pr, amount_msat, outcome FROM melts WHERE payment_hash = ?')
+      .get(paymentHash) as
+      | {payment_hash: string; note_id: string; pr: string; amount_msat: number; outcome: 'paid' | 'restored' | null}
+      | undefined
+    if (!row) return null
+    return {
+      paymentHash: row.payment_hash,
+      noteId: row.note_id,
+      pr: row.pr,
+      amountMsat: row.amount_msat,
+      outcome: row.outcome
+    }
+  }
+
+  pendingMelts(): MeltRow[] {
+    const rows = this.db
+      .prepare('SELECT payment_hash, note_id, pr, amount_msat, outcome FROM melts WHERE outcome IS NULL')
+      .all() as Array<{payment_hash: string; note_id: string; pr: string; amount_msat: number; outcome: null}>
+    return rows.map(row => ({
+      paymentHash: row.payment_hash,
+      noteId: row.note_id,
+      pr: row.pr,
+      amountMsat: row.amount_msat,
+      outcome: row.outcome
+    }))
+  }
+
+  recordMintInvoice(paymentHash: string, pr: string, grossMsat: number, netMsat: number): void {
+    this.tx(() => {
+      this.assertOutputIdFree(paymentHash)
+      this.db
+        .prepare('INSERT INTO mint_invoices (payment_hash, pr, gross_msat, net_msat, settled, created_at) VALUES (?, ?, ?, ?, 0, ?)')
+        .run(paymentHash, pr, grossMsat, netMsat, Date.now())
+    })
+  }
+
+  mintInvoiceByHash(paymentHash: string): MintInvoiceRow | null {
+    const row = this.db
+      .prepare('SELECT payment_hash, pr, gross_msat, net_msat, settled FROM mint_invoices WHERE payment_hash = ?')
+      .get(paymentHash) as
+      | {payment_hash: string; pr: string; gross_msat: number; net_msat: number; settled: number}
+      | undefined
+    if (!row) return null
+    return {
+      paymentHash: row.payment_hash,
+      pr: row.pr,
+      grossMsat: row.gross_msat,
+      netMsat: row.net_msat,
+      settled: row.settled === 1
+    }
+  }
+
+  // Paying a mint invoice is what brings its note into existence. Safe to
+  // call twice: the second settle finds the note already minted.
+  settleMintInvoice(paymentHash: string): void {
+    this.tx(() => {
+      const invoice = this.mintInvoiceByHash(paymentHash)
+      if (!invoice) return
+      this.db.prepare('UPDATE mint_invoices SET settled = 1 WHERE payment_hash = ?').run(paymentHash)
+      if (!this.noteById(paymentHash)) this.insertNote(paymentHash, invoice.netMsat)
+    })
+  }
+
+  // Operator/dev funding path: mint a note directly, bypassing Lightning.
+  // The fake backend's world only - the CLI never exposes it on a real one.
+  creditNote(id: string, amountMsat: number): void {
+    this.tx(() => {
+      this.assertOutputIdFree(id)
+      this.insertNote(id, amountMsat)
+    })
+  }
+
+  outstandingLiabilityMsat(): number {
+    const row = this.db
+      .prepare("SELECT COALESCE(SUM(amount_msat), 0) AS total FROM notes WHERE state IN ('outstanding','pending')")
+      .get() as {total: number}
+    return row.total
+  }
+
+  close(): void {
+    this.db.close()
+  }
+}
