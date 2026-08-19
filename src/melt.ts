@@ -1,5 +1,10 @@
 import {verifyPreimage} from 'farrier-kit/preimage'
-import {PaymentFailedError, PaymentPendingError, type LightningBackend} from './backends/types.ts'
+import {
+  PaymentAlreadyKnownError,
+  PaymentFailedError,
+  PaymentPendingError,
+  type LightningBackend
+} from './backends/types.ts'
 import type {NoteStore} from './store.ts'
 
 // A melt replies OK the moment the note is reserved; everything here
@@ -68,6 +73,18 @@ export const runMelt = async (job: MeltJob, deps: MeltDeps): Promise<void> => {
       feeLimitMsat: deps.feeLimitMsat(job.amountMsat)
     })
   } catch (err) {
+    if (err instanceof PaymentAlreadyKnownError) {
+      // The node's payment for this hash belongs to someone else - another
+      // mint sharing this funding source, or the operator. Nothing went
+      // out for THIS melt, and confirming by hash would confirm against
+      // that foreign payment: restore, never guess. The synchronous
+      // pre-check in the callback catches this before the note is even
+      // reserved; this branch closes the race where the foreign payment
+      // lands between that check and the send.
+      log(`melt ${job.noteId}: the funding source already knew this hash - restored (shared-node replay?)`)
+      deps.store.restoreMelt(job.paymentHash)
+      return
+    }
     if (!(err instanceof PaymentFailedError)) {
       log(`melt ${job.noteId}: payment attempt failed ambiguously (${(err as Error).message})`)
     }

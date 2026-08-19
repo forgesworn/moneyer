@@ -26,6 +26,7 @@ export {
 } from './store.ts'
 export {createNoteSigner, noteIdSignatureDigest, type NoteSigner} from './signing.ts'
 export {
+  PaymentAlreadyKnownError,
   PaymentFailedError,
   PaymentPendingError,
   type LightningBackend,

@@ -18,3 +18,8 @@ Initial implementation.
   pending-not-guessed, reconciliation at startup and on demand.
 - Passes the lnurlcash-conformance grader, read-only and spending runs;
   the grader executes inside the test suite.
+- Shared funding sources are a supported deployment: the melt path
+  pre-checks the node's payment history and surfaces the node's
+  "payment already exists" refusal as a distinct, note-restoring
+  outcome, closing the cross-mint melt replay a shared node otherwise
+  allows.

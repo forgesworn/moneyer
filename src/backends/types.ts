@@ -31,6 +31,12 @@ export class PaymentFailedError extends Error {}
 // be read as "not paid".
 export class PaymentPendingError extends Error {}
 
+// The funding source already holds a payment for this hash that THIS call
+// did not create - on a shared node, another mint (or the operator) paid
+// it. Nothing went out on our behalf, so the caller's melt is safely
+// restorable; confirming by hash would confirm against foreign money.
+export class PaymentAlreadyKnownError extends Error {}
+
 export interface LightningBackend {
   readonly name: string
   createInvoice(args: {amountMsat: number; preimageHex: string; memo: string}): Promise<{pr: string}>

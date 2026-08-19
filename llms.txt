@@ -27,6 +27,11 @@ Client library to build against a mint: lnurlcash-kit
    A clean failure REPORT is not confirmation (hodl invoices).
 5. A melt invoice must equal the note total exactly, must not be one this
    mint issued, and must not repeat an earlier melt's payment hash.
+   On a SHARED funding source the node's own payment history is the only
+   dedupe that spans every consumer: pre-check it before reserving the
+   note, and treat the node's "payment already exists" refusal as a
+   distinct restorable outcome - never confirm a melt against a payment
+   this mint did not initiate.
 6. Reason strings are protocol surface: 'pending',
    'Invalid or already spent k1.', 'Unknown note.', 'Note already spent.',
    'missing h', 'missing h2' - wallets classify on them.

@@ -1,6 +1,6 @@
 import {hexToBytes} from '@noble/hashes/utils.js'
 import {verifyPreimage} from 'farrier-kit/preimage'
-import {PaymentFailedError, PaymentPendingError, type LightningBackend} from './types.ts'
+import {PaymentAlreadyKnownError, PaymentFailedError, PaymentPendingError, type LightningBackend} from './types.ts'
 
 // lnd over its REST proxy. AddInvoice never returns a preimage but accepts
 // one (r_preimage), which is what lets it back a mint. Payment send/track
@@ -38,12 +38,14 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
     return {ok: res.ok, status: res.status, json: await res.json().catch(() => null)}
   }
 
-  // Reads a chunked NDJSON stream until `until` returns a value.
+  // Reads a chunked NDJSON stream until `until` returns a value. A non-2xx
+  // response's body rides back in `error` - grpc-gateway puts the actual
+  // refusal reason there, and payInvoice needs to read it.
   const streamUntil = async <T>(
     path: string,
     init: {method?: string; body?: unknown; timeoutMs?: number},
     until: (event: any) => T | undefined
-  ): Promise<{status: number; result: T | undefined}> => {
+  ): Promise<{status: number; result: T | undefined; error?: string}> => {
     const res = await fetch(`${config.url}${path}`, {
       method: init.method ?? 'GET',
       headers,
@@ -51,8 +53,8 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
       signal: AbortSignal.timeout(init.timeoutMs ?? 90_000)
     })
     if (!res.ok || !res.body) {
-      await res.body?.cancel().catch(() => {})
-      return {status: res.status, result: undefined}
+      const error = await res.text().catch(() => '')
+      return {status: res.status, result: undefined, error}
     }
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
@@ -97,7 +99,7 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
     },
 
     async payInvoice({pr, feeLimitMsat}) {
-      const {result} = await streamUntil(
+      const {result, error} = await streamUntil(
         '/v2/router/send',
         {
           method: 'POST',
@@ -107,6 +109,12 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
         payment => (payment?.status === 'SUCCEEDED' || payment?.status === 'FAILED' ? payment : undefined)
       )
       if (!result) {
+        // lnd refuses a send whose payment hash it already holds - on a
+        // shared node that is somebody else's payment, and nothing went
+        // out for THIS call. Distinct from ambiguity: safely restorable.
+        if (error && /already exists|AlreadyExists|payment is in transition/i.test(error)) {
+          throw new PaymentAlreadyKnownError('lnd already has a payment for this hash')
+        }
         // The stream ended without a terminal status - genuinely ambiguous.
         throw new Error('lnd did not report a terminal payment status.')
       }

@@ -2,9 +2,20 @@
 
 No new Lightning node is needed if one already runs: moneyer is a Node
 service that sits BESIDE an existing lnd and uses it as the funding
-source. Several mints can share one lnd - every invoice and payment is
-keyed by its own hash - but they share its liquidity, so keep the sum of
-all mints' limits inside what the node can actually pay out.
+source.
+
+**Sharing the node with another mint is a supported configuration.**
+moneyer guards the melt path against the cross-mint replay a shared node
+makes possible (an invoice melted at the other mint being "confirmed" here
+against that foreign payment): it pre-checks the node's payment history
+before reserving a note, and treats the node's "payment already exists"
+refusal as a distinct, note-restoring outcome. Two caveats stand: the
+mints share the node's liquidity, so keep the SUM of every mint's limits
+inside what it can actually pay out; and only share with implementations
+carrying the equivalent guard - the replay otherwise stays open on THEIR
+side, not moneyer's. For separated books and blast radius, a second lnd
+on the same box (bootstrapped with one channel from the first) is the
+upgrade path; nothing about correctness requires it.
 
 ## 1. Credentials from lnd
 

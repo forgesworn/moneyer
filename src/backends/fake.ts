@@ -3,7 +3,13 @@ import {sha256} from '@noble/hashes/sha2.js'
 import {hexToBytes} from '@noble/hashes/utils.js'
 import {bolt11PaymentHash} from 'farrier-kit/bolt11'
 import {fakeBolt11} from './fake-bolt11.ts'
-import {PaymentFailedError, PaymentPendingError, type LightningBackend, type NodeInfo} from './types.ts'
+import {
+  PaymentAlreadyKnownError,
+  PaymentFailedError,
+  PaymentPendingError,
+  type LightningBackend,
+  type NodeInfo
+} from './types.ts'
 
 // A funding source that invents its invoices and pays nothing, for
 // development and tests. Every failure a real backend can inflict on the
@@ -40,6 +46,9 @@ export type FakeBackend = LightningBackend & {
     // Lets a test register the true preimage of an invoice this backend is
     // about to "pay", so settlement proofs round-trip.
     registerPaymentPreimage(paymentHashHex: string, preimageHex: string): void
+    // Plants a payment somebody ELSE made through this node - the
+    // shared-funding-source shape the melt pre-check exists for.
+    seedForeignPayment(paymentHashHex: string, status?: 'complete' | 'pending'): void
     invoiceByHash(paymentHashHex: string): {preimageHex: string; amountMsat: number; settled: boolean} | undefined
   }
 }
@@ -63,6 +72,11 @@ export const createFakeBackend = (): FakeBackend => {
     async payInvoice({pr}) {
       const paymentHashHex = bolt11PaymentHash(pr)
       if (!paymentHashHex) throw new PaymentFailedError('That is not a decodable invoice.')
+      // Real nodes dedupe sends by payment hash: a hash this node already
+      // holds a payment for is refused, exactly as lnd and cln refuse it.
+      if (payments.has(paymentHashHex)) {
+        throw new PaymentAlreadyKnownError('this node already has a payment for that hash')
+      }
       const preimageHex = knownPreimages.get(paymentHashHex) ?? null
       switch (payMode) {
         case 'succeed':
@@ -131,6 +145,9 @@ export const createFakeBackend = (): FakeBackend => {
         knownPreimages.set(paymentHashHex, preimageHex)
         const payment = payments.get(paymentHashHex)
         if (payment?.status === 'complete') payment.preimageHex = preimageHex
+      },
+      seedForeignPayment(paymentHashHex, status = 'complete') {
+        payments.set(paymentHashHex, {status, preimageHex: null})
       },
       invoiceByHash(paymentHashHex) {
         return invoices.get(paymentHashHex)

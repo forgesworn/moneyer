@@ -83,6 +83,57 @@ describe('melt discipline', () => {
     expect(noteState(mint, noteId)).toBe('burned')
   })
 
+  it('refuses to melt into a hash the funding source already paid for someone else', async () => {
+    // The shared-node replay: another mint on the same funding source paid
+    // this invoice; confirming by hash would burn our note for nothing.
+    const mint = (active = await startMint())
+    const k1 = freshK1()
+    mint.moneyer.store.creditNote(hashK1(k1), 21_000)
+    const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, k1, 21_000))
+
+    const foreignHash = hashK1(freshK1())
+    mint.backend.control.seedForeignPayment(foreignHash)
+    await expect(
+      meltNote(info.callback, k1, fakeBolt11({amountMsat: 21_000, paymentHashHex: foreignHash}))
+    ).rejects.toThrow(/already used/)
+    // refused before the note was ever reserved
+    expect(noteState(mint, hashK1(k1))).toBe('outstanding')
+
+    // a foreign payment still IN FLIGHT is just as refusable
+    const pendingHash = hashK1(freshK1())
+    mint.backend.control.seedForeignPayment(pendingHash, 'pending')
+    await expect(
+      meltNote(info.callback, k1, fakeBolt11({amountMsat: 21_000, paymentHashHex: pendingHash}))
+    ).rejects.toThrow(/already used/)
+    expect(noteState(mint, hashK1(k1))).toBe('outstanding')
+  })
+
+  it('restores the note when the foreign payment lands between pre-check and send', async () => {
+    // The race the pre-check cannot see: the node acquires a payment for
+    // this hash after the melt is reserved. The send is refused with
+    // "already exists" - nothing went out for us, so the note restores.
+    const mint = (active = await startMint())
+    const k1 = freshK1()
+    mint.moneyer.store.creditNote(hashK1(k1), 21_000)
+    const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, k1, 21_000))
+
+    const hash = hashK1(freshK1())
+    const realIsComplete = mint.backend.isPaymentComplete.bind(mint.backend)
+    // the pre-check sees a clean node; the foreign payment lands right after
+    let precheck = true
+    mint.backend.isPaymentComplete = async paymentHash => {
+      if (precheck && paymentHash === hash) {
+        precheck = false
+        mint.backend.control.seedForeignPayment(hash)
+        return false
+      }
+      return realIsComplete(paymentHash)
+    }
+    await meltNote(info.callback, k1, fakeBolt11({amountMsat: 21_000, paymentHashHex: hash}))
+    await waitFor(() => noteState(mint, hashK1(k1)) === 'outstanding')
+    expect(mint.moneyer.store.meltByHash(hash)?.outcome).toBe('restored')
+  })
+
   it('reconciles a melt a dead process left pending, at startup', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'moneyer-'))
     cleanups.push(() => rmSync(dir, {recursive: true, force: true}))

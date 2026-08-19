@@ -1,6 +1,6 @@
 import {bytesToHex, randomBytes} from '@noble/hashes/utils.js'
 import {verifyPreimage} from 'farrier-kit/preimage'
-import {PaymentFailedError, PaymentPendingError, type LightningBackend} from './types.ts'
+import {PaymentAlreadyKnownError, PaymentFailedError, PaymentPendingError, type LightningBackend} from './types.ts'
 
 // Core Lightning over the clnrest plugin. cln's `invoice` accepts a
 // caller-supplied preimage, which is the whole reason it can back a mint.
@@ -62,6 +62,12 @@ export const createClnBackend = (config: {url: string; rune: string}): Lightning
       const res = await call('/v1/xpay', {invstring: pr, maxfee: feeLimitMsat}, 90_000)
       if (!res.ok) {
         const code = res.json?.code
+        // 219: this node already paid that hash. On a shared node that is
+        // somebody else's payment - nothing went out for THIS call, so it
+        // is a distinct, safely-restorable refusal rather than a failure.
+        if (code === 219) {
+          throw new PaymentAlreadyKnownError('cln already has a payment for this hash')
+        }
         const reason =
           (typeof code === 'number' && PAY_FAILURE_REASONS[code]) ||
           res.json?.message ||

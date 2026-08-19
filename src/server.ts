@@ -8,7 +8,7 @@ import {createNoteSigner, type NoteSigner} from './signing.ts'
 import {createFakeBackend} from './backends/fake.ts'
 import {createClnBackend} from './backends/cln.ts'
 import {createLndBackend} from './backends/lnd.ts'
-import type {LightningBackend, NodeInfo} from './backends/types.ts'
+import {PaymentPendingError, type LightningBackend, type NodeInfo} from './backends/types.ts'
 import {reconcilePendingMelts, runMelt} from './melt.ts'
 import {landingPage} from './landing.ts'
 
@@ -311,6 +311,23 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // payment and burn its note without moving funds.
         if (store.meltByHash(paymentHash)) {
           return fail('Invoice already used by an earlier melt - use a fresh one.')
+        }
+        // A shared funding source is a supported deployment (DEPLOY.md),
+        // and the node's payment history is the only dedupe that spans
+        // every consumer of it. A hash the node ever paid - or is still
+        // paying - is refused here for the same reason as the local check
+        // above; runMelt's PaymentAlreadyKnownError branch closes the
+        // remaining race between this check and the send.
+        try {
+          if (await backend.isPaymentComplete(paymentHash)) {
+            return fail('Invoice already used by an earlier melt - use a fresh one.')
+          }
+        } catch (err) {
+          if (err instanceof PaymentPendingError) {
+            return fail('Invoice already used by an earlier melt - use a fresh one.')
+          }
+          log(`melt pre-check failed: ${(err as Error).message}`)
+          return fail('Temporarily unable to melt - try again shortly.')
         }
         try {
           store.markPending(inputIds[0]!, paymentHash, pr.trim(), totalMsat)

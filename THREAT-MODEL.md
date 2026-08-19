@@ -38,6 +38,20 @@ nodes handle inconsistently.
 dedupes payments by hash, so the second melt would be "confirmed" against
 the first payment and burn a note without moving funds.
 
+**A holder replaying a melt across mints sharing one funding source.**
+Sharing a node between mints is a supported deployment, and it creates a
+dedupe gap no mint's own tables can see: an invoice melted at mint A is
+unknown to mint B, whose confirm-by-hash would read A's completed payment
+as its own success and burn B's note with no funds moving. Closed twice
+over: the melt callback synchronously asks the NODE whether it ever paid
+(or is still paying) the hash and refuses if so, and if the foreign
+payment lands in the race between that check and the send, the node's own
+"payment already exists" refusal is surfaced as a distinct
+PaymentAlreadyKnownError and the note restores - nothing went out on this
+mint's behalf, so nothing is guessed. Do not share a funding source with
+a mint implementation that lacks the equivalent guard: its side of the
+same replay stays open.
+
 **A malicious payee holding a hodl invoice.** A clean failure report from
 the funding source is never trusted on its own: the note restores only
 once `isPaymentComplete` returns a terminal false. A payment stuck
