@@ -1,17 +1,19 @@
 import {renderSVG} from 'uqr'
-import {rosette, band} from './guilloche.ts'
+import {rosette} from './guilloche.ts'
 import {amountInWords} from './note-words.ts'
 
-// The struck note, rendered as what it is: a banknote. Always ivory -
-// paper does not have a dark mode - with graphite ink, silver engine
-// turning and a copper seal. The same plate prints the homepage SPECIMEN
-// and the live note around a real QR.
+// The struck note, printed on engraved plates: full intaglio artwork
+// (gpt-image-2, no text baked in) with every word, numeral, serial and QR
+// letterpressed over it in HTML, so any denomination prints. The silver
+// series - graphite and steel-blue on pale silver paper - deliberately
+// nothing like the forgesworn cream-and-green.
+//
+// Zones are percentages of the plate, measured off the artwork. The
+// portrait plate carries the live note (its square panel takes the QR);
+// the landscape plate, with the moneyer vignette, prints the wide-screen
+// specimen. Type is sized in cqw so the print scales with the paper.
 
 const esc = (value: string): string => value.replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`)
-
-const MICROPRINT = Array(6)
-  .fill('WHOEVER HOLDS THE STRING HOLDS THE MONEY · PAYS THE BEARER ON DEMAND · ')
-  .join('')
 
 // A circular seal: text on a ring around a small rosette, pure SVG.
 const seal = (): string => {
@@ -27,53 +29,70 @@ const seal = (): string => {
   </svg>`
 }
 
-const cornerNumeral = (sats: number, corner: string): string =>
-  `<span class="nb-corner ${corner}"><i></i><b${corner === 'tl' ? ' data-value' : ''}>${sats.toLocaleString('en-GB').replace(/,/g, ' ')}</b></span>`
+const corner = (sats: number, at: 'tl' | 'tr', withValue: boolean): string => {
+  const text = sats.toLocaleString('en-GB').replace(/,/g, ' ')
+  const size = Math.min(4.6, 26 / Math.max(text.length, 2))
+  return `<b class="nb-corner ${at}" style="font-size:${size.toFixed(2)}cqw"${withValue ? ' data-value' : ''}>${text}</b>`
+}
 
 export type BanknoteArgs = {
   sats: number
   serialHex: string
   host: string
-  // specimen: no QR, a SPECIMEN overstamp. live: a QR the holder reveals.
   variant: {kind: 'specimen'} | {kind: 'live'; qrText: string}
 }
 
 export const banknote = (args: BanknoteArgs): HTMLElement => {
   const serial = `${args.serialHex.slice(0, 4)}…${args.serialHex.slice(-4)}`.toUpperCase()
   const words = amountInWords(args.sats)
-  const template = document.createElement('template')
-  template.innerHTML = `
-  <div class="nb" role="img" aria-label="A bearer note for ${args.sats} sats">
-    <div class="nb-frame"></div>
-    <div class="nb-micro top">${MICROPRINT}</div>
-    <div class="nb-band top">${band()}</div>
-    ${cornerNumeral(args.sats, 'tl')}${cornerNumeral(args.sats, 'tr')}
-    ${cornerNumeral(args.sats, 'bl')}${cornerNumeral(args.sats, 'br')}
-    <div class="nb-rosette">${rosette(300)}</div>
-    <img class="nb-watermark" src="/art/strike.jpg" alt="" loading="lazy" />
-    <div class="nb-body">
-      <div class="nb-title">LNURLCASH BEARER NOTE</div>
-      <div class="nb-titlerule"><i></i><span>·</span><i></i></div>
+  const live = args.variant.kind === 'live'
+
+  // The two prints share the cartouche stack; the zones differ per plate.
+  // The oval narrows at its foot, so the portrait serial travels light -
+  // the seal and the QR itself carry the issuer.
+  const cartouche = (foot: boolean, withHost: boolean): string => `
+    <div class="nb-cartouche">
+      <div class="nb-title">LNURLCASH<br/> BEARER NOTE</div>
       <div class="nb-words">${esc(words)}</div>
-      <div class="nb-sats">S A T S</div>
-      <div class="nb-promise">Pays the bearer on demand, no questions asked</div>
-      <div class="nb-serial">Nº&nbsp;&nbsp;${esc(serial)} · SERIES 2026</div>
-      ${
-        args.variant.kind === 'live'
-          ? `<div class="nb-qrwrap">
-               <div class="covered">
-                 <div class="qr nb-qr" role="img" aria-label="The note itself">${renderSVG(args.variant.qrText, {border: 1})}</div>
-                 <button class="cover"><span>Tap to reveal</span><small>Anyone who sees this code can take the sats.</small></button>
-               </div>
-             </div>`
-          : `<div class="nb-specimen" aria-hidden="true">SPECIMEN</div>`
-      }
-    </div>
-    ${seal()}
-    <div class="nb-foot">32 BYTES · A CLAIM ON A VERY SMALL NODE · NOT LEGAL TENDER</div>
-    <div class="nb-issuer">${esc(args.host)}</div>
-    <div class="nb-band bottom">${band()}</div>
-    <div class="nb-micro bottom">${MICROPRINT}</div>
-  </div>`
+      <div class="nb-sats">SATS</div>
+      <div class="nb-promise">Pays the bearer on demand,<br/>no questions asked</div>
+      ${foot ? `<div class="nb-foot">32 BYTES · A CLAIM ON A VERY SMALL NODE<br/>NOT LEGAL TENDER</div>` : ''}
+      <div class="nb-serial">Nº ${esc(serial)} · SERIES 2026${withHost ? ` · ${esc(args.host)}` : ''}</div>
+    </div>`
+
+  const template = document.createElement('template')
+  if (live) {
+    const qr = renderSVG((args.variant as {qrText: string}).qrText, {border: 1})
+    template.innerHTML = `
+    <div class="nb nb--p" role="img" aria-label="A bearer note for ${args.sats} sats">
+      ${corner(args.sats, 'tl', true)}${corner(args.sats, 'tr', false)}
+      ${cartouche(false, false)}
+      <div class="nb-panel">
+        <div class="covered">
+          <div class="qr nb-qr" role="img" aria-label="The note itself">${qr}</div>
+          <button class="cover"><span>Tap to reveal</span><small>Anyone who sees this code can take the sats.</small></button>
+        </div>
+      </div>
+      ${seal()}
+    </div>`
+  } else {
+    // The specimen prints twice: the landscape plate for wide screens, the
+    // portrait plate for narrow ones. CSS shows exactly one.
+    template.innerHTML = `
+    <div class="nb-specimen-pair" aria-label="A specimen bearer note">
+      <div class="nb nb--l" role="img">
+        ${corner(args.sats, 'tl', false)}${corner(args.sats, 'tr', false)}
+        ${cartouche(true, true)}
+        <div class="nb-overstamp">SPECIMEN</div>
+      </div>
+      <div class="nb nb--p" role="img">
+        ${corner(args.sats, 'tl', false)}${corner(args.sats, 'tr', false)}
+        ${cartouche(false, false)}
+        <div class="nb-panel"><div class="nb-foot nb-foot--panel">32 BYTES<br/>A CLAIM ON A<br/>VERY SMALL NODE<br/>· NOT LEGAL TENDER ·</div></div>
+        ${seal()}
+        <div class="nb-overstamp">SPECIMEN</div>
+      </div>
+    </div>`
+  }
   return template.content.firstElementChild as HTMLElement
 }

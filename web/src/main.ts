@@ -264,6 +264,17 @@ const boot = async (): Promise<void> => {
     if (addr?.nodeColor && /^#[0-9a-fA-F]{6}$/.test(addr.nodeColor)) {
       document.querySelector('meta[name="theme-color"]')?.setAttribute('content', addr.nodeColor)
     }
+    // A proofing press for the live note's print, no invoice needed: the
+    // secret is a constant, so this is never a spendable note.
+    if (location.hash === '#/proof') {
+      viewNote({
+        url: buildNoteUrl(payInfo.withdrawLink ?? `lnurlw://${HOST}/w`, '11'.repeat(32), 21_000),
+        amountMsat: 21_000,
+        verified: true,
+        secured: true
+      })
+      return
+    }
     viewHome()
   } catch (err) {
     show(() => {
@@ -375,18 +386,19 @@ const viewHome = (): void => {
     cards.append(termsCard(), nodeCard())
 
     // motion: the wordmark settles, the lathe turns the rosette on, and
-    // the SPECIMEN stamp lands once the note scrolls into view
+    // the SPECIMEN overstamp lands once the note scrolls into view
     letterSettle(view.querySelector('[data-wordmark]') as HTMLElement)
     drawOn(view.querySelector('[data-rosette]')!)
-    const overstamp = specimen.querySelector('.nb-specimen') as HTMLElement | null
-    if (overstamp && 'IntersectionObserver' in window) {
-      overstamp.style.opacity = '0'
+    const overstamps = [...specimen.querySelectorAll('.nb-overstamp')] as HTMLElement[]
+    if (overstamps.length && 'IntersectionObserver' in window) {
+      overstamps.forEach(stamp => (stamp.style.opacity = '0'))
       const seen = new IntersectionObserver(entries => {
         if (entries.some(entry => entry.isIntersecting)) {
           seen.disconnect()
-          overstamp.style.removeProperty('opacity')
-          animate(overstamp, {scale: [2.4, 1], opacity: [0, 0.32], rotate: ['-4deg', '-12deg'], duration: 520, ease: 'outBack(2)'})
-          drawOn(specimen.querySelector('.nb-rosette')!, 2400)
+          for (const stamp of overstamps) {
+            stamp.style.removeProperty('opacity')
+            animate(stamp, {scale: [2.4, 1], opacity: [0, 0.4], rotate: ['-4deg', '-14deg'], duration: 520, ease: 'outBack(2)'})
+          }
         }
       }, {threshold: 0.4})
       seen.observe(specimen)
@@ -659,9 +671,8 @@ const viewNote = (args: {url: string; amountMsat: number; verified: boolean; sec
     }
     view.append(body)
 
-    // the strike: the note lands, the corners count up, the lathe turns
+    // the strike: the note lands and the corners count up
     animate(note, {scale: [0.96, 1], y: [10, 0], duration: 600, ease: 'outBack(1.4)'})
-    drawOn(note.querySelector('.nb-rosette')!, 2000)
     const counterEl = note.querySelector('[data-value]')
     if (counterEl) {
       setTimeout(() => {
