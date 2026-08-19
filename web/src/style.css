@@ -327,8 +327,8 @@ a.qr { line-height: 0; }
   color: var(--nb-ink);
   overflow: hidden;
 }
-.nb--p { aspect-ratio: 1024 / 1536; max-width: 440px; margin: 0 auto; background-image: url('/art/plate-p.jpg'); }
-.nb--l { aspect-ratio: 1536 / 1024; background-image: url('/art/plate-l.jpg'); }
+.nb--p { aspect-ratio: 1024 / 1536; max-width: 440px; margin: 0 auto; background-image: url('/art/plate-p.webp'); }
+.nb--l { aspect-ratio: 1536 / 1024; background-image: url('/art/plate-l.webp'); }
 .nb-specimen-pair .nb--l { display: none; }
 @media (min-width: 700px) {
   .nb-specimen-pair .nb--l { display: block; }
@@ -336,7 +336,7 @@ a.qr { line-height: 0; }
 }
 
 .nb-corner {
-  position: absolute; transform: translate(-50%, -50%);
+  position: absolute; z-index: 2; transform: translate(-50%, -50%);
   font-family: var(--display); font-weight: 700; letter-spacing: 0;
 }
 .nb--p .nb-corner.tl { left: 16%; top: 9.9%; }
@@ -345,13 +345,13 @@ a.qr { line-height: 0; }
 .nb--l .nb-corner.tr { left: 88.9%; top: 16.6%; }
 
 .nb-cartouche {
-  position: absolute; display: flex; flex-direction: column;
+  position: absolute; z-index: 2; display: flex; flex-direction: column;
   align-items: center; justify-content: center; text-align: center;
 }
-.nb--p .nb-cartouche { left: 16%; right: 16%; top: 12.6%; height: 27.5%; gap: 1.2cqw; }
+.nb--p .nb-cartouche { left: 17%; right: 17%; top: 18%; height: 21%; gap: 1cqw; }
 .nb--l .nb-cartouche { left: 44%; right: 15%; top: 23.5%; height: 52%; gap: 1.1cqw; }
 .nb-title { font-family: var(--display); font-weight: 700; line-height: 1.45; letter-spacing: 0.3em; text-indent: 0.3em; }
-.nb--p .nb-title { font-size: 2.5cqw; }
+.nb--p .nb-title { font-size: 2.15cqw; letter-spacing: 0.26em; text-indent: 0.26em; }
 .nb--p .nb-title br { display: none; }
 .nb--p .nb-title::after { content: ''; }
 .nb--l .nb-title { font-size: 2cqw; }
@@ -367,8 +367,17 @@ a.qr { line-height: 0; }
 .nb-foot { font-family: var(--mono); font-weight: 600; letter-spacing: 0.2em; line-height: 1.9; }
 .nb--l .nb-cartouche .nb-foot { font-size: 1.25cqw; margin-top: 0.8cqw; letter-spacing: 0.14em; }
 
-.nb-panel { position: absolute; left: 28.3%; top: 52.1%; width: 43.5%; aspect-ratio: 1; }
-.nb-panel .covered { position: absolute; inset: 2%; max-width: none; width: auto; margin: 0; }
+.nb-panel { position: absolute; z-index: 2; left: 30%; top: 53.4%; width: 40.5%; aspect-ratio: 1; }
+.nb-panel .covered { position: absolute; inset: 2%; }
+.nb-panel--captioned .covered { inset: 2.5% 2.5% 15% 2.5%; display: flex; justify-content: center; }
+.nb-panel--captioned .qr { height: 100%; width: auto; aspect-ratio: 1; }
+.nb-panelfoot {
+  position: absolute; left: 3%; right: 3%; bottom: 2.6%;
+  font-family: var(--mono); font-weight: 600; font-size: 1.45cqw;
+  letter-spacing: 0.1em; line-height: 1.6; text-align: center; color: var(--nb-ink);
+}
+.nb-panelfoot span { white-space: nowrap; }
+.nb-panel .covered { max-width: none; width: auto; margin: 0; }
 .nb-qr { width: 100%; height: 100%; padding: 4%; border: none; box-shadow: none; background: #fff; border-radius: 2px; max-width: none; }
 .nb .cover { background: rgba(237, 239, 240, 0.72); color: var(--nb-ink); border-color: rgba(35, 38, 43, 0.35); padding: 8%; gap: 6%; }
 .nb .cover span { font-size: 3.2cqw; }
@@ -386,33 +395,18 @@ a.qr { line-height: 0; }
 .nb--l .nb-serial { font-size: 1.45cqw; margin-top: 0.8cqw; }
 
 .nb-seal {
-  position: absolute; right: 5%; top: 84%; width: 15cqw; height: auto;
+  position: absolute; z-index: 2; right: 5%; top: 84%; width: 15cqw; height: auto;
   color: var(--nb-blue); opacity: 0.8; transform: rotate(8deg); pointer-events: none;
 }
 
 .nb-overstamp {
-  position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
+  position: absolute; z-index: 1; inset: 0; display: grid; place-items: center; pointer-events: none;
   font-family: var(--display); font-weight: 700; white-space: nowrap;
-  letter-spacing: 0.2em; text-indent: 0.2em; color: var(--nb-blue); opacity: 0.4;
+  letter-spacing: 0.2em; text-indent: 0.2em; color: var(--nb-blue); opacity: 0.3;
   transform: rotate(-14deg);
 }
 .nb--p .nb-overstamp { inset: 9% 0 auto 0; height: 36%; font-size: 9.5cqw; }
 .nb--l .nb-overstamp { font-size: 7.5cqw; }
-
-/* ---------- the frontispiece: an engraving in an ivory mat ---------- */
-.plate-art {
-  border: 1px solid var(--hair-strong); background: #efeadc; padding: 14px;
-  box-shadow: 0 18px 44px -22px rgba(0, 0, 0, 0.55);
-}
-.plate-art img {
-  display: block; width: 100%; height: auto;
-  border: 1px solid rgba(43, 47, 52, 0.35);
-}
-.plate-art figcaption {
-  padding: 12px 6px 2px; text-align: center;
-  font-family: var(--mono); font-size: 9.5px; font-weight: 600;
-  letter-spacing: 0.28em; text-transform: uppercase; color: #4d5359;
-}
 
 /* ---------- badges & verdicts ---------- */
 .badges { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }

@@ -67,11 +67,12 @@ export const banknote = (args: BanknoteArgs): HTMLElement => {
     <div class="nb nb--p" role="img" aria-label="A bearer note for ${args.sats} sats">
       ${corner(args.sats, 'tl', true)}${corner(args.sats, 'tr', false)}
       ${cartouche(false, false)}
-      <div class="nb-panel">
+      <div class="nb-panel nb-panel--captioned">
         <div class="covered">
           <div class="qr nb-qr" role="img" aria-label="The note itself">${qr}</div>
           <button class="cover"><span>Tap to reveal</span><small>Anyone who sees this code can take the sats.</small></button>
         </div>
+        <div class="nb-panelfoot"><span>32 BYTES · A CLAIM ON A VERY SMALL NODE</span><br/><span>· NOT LEGAL TENDER ·</span></div>
       </div>
       ${seal()}
     </div>`
