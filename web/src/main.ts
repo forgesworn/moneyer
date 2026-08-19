@@ -324,6 +324,11 @@ const viewHome = (): void => {
       <div class="rubric">The note</div>
       <div data-specimen></div>
       <p class="warn">Every note this mint strikes is a 32-byte secret. This is what one looks like when a wallet prints it - yours arrives with a live QR where the specimen mark sits.</p>
+      <div class="rubric">The work</div>
+      <figure class="plate-art">
+        <img src="/art/moneyer.jpg" alt="An engraved moneyer striking a coin at his anvil as lightning hits the die" loading="lazy" />
+        <figcaption>The moneyer at his work · every note struck on Lightning</figcaption>
+      </figure>
       <div class="rubric">How it works</div>
       <div class="steps" data-steps>
         <div class="step"><span class="n">I</span><b>Pay the invoice</b><p>From any Lightning wallet. The mint writes your note's secret into the invoice itself.</p></div>

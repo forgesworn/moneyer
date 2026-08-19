@@ -50,6 +50,7 @@ export const banknote = (args: BanknoteArgs): HTMLElement => {
     ${cornerNumeral(args.sats, 'tl')}${cornerNumeral(args.sats, 'tr')}
     ${cornerNumeral(args.sats, 'bl')}${cornerNumeral(args.sats, 'br')}
     <div class="nb-rosette">${rosette(300)}</div>
+    <img class="nb-watermark" src="/art/strike.jpg" alt="" loading="lazy" />
     <div class="nb-body">
       <div class="nb-title">LNURLCASH BEARER NOTE</div>
       <div class="nb-titlerule"><i></i><span>·</span><i></i></div>
