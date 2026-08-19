@@ -44,6 +44,7 @@ against until those publish:
 git clone https://github.com/TheCryptoDonkey/lnurlcash-kit
 git clone https://github.com/TheCryptoDonkey/lnurlcash-conformance
 git clone https://github.com/forgesworn/moneyer
+(cd lnurlcash-kit && npm install && npm run build)
 cd moneyer && npm install && npm run build
 ```
 
