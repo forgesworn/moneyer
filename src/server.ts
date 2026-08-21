@@ -185,7 +185,10 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         minSendable: effectiveMinSendableMsat,
         maxSendable: config.maxSendableMsat,
         metadata: JSON.stringify(metadata),
-        withdrawLink: `lnurlw://${host}/w`,
+        // The plain URL, as lnurl-mint emits and the LUD-25 diagram shows.
+        // LUD-17's lnurlw:// is the scheme a wallet puts on a QR, not a
+        // field in a JSON body; every other URL here is directly fetchable.
+        withdrawLink: `${origin}/w`,
         disposable: false
       })
     }

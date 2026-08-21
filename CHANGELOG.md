@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `withdrawLink` is now the plain URL (`https://host/w`), the form
+  lnurl-mint emits and the LUD-25 diagram shows, instead of
+  `lnurlw://host/w`. Both are legal readings of the draft; the reference
+  stack's is the intended one, and a wallet that only fetches the field
+  without LUD-17 translation now works. Raised on the spec as
+  lnurl/luds#301.
+
 ## [0.1.0] - 2026-08-20
 
 Initial implementation.

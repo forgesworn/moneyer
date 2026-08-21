@@ -477,7 +477,7 @@ const boot = async (): Promise<void> => {
       // Six hundred billion sats: a denomination absurd enough that nobody
       // mistakes the proofing press for money.
       viewNote({
-        url: buildNoteUrl(payInfo.withdrawLink ?? `lnurlw://${HOST}/w`, '11'.repeat(32), 600_000_000_000_000),
+        url: buildNoteUrl(payInfo.withdrawLink ?? `${API}/w`, '11'.repeat(32), 600_000_000_000_000),
         amountMsat: 600_000_000_000_000,
         verified: true,
         secured: true
@@ -790,7 +790,7 @@ const viewInvoice = (args: {pr: string; verifyUrl: string; grossMsat: number}): 
 // verify against the mint's advertised key, live, in front of the user.
 const claimNote = async (preimage: string, grossMsat: number): Promise<void> => {
   const netMsat = netFor(grossMsat)
-  const rawUrl = buildNoteUrl(pay!.withdrawLink ?? `lnurlw://${HOST}/w`, preimage, netMsat)
+  const rawUrl = buildNoteUrl(pay!.withdrawLink ?? `${API}/w`, preimage, netMsat)
   try {
     const info = await fetchNoteInfo(rawUrl)
     const rotated = await rotateNote(info.callback, preimage)

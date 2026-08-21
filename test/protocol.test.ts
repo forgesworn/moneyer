@@ -49,7 +49,7 @@ describe('discovery', () => {
     const mint = await start()
     const info = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
     expect(info.tag).toBe('payRequest')
-    expect(info.withdrawLink).toMatch(/^lnurlw:\/\//)
+    expect(info.withdrawLink).toBe(`${mint.moneyer.url}/w`)
     expect(info.mintFee).toBeUndefined()
     expect(info.callback).toBe(`${mint.moneyer.url}/p/cb`)
   })
