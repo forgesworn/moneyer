@@ -251,6 +251,39 @@ there by advertising `minWithdrawable` as the note floored to a whole sat
 and accepting a melt for that; the sub-sat remainder is dust the mint
 keeps. Rounding at mint time means it never comes up.
 
+## A retried mutation is answered, not refused
+
+Rotate, split and merge are GETs, and transports retry GETs. Go's
+`net/http` retries one that failed on a reused idle connection; the JDK's
+`HttpClient` retries idempotent methods with no switch to stop it. The
+retry is byte-identical, and it arrives after the mint has already burned
+the inputs.
+
+Answering it "already spent" is what destroys money. A wallet that
+believes the refusal - which is exactly what the error taxonomy tells it
+to do - deletes the staged secret, and the mint keeps a note nobody can
+ever spend.
+
+So moneyer records which request minted which outputs, and a request that
+has already minted its outputs gets the same reply again: same `OK`, same
+signatures, nothing burned, nothing minted, no balance moved. A retry is
+a read.
+
+A request is the same request when it names the same input notes and asks
+for the same outputs: the same `h`, the same `h2`, the same `amount`.
+Input order does not matter, because a reordered retry is the same
+operation. Anything else naming a burned note is a double-spend attempt
+and still gets `Invalid or already spent k1.`, unchanged. Provenance is
+recorded rather than inferred for that reason: matching on "a note exists
+at `h`" alone would let anyone holding a burned `k1` and any outstanding
+note id draw a success out of the mint.
+
+The melt path is untouched: melts are deduplicated by payment hash, which
+is a different question with a different answer.
+
+This is moneyer's own behaviour. The LUD-25 draft says nothing about
+retries yet; the suggested wording is on lnurl/luds#301 as a SHOULD.
+
 ## What the mint knows
 
 This mint knows every note it has issued and what each is worth. It

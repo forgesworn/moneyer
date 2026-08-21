@@ -32,6 +32,19 @@ additive on the wire apart from the node-capacity rename below.
   exactly that, and `verifyStatsSnapshot` is exported for wallets.
 - The lnd and cln backends report the node's local channel balance;
   the fake one reports a configurable balance, one bitcoin by default.
+- **A retried rotate, split or merge is answered instead of refused.**
+  These are GETs, and transports retry GETs on their own: the retry
+  arrives byte-identical after the inputs are burned, and the old answer
+  - `Invalid or already spent k1.` - told the wallet to drop the only
+  copy of a secret the mint really had minted a note against. The mint
+  now records which request minted which outputs, and replays the same
+  reply: same signatures, nothing burned, nothing minted, no balance
+  moved. A request counts as the same request when it names the same
+  input notes and asks for the same `h`, `h2` and `amount`; input order
+  does not matter. Anything else naming a burned note is still refused
+  with the same reason string, so no oracle appears, and the melt path is
+  untouched. moneyer's own behaviour: the draft says nothing about
+  retries yet.
 - `moneyer admin <command>`: the operator surface. `status`, `notes`,
   `note`, `melts`, `reconcile`, `sweep`, `snapshot`, `names list`,
   `keys rotate` and `verify-note`, all reading the same `MONEYER_*`

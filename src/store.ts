@@ -1,4 +1,6 @@
 import {DatabaseSync} from 'node:sqlite'
+import {sha256} from '@noble/hashes/sha2.js'
+import {bytesToHex, utf8ToBytes} from '@noble/hashes/utils.js'
 
 // The store holds note IDs - sha256(k1) - and never a secret. A freshly
 // minted note's id is exactly the payment hash of the invoice that funded
@@ -45,6 +47,29 @@ export type ZapInvoiceRow = {
   receiptJson: string | null
   settledAt: number | null
 }
+
+// What identifies one mutation request, so a retry of it can be answered
+// with the same reply instead of "already spent". Everything the WALLET
+// chose goes in: the notes it named (by id, never by secret - the store
+// holds no secrets), the output ids it asked for, and the split amount.
+// Anything else naming a burned input is a different request and is still
+// refused, so no oracle appears. Input order is not part of it: a
+// reordered retry is the same operation.
+export const swapFingerprint = (args: {
+  inputIds: string[]
+  h: string
+  h2?: string | undefined
+  amountMsat?: number | undefined
+}): string =>
+  bytesToHex(
+    sha256(
+      utf8ToBytes(
+        [[...args.inputIds].sort().join(','), args.h, args.h2 ?? '', args.amountMsat === undefined ? '' : String(args.amountMsat)].join(
+          '|'
+        )
+      )
+    )
+  )
 
 // What the mint owes, as /stats and the operator CLI report it.
 export type Liabilities = {
@@ -125,6 +150,11 @@ export class NoteStore {
         settled_at INTEGER,
         published_at INTEGER
       );
+      CREATE TABLE IF NOT EXISTS swaps (
+        fingerprint TEXT PRIMARY KEY,
+        outputs TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS melts (
         payment_hash TEXT PRIMARY KEY,
         note_id TEXT NOT NULL,
@@ -189,13 +219,40 @@ export class NoteStore {
 
   // The atomic mutation behind rotate, split and merge: burn every input,
   // mint every output, or do nothing at all.
-  swap(inputIds: string[], outputs: Array<{id: string; amountMsat: number}>): void {
+  //
+  // `fingerprint`, when given, records which request minted these outputs
+  // from those inputs. A GET is retried by transports that have no idea a
+  // rotate spends anything - Go's net/http retries one on a reused idle
+  // connection, the JDK's HttpClient retries idempotent methods with no
+  // switch to stop it - and the retry arrives byte-identical after the
+  // inputs are already burned. Without provenance the mint can only say
+  // "already spent", and a wallet that believes it drops the only copy of
+  // a secret the mint really did mint a note against.
+  swap(inputIds: string[], outputs: Array<{id: string; amountMsat: number}>, fingerprint?: string): void {
     this.tx(() => {
       for (const id of inputIds) this.assertOutstanding(id)
       for (const output of outputs) this.assertOutputIdFree(output.id)
       for (const id of inputIds) this.setNoteState(id, 'burned')
       for (const output of outputs) this.insertNote(output.id, output.amountMsat)
+      if (fingerprint !== undefined) {
+        this.db
+          .prepare('INSERT OR REPLACE INTO swaps (fingerprint, outputs, created_at) VALUES (?, ?, ?)')
+          .run(fingerprint, JSON.stringify(outputs.map(output => [output.id, output.amountMsat])), Date.now())
+      }
     })
+  }
+
+  // What a previous request with this exact fingerprint minted, if any.
+  // Provenance is recorded rather than inferred on purpose: matching on
+  // "a note exists at h" alone would let anyone holding a burned k1 and
+  // any outstanding note id draw a success out of the mint.
+  swapByFingerprint(fingerprint: string): Array<{id: string; amountMsat: number}> | null {
+    const row = this.db.prepare('SELECT outputs FROM swaps WHERE fingerprint = ?').get(fingerprint) as
+      | {outputs: string}
+      | undefined
+    if (!row) return null
+    const parsed = JSON.parse(row.outputs) as Array<[string, number]>
+    return parsed.map(([id, amountMsat]) => ({id, amountMsat}))
   }
 
   // Reserves a note for a melt and records the melt, atomically. The melts
