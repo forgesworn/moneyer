@@ -83,6 +83,10 @@ export type Liabilities = {
 // A lightning address this mint pays out as a note. `source` is how it
 // got here: 'env' for one the operator set, 'self' for one somebody
 // registered and paid for.
+// How long a connection waits for a lock before giving up. Long enough
+// for a swap to commit, short enough that a wedged process is obvious.
+const BUSY_TIMEOUT_MS = 5_000
+
 export type ZapNameRow = {
   name: string
   pubkey: string
@@ -124,10 +128,18 @@ export class NoteStore {
     this.readOnly = options.readOnly === true
     if (this.readOnly) {
       this.db = new DatabaseSync(path, {readOnly: true})
+      // A reader still meets a locked shared-memory index for a moment
+      // during WAL recovery, so it waits too rather than throwing.
+      this.db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`)
       return
     }
     this.db = new DatabaseSync(path)
     this.db.exec('PRAGMA journal_mode = WAL')
+    // node:sqlite opens with no busy timeout at all, so a second writer
+    // gets `database is locked` the instant it meets the first one. The
+    // operator CLI is that second writer while the mint is running, and
+    // the moments you reach for it are the busy ones. Wait, do not throw.
+    this.db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`)
     this.db.exec('PRAGMA foreign_keys = ON')
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS notes (
@@ -666,6 +678,13 @@ export class NoteStore {
       .prepare("SELECT COALESCE(SUM(amount_msat), 0) AS total FROM notes WHERE state IN ('outstanding','pending')")
       .get() as {total: number}
     return row.total
+  }
+
+  // What this connection will wait for a lock, so the guarantee is
+  // testable rather than assumed.
+  busyTimeoutMs(): number {
+    const row = this.db.prepare('PRAGMA busy_timeout').get() as {timeout?: number} | undefined
+    return row?.timeout ?? 0
   }
 
   close(): void {

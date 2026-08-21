@@ -5,6 +5,13 @@
 While LUD-25 is a draft, a `0.x` minor bump may be breaking; this one is
 additive on the wire apart from the node-capacity rename below.
 
+- Both database connections now wait up to five seconds for a lock instead
+  of giving up at once. `node:sqlite` opens with no busy timeout, so a
+  second writer met `database is locked` the moment the first one held it.
+  The operator CLI is that second writer while the mint is running, and the
+  times you reach for `moneyer admin reconcile` are the busy ones. Nothing
+  was ever at risk of corruption; the command simply failed when it was
+  least convenient.
 - The discovery endpoint carries the human layer: `name`, `description`,
   `contact` (`nostr` as an npub, `email`, `url`), `tosUrl`, `motd`,
   `fees`, `version` and `previousPubkeys`. Every one is optional and an
