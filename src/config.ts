@@ -82,6 +82,10 @@ export type MoneyerConfig = {
   // history can be checked after the fact. Needs a signing key and the
   // zap Nostr identity.
   statsPublish?: boolean
+  // GET /metrics in the OpenMetrics text format, for a scraper. Off by
+  // default and never authenticated by the app: the deployment notes
+  // restrict the path at the reverse proxy, which is where that belongs.
+  metrics?: boolean
   // Winding down: refuse anything that grows liabilities (mints and
   // splits). Rotate, merge and melt stay available so holders can leave.
   sunset: boolean
@@ -116,7 +120,8 @@ export const DEFAULTS = {
   roundFeeToSat: false,
   stats: true,
   statsRatioOnly: false,
-  statsPublish: false
+  statsPublish: false,
+  metrics: false
 } as const
 
 const int = (value: string | undefined, fallback: number): number => {
@@ -275,6 +280,7 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     stats: flag(env.MONEYER_STATS, DEFAULTS.stats),
     statsRatioOnly: flag(env.MONEYER_STATS_RATIO_ONLY, DEFAULTS.statsRatioOnly),
     statsPublish: flag(env.MONEYER_STATS_PUBLISH, DEFAULTS.statsPublish),
+    metrics: flag(env.MONEYER_METRICS, DEFAULTS.metrics),
     ...(env.MONEYER_WALLET_URL ? {walletUrl: env.MONEYER_WALLET_URL.replace(/\/+$/, '')} : {}),
     maxK1s: int(env.MONEYER_MAX_K1S, DEFAULTS.maxK1s),
     sunset: flag(env.MONEYER_SUNSET, DEFAULTS.sunset),

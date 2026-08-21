@@ -55,6 +55,15 @@ export type Liabilities = {
   oldestPendingMeltAgeSecs: number
 }
 
+export type NoteListRow = NoteRow & {createdAt: number; updatedAt: number}
+export type MeltListRow = MeltRow & {createdAt: number; resolvedAt: number | null}
+export type StoreTotals = {
+  mints: number
+  unsettledMintInvoices: number
+  zaps: number
+  melts: {paid: number; restored: number; pending: number}
+}
+
 // A note named by the request is reserved by an in-flight melt. The wire
 // reply for this is the exact reason string "pending".
 export class NotePendingError extends Error {}
@@ -69,8 +78,18 @@ export class OutputCollisionError extends Error {}
 
 export class NoteStore {
   private db: DatabaseSync
+  readonly readOnly: boolean
 
-  constructor(path: string) {
+  // `readOnly` is for the operator CLI: a command that only reads should
+  // not be able to write, and should not create a database file at a
+  // mistyped path either. It skips the schema statements for the same
+  // reason - there is nothing to migrate when nothing can be written.
+  constructor(path: string, options: {readOnly?: boolean} = {}) {
+    this.readOnly = options.readOnly === true
+    if (this.readOnly) {
+      this.db = new DatabaseSync(path, {readOnly: true})
+      return
+    }
     this.db = new DatabaseSync(path)
     this.db.exec('PRAGMA journal_mode = WAL')
     this.db.exec('PRAGMA foreign_keys = ON')
@@ -425,6 +444,79 @@ export class NoteStore {
       // Whole seconds, and never negative however the clock has moved.
       oldestPendingMeltAgeSecs: melts.oldest === null ? 0 : Math.max(0, Math.floor((nowMs - melts.oldest) / 1000))
     }
+  }
+
+  // Note rows for the operator CLI. Newest first, capped by the caller:
+  // this is the operator's own database, not anything a request reaches.
+  notes(filter: {state?: NoteState; limit?: number} = {}): NoteListRow[] {
+    const limit = Math.max(1, Math.min(filter.limit ?? 20, 1000))
+    const rows = (
+      filter.state === undefined
+        ? this.db
+            .prepare('SELECT id, amount_msat, state, created_at, updated_at FROM notes ORDER BY created_at DESC LIMIT ?')
+            .all(limit)
+        : this.db
+            .prepare(
+              'SELECT id, amount_msat, state, created_at, updated_at FROM notes WHERE state = ? ORDER BY created_at DESC LIMIT ?'
+            )
+            .all(filter.state, limit)
+    ) as Array<{id: string; amount_msat: number; state: NoteState; created_at: number; updated_at: number}>
+    return rows.map(row => ({
+      id: row.id,
+      amountMsat: row.amount_msat,
+      state: row.state,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }))
+  }
+
+  melts(filter: {pendingOnly?: boolean; limit?: number} = {}): MeltListRow[] {
+    const limit = Math.max(1, Math.min(filter.limit ?? 20, 1000))
+    const where = filter.pendingOnly === true ? 'WHERE outcome IS NULL' : ''
+    const rows = this.db
+      .prepare(
+        `SELECT payment_hash, note_id, pr, amount_msat, outcome, created_at, resolved_at FROM melts ${where} ORDER BY created_at DESC LIMIT ?`
+      )
+      .all(limit) as Array<{
+      payment_hash: string
+      note_id: string
+      pr: string
+      amount_msat: number
+      outcome: 'paid' | 'restored' | null
+      created_at: number
+      resolved_at: number | null
+    }>
+    return rows.map(row => ({
+      paymentHash: row.payment_hash,
+      noteId: row.note_id,
+      pr: row.pr,
+      amountMsat: row.amount_msat,
+      outcome: row.outcome,
+      createdAt: row.created_at,
+      resolvedAt: row.resolved_at
+    }))
+  }
+
+  // Lifetime totals, read from the tables rather than counted in memory,
+  // so a restart does not reset them.
+  totals(): StoreTotals {
+    const mints = this.db.prepare('SELECT COUNT(*) AS n FROM mint_invoices WHERE settled = 1').get() as {n: number}
+    const unsettled = this.db.prepare('SELECT COUNT(*) AS n FROM mint_invoices WHERE settled = 0').get() as {n: number}
+    const zaps = this.db.prepare('SELECT COUNT(*) AS n FROM zap_invoices WHERE settled = 1').get() as {n: number}
+    const melts = this.db
+      .prepare("SELECT COALESCE(outcome, 'pending') AS outcome, COUNT(*) AS n FROM melts GROUP BY 1")
+      .all() as Array<{outcome: 'paid' | 'restored' | 'pending'; n: number}>
+    const byOutcome = {paid: 0, restored: 0, pending: 0}
+    for (const row of melts) byOutcome[row.outcome] = row.n
+    return {mints: mints.n, unsettledMintInvoices: unsettled.n, zaps: zaps.n, melts: byOutcome}
+  }
+
+  // VACUUM INTO: a consistent copy of the whole database, taken while the
+  // mint is running, without needing a sqlite3 binary on the box. SQLite
+  // refuses an existing target itself; the caller checks first so the
+  // operator gets a sentence rather than a driver error.
+  snapshot(path: string): void {
+    this.db.exec(`VACUUM INTO '${path.replace(/'/g, "''")}'`)
   }
 
   outstandingLiabilityMsat(): number {

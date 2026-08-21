@@ -97,6 +97,7 @@ default, and a variable set to an empty string counts as unset.
 | `MONEYER_STATS` | `true` | the `/stats` endpoint. Off means 404 |
 | `MONEYER_STATS_RATIO_ONLY` | `false` | publish the coverage ratio alone, without the size of the book |
 | `MONEYER_STATS_PUBLISH` | `false` | publish a signed hourly snapshot of `/stats` to Nostr |
+| `MONEYER_METRICS` | `false` | the `/metrics` endpoint, in the OpenMetrics text format |
 
 ### Who runs this mint
 
@@ -315,6 +316,62 @@ mint username or `_`.
 | `/w` | LUD-03 informational GET |
 | `/w/cb` | the mutating callback: melt, rotate, split, merge |
 | `/stats` | what the mint owes, what the node holds, and the coverage between them |
+| `/metrics` | the same figures for a scraper, off by default |
+
+## Operating
+
+```bash
+set -a; source /etc/moneyer/env; set +a
+moneyer admin status
+```
+
+`moneyer admin` reads the same `MONEYER_*` environment the mint does, so
+there is one description of a deployment and not two. It opens the
+database **read-only** unless the command mutates: an operator poking at
+a live mint should not be able to write to it by accident, and a mistyped
+path should not silently create an empty database to answer from.
+
+| command | does |
+| --- | --- |
+| `status` | liabilities, melts in flight, unsettled invoices, node balance and coverage, lifetime totals, keys |
+| `notes [--state outstanding\|pending\|burned] [--limit n]` | list notes, newest first |
+| `note <id\|k1>` | one note; 64 hex that names no note is hashed and looked up as the secret |
+| `melts [--pending]` | list melts |
+| `reconcile` | one pending-melt reconcile pass, printing what changed |
+| `sweep` | delete mint invoices whose expiry is provably past |
+| `snapshot <path>` | a consistent copy of the database, taken live, refusing to overwrite |
+| `names list` | the lightning addresses this mint pays out as notes |
+| `keys rotate` | generate a signing key and print the two environment lines; writes nothing |
+| `verify-note <url>` | check a note's signature offline, then say what the mint holds at that id |
+
+`snapshot` uses SQLite's `VACUUM INTO`, so it needs no `sqlite3` binary on
+the box and is safe to run against a live mint.
+
+### Metrics
+
+`MONEYER_METRICS=true` serves `GET /metrics` in the OpenMetrics text
+format: `moneyer_outstanding_msat`, `moneyer_outstanding_notes`,
+`moneyer_pending_melts`, `moneyer_oldest_pending_melt_seconds`,
+`moneyer_local_balance_msat`, `moneyer_unsettled_mint_invoices`,
+`moneyer_mints_total`, `moneyer_melts_total{outcome}` and
+`moneyer_zaps_total`.
+
+The app does not authenticate it. Restrict the path to your scraper at
+the reverse proxy, the way `/stats` is left public deliberately and this
+is not.
+
+### The three alerts worth having
+
+- **oldest pending melt over 30 minutes.** A melt that cannot be resolved
+  is a note nobody can spend and a payment nobody can account for. The
+  reconciler retries every five minutes; half an hour without a terminal
+  answer means the funding source needs looking at.
+- **coverage under 1.** The node cannot pay out every note it owes.
+  Whether that is a channel imbalance or something worse, it is the one
+  number a custodial mint must never be relaxed about.
+- **unsettled invoices growing.** Invoices are issued and never paid all
+  day, and the sweep clears the expired ones. A count that climbs through
+  a sweep means invoices are being issued that nobody can pay.
 
 ## Testing
 
