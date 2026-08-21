@@ -40,13 +40,32 @@ export type NostrTransport = {
   close(): void
 }
 
+// How long a settled zap keeps retrying the recipient's inbox relays
+// before it settles for whichever took the wrap. The receiver reads ONE
+// of its inbox relays, so a wrap that reached three others is still
+// undelivered. Seen live: a long-lived pool's dead socket to the device's
+// relay failed silently for hours while the other relays said OK.
+export const INBOX_RETRY_MS = 10 * 60_000
+
 export const poolTransport = (): NostrTransport => {
   const pool = new SimplePool()
   const used = new Set<string>()
   return {
     async publish(relays, event) {
       for (const r of relays) used.add(r)
+      // A relay whose socket died reports failure forever on a pool that
+      // keeps the stale Relay object; drop it so the next publish dials
+      // afresh.
       const results = await Promise.allSettled(pool.publish(relays, event))
+      results.forEach((r, i) => {
+        if (r.status === 'rejected') {
+          try {
+            pool.close([relays[i]!])
+          } catch {
+            // nothing to close
+          }
+        }
+      })
       const ok: string[] = []
       const failed: string[] = []
       results.forEach((r, i) => (r.status === 'fulfilled' ? ok : failed).push(relays[i]!))
@@ -271,6 +290,15 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
       if (!result.ok.length) {
         log(`zap: wrap for ${row.name} reached no relay (${result.failed.join(', ')}); will retry`)
         continue
+      }
+      const missedInbox = result.failed.filter(r => inbox.includes(r))
+      if (missedInbox.length) {
+        const age = now() - (row.settledAt ?? now())
+        if (age < INBOX_RETRY_MS) {
+          log(`zap: wrap for ${row.name} missed inbox relay(s) ${missedInbox.join(', ')}; parked for another try`)
+          continue
+        }
+        log(`zap: wrap for ${row.name} never reached ${missedInbox.join(', ')} in ${Math.round(age / 60_000)} min; left on ${result.ok.join(', ')}`)
       }
       if (!inbox.length) log(`zap: ${row.name} publishes no inbox list; wrap left on the mint's relays`)
       if (row.receiptJson) {

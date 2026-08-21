@@ -218,6 +218,44 @@ describe('a zap name', () => {
     expect(rumor.tags.find(t => t[0] === 'P')).toBeUndefined()
   })
 
+  it('keeps the wrap parked while an inbox relay refuses it, and settles for the rest after ten minutes', async () => {
+    const relay = fakeRelay()
+    const inboxDown: NostrTransport = {
+      ...relay.transport,
+      async publish(relays, event) {
+        // The mint's own relay takes it; the recipient's inbox relay does not.
+        const ok = relays.filter(r => r !== 'wss://alice-inbox.example')
+        const failed = relays.filter(r => r === 'wss://alice-inbox.example')
+        relay.published.push({relays: ok, event})
+        relay.stored.push(event)
+        return {ok, failed}
+      }
+    }
+    mint = await startMint(
+      {
+        publicOrigin: 'http://mint.test',
+        zap: {nostrKey: MINT_NOSTR_KEY, relays: ['wss://mint-relay.example'], names: {alice}}
+      },
+      {nostr: inboxDown, zapPollMs: 100_000}
+    )
+    relay.stored.push(
+      finalizeEvent({kind: INBOX_RELAYS_KIND, created_at: 1, content: '', tags: [['relay', 'wss://alice-inbox.example']]}, aliceSk)
+    )
+    const cb = (await (await fetch(`${mint.moneyer.url}/z/cb/alice?amount=5000`)).json()) as {verify: string}
+    const paymentHash = cb.verify.split('/').pop()!
+    mint.backend.control.settleInvoice(paymentHash)
+    await mint.moneyer.reconcile()
+    // Minted and announced to the mint's relay, but not given up on: the
+    // device reads its inbox relay, and that one has not got it.
+    expect(mint.moneyer.store.zapInvoiceByHash(paymentHash)!.wrapJson).not.toBeNull()
+    expect(relay.published.filter(p => p.event.kind === 1059)).toHaveLength(1)
+    await mint.moneyer.reconcile()
+    expect(relay.published.filter(p => p.event.kind === 1059)).toHaveLength(2)
+    expect(mint.moneyer.store.zapInvoiceByHash(paymentHash)!.wrapJson).not.toBeNull()
+    // Same event each time: a relay that already has it just says so.
+    expect(new Set(relay.published.filter(p => p.event.kind === 1059).map(p => p.event.id)).size).toBe(1)
+  })
+
   it('refuses a zap request that is forged, for someone else, or for a different amount', async () => {
     const {mint} = await startZapMint()
     const call = async (nostr: string, amount = 21_000) =>

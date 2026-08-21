@@ -43,6 +43,7 @@ export type ZapInvoiceRow = {
   noteId: string | null
   wrapJson: string | null
   receiptJson: string | null
+  settledAt: number | null
 }
 
 // A note named by the request is reserved by an in-flight melt. The wire
@@ -322,12 +323,13 @@ export class NoteStore {
       settled: row.settled === 1,
       noteId: (row.note_id as string | null) ?? null,
       wrapJson: (row.wrap_json as string | null) ?? null,
-      receiptJson: (row.receipt_json as string | null) ?? null
+      receiptJson: (row.receipt_json as string | null) ?? null,
+      settledAt: (row.settled_at as number | null) ?? null
     }
   }
 
   private static readonly ZAP_COLUMNS =
-    'payment_hash, name, recipient, pr, gross_msat, net_msat, zap_request, settled, note_id, wrap_json, receipt_json'
+    'payment_hash, name, recipient, pr, gross_msat, net_msat, zap_request, settled, note_id, wrap_json, receipt_json, settled_at'
 
   zapInvoiceByHash(paymentHash: string): ZapInvoiceRow | null {
     const row = this.db
