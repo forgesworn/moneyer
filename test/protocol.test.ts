@@ -21,8 +21,11 @@ import {
   verifyNoteSignature
 } from 'lnurlcash-kit'
 import {decodeBolt11} from 'farrier-kit/bolt11'
+import {npubEncode} from 'nostr-tools/nip19'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
-import {freshK1, startMint, waitFor, type TestMint} from './helpers.ts'
+import {createFakeBackend} from '../src/backends/fake.ts'
+import {createMoneyer} from '../src/server.ts'
+import {freshK1, startMint, testConfig, waitFor, type TestMint} from './helpers.ts'
 
 // moneyer driven end to end by lnurlcash-kit - the same client every
 // wallet built on the kit would bring. The kit's own strictness (k1 echo,
@@ -37,6 +40,16 @@ afterEach(async () => {
   await active?.moneyer.close()
   active = null
 })
+
+// The discovery endpoint carries more than lnurlcash-kit's type names
+// today; the kit passes unknown fields through, so read the JSON directly.
+type Discovery = Record<string, unknown> & {previousPubkeys?: string[]}
+const discovery = async (mint: TestMint, user = 'mint'): Promise<Discovery> =>
+  (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlw/${user}`)).json()) as Discovery
+
+// The operator contact, npub-encoded: the form the discovery endpoint
+// publishes whichever form the operator configured.
+const NPUB = npubEncode('22'.repeat(32))
 
 const creditNote = (mint: TestMint, amountMsat: number): {k1: string; url: string} => {
   const k1 = freshK1()
@@ -85,6 +98,67 @@ describe('discovery', () => {
     expect(info.callback).toBe(`${mint.moneyer.url}/w`)
     expect(info.nodePubkey).toBe(mint.moneyer.signer!.pubkey)
     expect(info.payLink).toContain('/.well-known/lnurlp/mint')
+  })
+
+  it('carries the operator\'s mint info when it is configured', async () => {
+    const mint = await start({
+      name: 'The Example Mint',
+      contact: {nostr: NPUB, email: 'mint@example.com', url: 'https://example.com/contact'},
+      tosUrl: 'https://example.com/terms',
+      motd: 'Fees change on 1 September.',
+      mintFee: {baseFeeMsat: 1000, feePpm: 5000}
+    })
+    const info = await discovery(mint)
+    expect(info.name).toBe('The Example Mint')
+    expect(info.description).toBe('an LNURLcash note')
+    expect(info.contact).toEqual({nostr: NPUB, email: 'mint@example.com', url: 'https://example.com/contact'})
+    expect(info.tosUrl).toBe('https://example.com/terms')
+    expect(info.motd).toBe('Fees change on 1 September.')
+    // The structured twin of the payRequest's fee prose - both are served.
+    expect(info.fees).toEqual({baseFeeMsat: 1000, feePpm: 5000})
+    expect(info.version).toMatch(/^\d+\.\d+\.\d+/)
+    expect(info.previousPubkeys).toEqual([])
+  })
+
+  it('omits every mint-info field the operator left unset', async () => {
+    const mint = await start()
+    const info = await discovery(mint)
+    for (const field of ['name', 'contact', 'tosUrl', 'motd', 'fees']) {
+      expect(info).not.toHaveProperty(field)
+    }
+    // previousPubkeys is always present: "no history" and "not
+    // implemented" are different answers to a wallet holding an old note.
+    expect(info.previousPubkeys).toEqual([])
+  })
+
+  it('shows the notice, the contact and the terms on the fallback landing page', async () => {
+    const mint = await start(
+      {
+        name: 'The Example Mint',
+        contact: {email: 'mint@example.com'},
+        tosUrl: 'https://example.com/terms',
+        motd: 'Fees change on 1 September.'
+      },
+      {webAssets: null}
+    )
+    const page = await (await fetch(`${mint.moneyer.url}/`)).text()
+    expect(page).toContain('The Example Mint')
+    expect(page).toContain('Fees change on 1 September.')
+    expect(page).toContain('mint@example.com')
+    expect(page).toContain('https://example.com/terms')
+  })
+
+  it('publishes node capacity under both names for one release', async () => {
+    const backend = createFakeBackend()
+    const moneyer = await createMoneyer(testConfig(), {
+      backend: {...backend, nodeInfo: async () => ({alias: 'fake', capacityMsat: 4_200_000})},
+      webAssets: null
+    })
+    const mint: TestMint = {moneyer, backend}
+    active = mint
+    const info = await discovery(mint)
+    expect(info.nodeCapacity).toBe(4_200_000)
+    expect(info.nodeCapacityMsat).toBe(4_200_000)
   })
 })
 

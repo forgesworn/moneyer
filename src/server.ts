@@ -11,6 +11,7 @@ import {createLndBackend} from './backends/lnd.ts'
 import {PaymentPendingError, type LightningBackend, type NodeInfo} from './backends/types.ts'
 import {reconcilePendingMelts, runMelt} from './melt.ts'
 import {landingPage} from './landing.ts'
+import {packageVersion} from './version.ts'
 import {createZapBridge, poolTransport, type NostrTransport, type ZapBridge} from './zap.ts'
 import {CONFIG_TOKEN, loadWebAssets, type WebAssets} from './web-assets.ts'
 
@@ -280,10 +281,32 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         defaultDescription: config.description,
         payLink: `${origin}/.well-known/lnurlp/${lnurlwMatch[1]}`,
         ...(signer ? {mintPubkey: signer.pubkey} : {}),
+        // The human layer: who runs this, how to reach them, the terms,
+        // and today's message. Absent unless the operator set it.
+        ...(config.name ? {name: config.name} : {}),
+        description: config.description,
+        ...(config.contact ? {contact: config.contact} : {}),
+        ...(config.tosUrl ? {tosUrl: config.tosUrl} : {}),
+        ...(config.motd ? {motd: config.motd} : {}),
+        // The structured twin of the payRequest metadata's fee prose. Both
+        // stay: one is for a wallet that parses LUD-25, the other for a
+        // wallet that only reads a payRequest.
+        ...(config.mintFee ? {fees: config.mintFee} : {}),
+        ...(packageVersion ? {version: packageVersion} : {}),
+        // Keys this mint has signed under before. Empty until rotation
+        // lands; a wallet reading it can already tell "no history" from
+        // "field not implemented".
+        previousPubkeys: [],
         ...(nodeInfo.alias ? {nodeAlias: nodeInfo.alias} : {}),
         ...(nodeInfo.uri ? {nodeUri: nodeInfo.uri} : {}),
         ...(nodeInfo.color ? {nodeColor: nodeInfo.color} : {}),
-        ...(nodeInfo.capacityMsat !== undefined ? {nodeCapacityMsat: nodeInfo.capacityMsat} : {}),
+        // nodeCapacity is the name the reference mint, the conformance
+        // mock and lnurlcash-kit all use; nodeCapacityMsat was ours alone
+        // and only survived a round trip through the kit's rest-spread.
+        // Both go out for one release, then the old name goes.
+        ...(nodeInfo.capacityMsat !== undefined
+          ? {nodeCapacity: nodeInfo.capacityMsat, nodeCapacityMsat: nodeInfo.capacityMsat}
+          : {}),
         ...(nodeInfo.numChannels !== undefined ? {nodeNumChannels: nodeInfo.numChannels} : {}),
         ...(nodeInfo.numPeers !== undefined ? {nodeNumPeers: nodeInfo.numPeers} : {})
       })

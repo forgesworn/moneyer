@@ -1,12 +1,21 @@
 import type {MintFee} from 'lnurlcash-kit'
 import {getPublicKey} from 'nostr-tools/pure'
-import {decode as decodeNip19} from 'nostr-tools/nip19'
+import {decode as decodeNip19, npubEncode} from 'nostr-tools/nip19'
 import {hexToBytes} from '@noble/hashes/utils.js'
 
 export type BackendConfig =
   | {kind: 'fake'}
   | {kind: 'cln'; url: string; rune: string}
   | {kind: 'lnd'; url: string; macaroon: string}
+
+// Who runs this mint and how to reach them. Every field is optional and
+// an unset one is absent from the wire, never an empty string: a holder
+// reading "contact: " learns less than nothing.
+export type MintContact = {
+  nostr?: string
+  email?: string
+  url?: string
+}
 
 export type MoneyerConfig = {
   host: string
@@ -17,6 +26,14 @@ export type MoneyerConfig = {
   publicOrigin?: string
   username: string
   description: string
+  // The human layer on the discovery endpoint: who this is, how to reach
+  // them, the terms, and a message of the day. MOTD is how an operator
+  // talks to holders - maintenance, a sunset, a fee change - without a
+  // mailing list they never signed up to.
+  name?: string
+  contact?: MintContact
+  tosUrl?: string
+  motd?: string
   minSendableMsat: number
   maxSendableMsat: number
   // Below this net amount a fresh mint is refused as dust. Mutation outputs
@@ -95,6 +112,51 @@ const flag = (value: string | undefined, fallback: boolean): boolean => {
 
 const HEX32 = /^[0-9a-f]{64}$/i
 
+// Trimmed, or absent. An empty variable is the operator not setting it,
+// which is not the same as setting it to nothing.
+const text = (value: string | undefined): string | undefined => {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : undefined
+}
+
+const webUrl = (name: string, value: string | undefined): string | undefined => {
+  const trimmed = text(value)
+  if (trimmed === undefined) return undefined
+  let protocol: string
+  try {
+    protocol = new URL(trimmed).protocol
+  } catch {
+    throw new Error(`${name} is not a URL: ${JSON.stringify(value)}.`)
+  }
+  if (protocol !== 'https:' && protocol !== 'http:') {
+    throw new Error(`${name} must be http or https, got ${JSON.stringify(value)}.`)
+  }
+  return trimmed
+}
+
+// The MOTD is a line on a mint card, not a blog. A runaway one would push
+// every other field off a wallet's screen, so it is refused at startup
+// rather than truncated behind the operator's back.
+const MOTD_MAX = 280
+
+const contactFromEnv = (env: NodeJS.ProcessEnv): MintContact | undefined => {
+  const rawNostr = text(env.MONEYER_CONTACT_NOSTR)
+  // Normalised to npub on the wire whichever form the operator set: a
+  // wallet showing a contact wants the form a person can paste back.
+  const nostr = rawNostr === undefined ? undefined : npubEncode(pubkeyHex(rawNostr))
+  const email = text(env.MONEYER_CONTACT_EMAIL)
+  if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error(`MONEYER_CONTACT_EMAIL is not an email address: ${JSON.stringify(email)}.`)
+  }
+  const url = webUrl('MONEYER_CONTACT_URL', env.MONEYER_CONTACT_URL)
+  if (nostr === undefined && email === undefined && url === undefined) return undefined
+  return {
+    ...(nostr ? {nostr} : {}),
+    ...(email ? {email} : {}),
+    ...(url ? {url} : {})
+  }
+}
+
 // Reads MONEYER_* from the environment. Throws rather than guessing: a mint
 // that starts with a half-understood configuration is holding other
 // people's money on a misunderstanding.
@@ -148,6 +210,14 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     }
   }
 
+  const motd = text(env.MONEYER_MOTD)
+  if (motd !== undefined && motd.length > MOTD_MAX) {
+    throw new Error(`MONEYER_MOTD must be at most ${MOTD_MAX} characters - it is a banner, not a page.`)
+  }
+  const contact = contactFromEnv(env)
+  const tosUrl = webUrl('MONEYER_TOS_URL', env.MONEYER_TOS_URL)
+  const name = text(env.MONEYER_NAME)
+
   const zap = zapFromEnv(env)
   if (zap && zap.names[env.MONEYER_USERNAME ?? DEFAULTS.username]) {
     throw new Error('MONEYER_ZAP_NAMES must not reuse the mint username.')
@@ -164,6 +234,10 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     ...(publicOrigin ? {publicOrigin} : {}),
     username: env.MONEYER_USERNAME ?? DEFAULTS.username,
     description: env.MONEYER_DESCRIPTION ?? DEFAULTS.description,
+    ...(name ? {name} : {}),
+    ...(contact ? {contact} : {}),
+    ...(tosUrl ? {tosUrl} : {}),
+    ...(motd ? {motd} : {}),
     minSendableMsat,
     maxSendableMsat,
     minMintMsat: int(env.MONEYER_MIN_MINT_MSAT, DEFAULTS.minMintMsat),

@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.2.0] - unreleased
+
+While LUD-25 is a draft, a `0.x` minor bump may be breaking; this one is
+additive on the wire apart from the node-capacity rename below.
+
+- The discovery endpoint carries the human layer: `name`, `description`,
+  `contact` (`nostr` as an npub, `email`, `url`), `tosUrl`, `motd`,
+  `fees`, `version` and `previousPubkeys`. Every one is optional and an
+  unset one is absent rather than empty. New environment variables:
+  `MONEYER_NAME`, `MONEYER_CONTACT_NOSTR`, `MONEYER_CONTACT_EMAIL`,
+  `MONEYER_CONTACT_URL`, `MONEYER_TOS_URL`, `MONEYER_MOTD`.
+- **Wire-name change**: node capacity now goes out as `nodeCapacity`, the
+  name the reference mint, the conformance mock and `lnurlcash-kit` all
+  use. `nodeCapacityMsat`, which was moneyer's alone, is emitted alongside
+  it for this one release and then removed. Both are milli-satoshis.
+- The mint's own site and the fallback landing page show the message of
+  the day, the operator's contact and the terms link, and read capacity
+  under either name.
+
 ## [0.1.2] - 2026-08-21
 
 - `MONEYER_ROUND_FEE_TO_SAT` ceilings the mint fee to a whole sat, as

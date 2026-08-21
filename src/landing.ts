@@ -25,13 +25,22 @@ export const landingPage = (args: {
     : 'none'
   const maxNet = fee ? applyMintFee(config.maxSendableMsat, fee) : config.maxSendableMsat
   const sats = (msat: number) => `${(msat / 1000).toLocaleString('en-GB')} sat`
+  const title = config.name ?? nodeInfo.alias ?? 'moneyer'
+  // Contacts are shown as text, not links: a mailto or an npub someone
+  // else chose is not something this page should hand a click to. The
+  // terms are a link because a URL the operator set is the point of it.
+  const contacts = [
+    config.contact?.email ? {label: 'email', value: config.contact.email} : null,
+    config.contact?.nostr ? {label: 'nostr', value: config.contact.nostr} : null,
+    config.contact?.url ? {label: 'contact', value: config.contact.url} : null
+  ].filter(entry => entry !== null)
 
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>${escapeHtml(host)} - an LNURLcash mint</title>
+<title>${escapeHtml(title)} - an LNURLcash mint</title>
 <meta name="description" content="A moneyer strikes Lightning bearer notes. Pay ${escapeHtml(address)} and the invoice's preimage becomes your note."/>
 <style>
 :root{--bg:#0e0f12;--raise:#16181d;--line:rgba(226,233,242,.09);--ink:#eef1f6;--dim:#98a0ac;--accent:#c9ced8;--accent-deep:#8f97a4}
@@ -52,13 +61,16 @@ h1 small{display:block;font-size:16px;color:var(--dim);font-weight:500;margin-to
 .kv span{color:var(--dim)}
 .kv code{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;word-break:break-all;text-align:right}
 p.small{color:var(--dim);font-size:13.5px;line-height:1.65;text-align:center}
+.motd{background:var(--raise);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:14px;padding:14px 18px;font-size:14.5px;line-height:1.6}
+.motd b{display:block;font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin-bottom:4px}
 a{color:var(--accent)}
 </style>
 </head>
 <body>
 <main>
 <svg class="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.6v8.8"/><path d="M15.4 9.4c-.7-1.1-1.9-1.8-3.4-1.8-2 0-3.6 1.1-3.6 2.7 0 3.4 7.2 1.8 7.2 5 0 1.6-1.6 2.7-3.6 2.7-1.5 0-2.7-.7-3.4-1.8"/></svg>
-<h1>${escapeHtml(nodeInfo.alias ?? 'moneyer')}<small>An LNURLcash mint. Pay the address below and the invoice's payment preimage <em>is</em> your bearer note - money as a secret you hold.</small></h1>
+<h1>${escapeHtml(title)}<small>An LNURLcash mint. Pay the address below and the invoice's payment preimage <em>is</em> your bearer note - money as a secret you hold.</small></h1>
+${config.motd ? `<div class="motd"><b>notice</b>${escapeHtml(config.motd)}</div>` : ''}
 <div class="addr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.5 13.5H11L9.5 22 18 10.5h-6.5L13 2z"/></svg>${escapeHtml(address)}</div>
 <div class="card">
 <div class="kv"><span>mints</span><b>${sats(config.minSendableMsat)} to ${sats(config.maxSendableMsat)}</b></div>
@@ -67,6 +79,8 @@ a{color:var(--accent)}
 ${mintPubkey ? `<div class="kv"><span>notes signed by</span><code>${escapeHtml(mintPubkey)}</code></div>` : '<div class="kv"><span>note signatures</span><b>not offered</b></div>'}
 ${nodeInfo.uri ? `<div class="kv"><span>node</span><code>${escapeHtml(nodeInfo.uri)}</code></div>` : ''}
 ${config.sunset ? '<div class="kv"><span>status</span><b>sunsetting - redeem only</b></div>' : ''}
+${contacts.map(entry => `<div class="kv"><span>${entry.label}</span><code>${escapeHtml(entry.value)}</code></div>`).join('\n')}
+${config.tosUrl ? `<div class="kv"><span>terms</span><a href="${escapeHtml(config.tosUrl)}" rel="noopener noreferrer">${escapeHtml(config.tosUrl)}</a></div>` : ''}
 </div>
 <p class="small">Works with any LUD-25 wallet - <a href="https://github.com/forgesworn/notecase">notecase</a> among them. Verify a note offline against the signing key above.<br/>Independent implementation of the <a href="https://github.com/lnurl/luds/pull/301">LNURLcash draft</a> - graded by <a href="https://github.com/TheCryptoDonkey/lnurlcash-conformance">lnurlcash-conformance</a>.</p>
 </main>

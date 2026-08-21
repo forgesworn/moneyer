@@ -47,6 +47,22 @@ import {banknote} from './banknote.ts'
 
 type MintRuntime = {username: string; walletUrl?: string; sunset?: boolean; origin?: string}
 
+// The mint-info fields moneyer publishes on top of what lnurlcash-kit
+// types today. The kit passes unknown fields through untouched, so they
+// arrive whether or not its own type has caught up; every one is optional
+// and a mint that publishes none of them renders exactly as before.
+type MintInfo = MintAddressInfo & {
+  name?: string
+  description?: string
+  contact?: {nostr?: string; email?: string; url?: string}
+  tosUrl?: string
+  motd?: string
+  fees?: {baseFeeMsat: number; feePpm: number}
+  version?: string
+  previousPubkeys?: string[]
+  nodeCapacity?: number
+}
+
 const runtime: MintRuntime = (window as unknown as {__MINT__?: MintRuntime}).__MINT__ ?? {username: 'mint'}
 // The dev server runs on vite's port; production serves this page from the
 // mint itself, so the API is simply where the page came from.
@@ -58,7 +74,7 @@ let viewEpoch = 0
 
 // discovery, loaded once at boot
 let pay: PayRequestInfo | null = null
-let addr: MintAddressInfo | null = null
+let addr: MintInfo | null = null
 let fee: MintFee | null = null
 
 // ---------- tiny DOM + motion helpers ----------
@@ -466,7 +482,7 @@ const boot = async (): Promise<void> => {
       fetchMintAddress(`${API}/.well-known/lnurlw/${runtime.username}`).catch(() => null)
     ])
     pay = payInfo
-    addr = addrInfo
+    addr = addrInfo as MintInfo | null
     fee = payInfo.mintFee ?? null
     if (addr?.nodeColor && /^#[0-9a-fA-F]{6}$/.test(addr.nodeColor)) {
       document.querySelector('meta[name="theme-color"]')?.setAttribute('content', addr.nodeColor)
@@ -525,7 +541,7 @@ const viewHome = (): void => {
   show(() => {
     const view = el(`<div class="view">
       <header class="masthead">
-        <h1 class="wordmark" data-wordmark>MONEYER</h1>
+        <h1 class="wordmark" data-wordmark>${esc((addr?.name ?? 'MONEYER').toUpperCase())}</h1>
         <div class="tagline">An LNURLcash mint · strikes Lightning bearer notes</div>
       </header>
       <div class="hero">
@@ -533,6 +549,7 @@ const viewHome = (): void => {
         <p class="promise">Pay a Lightning invoice, and its payment preimage <em>is</em> your note - <em>money as a secret you hold</em>.</p>
         <div class="fineline">No account · no custodian's ledger · whoever holds the string holds the money</div>
       </div>
+      ${addr?.motd ? `<div class="notice"><b>notice</b>${esc(addr.motd)}</div>` : ''}
       <button class="plate" data-copy-address>${icons.bolt}<span>${esc(address)}</span></button>
       ${runtime.sunset ? `<div class="badges"><span class="badge wait">${icons.hourglass}<span>sunsetting - existing notes redeem, new ones are not struck</span></span></div>` : ''}
       <div class="actions">
@@ -622,15 +639,24 @@ const termsCard = (): HTMLElement => {
     <div class="kv"><span>note values</span><b>${sats(minNet)} to ${sats(maxNet)} sat</b></div>
     <div class="kv"><span>the fee falls</span><b>once, at the striking - mutations free, merges refund</b></div>
     ${addr?.nodePubkey ? `<div class="kv"><span>notes signed by</span><code>${esc(addr.nodePubkey)}</code></div>` : '<div class="kv"><span>note signatures</span><b>not offered</b></div>'}
+    ${addr?.contact?.email ? `<div class="kv"><span>email</span><code>${esc(addr.contact.email)}</code></div>` : ''}
+    ${addr?.contact?.nostr ? `<div class="kv"><span>nostr</span><code>${esc(addr.contact.nostr)}</code></div>` : ''}
+    ${addr?.contact?.url ? `<div class="kv"><span>contact</span><a href="${esc(addr.contact.url)}" target="_blank" rel="noopener">${esc(addr.contact.url)}</a></div>` : ''}
+    ${addr?.tosUrl ? `<div class="kv"><span>terms</span><a href="${esc(addr.tosUrl)}" target="_blank" rel="noopener">${esc(addr.tosUrl)}</a></div>` : ''}
+    ${addr?.version ? `<div class="kv"><span>software</span><b>moneyer ${esc(addr.version)}</b></div>` : ''}
   </div>`)
 }
 
 const nodeCard = (): HTMLElement => {
   const nodePubkey = addr?.nodeUri?.split('@')[0]
+  // nodeCapacity is the field name the reference mint and the mock use;
+  // nodeCapacityMsat is what moneyer emitted before 0.2.0 and still emits
+  // alongside it for one release. Both are milli-satoshis.
+  const capacityMsat = addr?.nodeCapacity ?? addr?.nodeCapacityMsat
   const card = el(`<div class="card">
     <h3>The funding node</h3>
     ${addr?.nodeAlias ? `<div class="kv"><span>alias</span><b>${addr.nodeColor ? `<span class="dot" style="background:${esc(addr.nodeColor)}"></span>` : ''}${esc(addr.nodeAlias)}</b></div>` : ''}
-    ${addr?.nodeCapacityMsat ? `<div class="kv"><span>capacity</span><b>${sats(addr.nodeCapacityMsat)} sat</b></div>` : ''}
+    ${capacityMsat ? `<div class="kv"><span>capacity</span><b>${sats(capacityMsat)} sat</b></div>` : ''}
     ${addr?.nodeNumChannels !== undefined ? `<div class="kv"><span>channels · peers</span><b>${addr.nodeNumChannels}${addr.nodeNumPeers !== undefined ? ` · ${addr.nodeNumPeers}` : ''}</b></div>` : ''}
     ${addr?.nodeUri ? `<div class="kv"><span>node URI</span><code>${esc(addr.nodeUri)}</code></div>` : ''}
     <div class="row" data-links></div>
