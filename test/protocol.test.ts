@@ -23,7 +23,7 @@ import {
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {npubEncode} from 'nostr-tools/nip19'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
-import {createFakeBackend} from '../src/backends/fake.ts'
+import {createFakeBackend, FAKE_LOCAL_BALANCE_MSAT} from '../src/backends/fake.ts'
 import {createMoneyer} from '../src/server.ts'
 import {freshK1, startMint, testConfig, waitFor, type TestMint} from './helpers.ts'
 
@@ -159,6 +159,78 @@ describe('discovery', () => {
     const info = await discovery(mint)
     expect(info.nodeCapacity).toBe(4_200_000)
     expect(info.nodeCapacityMsat).toBe(4_200_000)
+  })
+})
+
+describe('liabilities', () => {
+  const stats = async (mint: TestMint): Promise<Record<string, unknown>> =>
+    (await (await fetch(`${mint.moneyer.url}/stats`)).json()) as Record<string, unknown>
+
+  it('states exactly what it owes and what the node holds', async () => {
+    const mint = await start()
+    creditNote(mint, 40_000)
+    creditNote(mint, 8_000)
+    const body = await stats(mint)
+    expect(body.outstandingMsat).toBe(48_000)
+    expect(body.outstandingNotes).toBe(2)
+    expect(body.pendingMsat).toBe(0)
+    expect(body.pendingMelts).toBe(0)
+    expect(body.oldestPendingMeltAgeSecs).toBe(0)
+    expect(body.localBalanceMsat).toBe(FAKE_LOCAL_BALANCE_MSAT)
+    expect(body.coverage).toBe(Math.round((FAKE_LOCAL_BALANCE_MSAT / 48_000) * 10_000) / 10_000)
+    // A reconcile pass runs at startup, so the reader can tell how fresh
+    // the liability figure is.
+    expect(typeof body.reconciledAt).toBe('number')
+    expect(typeof body.at).toBe('number')
+  })
+
+  it('never says how well it is covered when it owes nothing', async () => {
+    const mint = await start()
+    const body = await stats(mint)
+    expect(body.outstandingMsat).toBe(0)
+    expect(body).not.toHaveProperty('coverage')
+  })
+
+  it('reports under-coverage rather than hiding it', async () => {
+    const mint = await start()
+    mint.backend.control.setLocalBalanceMsat(10_000)
+    creditNote(mint, 40_000)
+    const body = await stats(mint)
+    expect(body.coverage).toBe(0.25)
+  })
+
+  it('leaves coverage out when the funding source will not say', async () => {
+    const mint = await start()
+    mint.backend.control.setLocalBalanceMsat(undefined)
+    creditNote(mint, 40_000)
+    const body = await stats(mint)
+    expect(body).not.toHaveProperty('localBalanceMsat')
+    expect(body).not.toHaveProperty('coverage')
+  })
+
+  it('publishes the ratio alone when the operator asks for that', async () => {
+    const mint = await start({statsRatioOnly: true})
+    creditNote(mint, 40_000)
+    const body = await stats(mint)
+    expect(body.coverage).toBeGreaterThan(1)
+    for (const field of ['outstandingMsat', 'outstandingNotes', 'localBalanceMsat', 'pendingMelts']) {
+      expect(body).not.toHaveProperty(field)
+    }
+  })
+
+  it('is a real off switch, not a hidden one', async () => {
+    const mint = await start({stats: false})
+    const res = await fetch(`${mint.moneyer.url}/stats`)
+    expect(res.status).toBe(404)
+    expect(((await res.json()) as {status: string}).status).toBe('ERROR')
+  })
+
+  it('shows coverage on the fallback landing page', async () => {
+    const mint = await start({}, {webAssets: null})
+    creditNote(mint, 40_000)
+    const page = await (await fetch(`${mint.moneyer.url}/`)).text()
+    expect(page).toContain('coverage')
+    expect(page).toContain('40 sat')
   })
 })
 

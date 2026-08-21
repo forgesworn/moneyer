@@ -1,6 +1,14 @@
 import {describe, expect, it} from 'vitest'
 import {hashK1, noteSignatureDigest, verifyNoteSignature} from 'lnurlcash-kit'
 import {createNoteSigner, noteIdSignatureDigest} from '../src/signing.ts'
+import {
+  buildStats,
+  canonicalJson,
+  signStats,
+  statsSnapshotContent,
+  verifyStatsSignature,
+  verifyStatsSnapshot
+} from '../src/stats.ts'
 import {TEST_SIGNING_KEY, freshK1} from './helpers.ts'
 
 // The mint signs over the note ID; the wallet-side kit builds its digest
@@ -39,5 +47,57 @@ describe('note signing', () => {
     const k1 = freshK1()
     const signature = signer.sign(hashK1(k1), 21_000)
     expect(verifyNoteSignature(k1, 21_000, signature, other.pubkey)).toBe(false)
+  })
+})
+
+// A liabilities snapshot is signed with the same key the notes are, so a
+// holder checking the mint's published history has nothing new to trust.
+
+describe('liabilities snapshots', () => {
+  const signer = createNoteSigner(TEST_SIGNING_KEY)
+  const stats = buildStats({
+    liabilities: {
+      outstandingMsat: 48_120_000,
+      outstandingNotes: 12,
+      pendingMsat: 0,
+      pendingMelts: 0,
+      oldestPendingMeltAgeSecs: 0
+    },
+    localBalanceMsat: 92_400_000,
+    reconciledAt: 1_700_000_000_000,
+    at: 1_700_000_003_000
+  })
+
+  it('canonicalises to sorted keys with no whitespace, so a verifier rebuilds the same bytes', () => {
+    expect(canonicalJson({b: 2, a: 'x', A: 1})).toBe('{"A":1,"a":"x","b":2}')
+    expect(() => canonicalJson({bad: Number.NaN})).toThrow(/finite/)
+  })
+
+  it('states coverage to four decimal places', () => {
+    expect(stats.coverage).toBe(1.9202)
+  })
+
+  it('round-trips through the published snapshot content', () => {
+    const content = statsSnapshotContent(stats, TEST_SIGNING_KEY)
+    const parsed = verifyStatsSnapshot(content, signer.pubkey)
+    expect(parsed.valid).toBe(true)
+    expect(parsed.stats).toEqual(stats)
+  })
+
+  it('fails a snapshot whose numbers were edited after signing', () => {
+    const content = statsSnapshotContent(stats, TEST_SIGNING_KEY)
+    const tampered = JSON.parse(content) as Record<string, unknown>
+    tampered.outstandingMsat = 1
+    expect(verifyStatsSnapshot(JSON.stringify(tampered), signer.pubkey).valid).toBe(false)
+  })
+
+  it(`never verifies against another mint's key`, () => {
+    const other = createNoteSigner('22'.repeat(32))
+    expect(verifyStatsSignature(stats, signStats(stats, TEST_SIGNING_KEY), other.pubkey)).toBe(false)
+  })
+
+  it('refuses a snapshot with no signature at all', () => {
+    expect(verifyStatsSnapshot(JSON.stringify(stats), signer.pubkey).valid).toBe(false)
+    expect(verifyStatsSnapshot('not json', signer.pubkey).valid).toBe(false)
   })
 })

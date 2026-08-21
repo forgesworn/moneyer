@@ -46,6 +46,15 @@ export type ZapInvoiceRow = {
   settledAt: number | null
 }
 
+// What the mint owes, as /stats and the operator CLI report it.
+export type Liabilities = {
+  outstandingMsat: number
+  outstandingNotes: number
+  pendingMsat: number
+  pendingMelts: number
+  oldestPendingMeltAgeSecs: number
+}
+
 // A note named by the request is reserved by an in-flight melt. The wire
 // reply for this is the exact reason string "pending".
 export class NotePendingError extends Error {}
@@ -392,6 +401,30 @@ export class NoteStore {
       this.assertOutputIdFree(id)
       this.insertNote(id, amountMsat)
     })
+  }
+
+  // Everything the mint owes and everything it is in the middle of
+  // paying, in one read. Public numbers only: this is what /stats
+  // publishes, and no per-note detail belongs anywhere near it.
+  liabilities(nowMs: number = Date.now()): Liabilities {
+    const notes = this.db
+      .prepare(
+        "SELECT COUNT(*) AS count, COALESCE(SUM(amount_msat), 0) AS total FROM notes WHERE state IN ('outstanding','pending')"
+      )
+      .get() as {count: number; total: number}
+    const melts = this.db
+      .prepare(
+        'SELECT COUNT(*) AS count, COALESCE(SUM(amount_msat), 0) AS total, MIN(created_at) AS oldest FROM melts WHERE outcome IS NULL'
+      )
+      .get() as {count: number; total: number; oldest: number | null}
+    return {
+      outstandingMsat: notes.total,
+      outstandingNotes: notes.count,
+      pendingMsat: melts.total,
+      pendingMelts: melts.count,
+      // Whole seconds, and never negative however the clock has moved.
+      oldestPendingMeltAgeSecs: melts.oldest === null ? 0 : Math.max(0, Math.floor((nowMs - melts.oldest) / 1000))
+    }
   }
 
   outstandingLiabilityMsat(): number {

@@ -18,6 +18,20 @@ additive on the wire apart from the node-capacity rename below.
 - The mint's own site and the fallback landing page show the message of
   the day, the operator's contact and the terms link, and read capacity
   under either name.
+- `GET /stats` states what the mint owes and what its funding node holds:
+  outstanding liabilities and note count, melts in flight and the age of
+  the oldest, the node's local balance, and the coverage ratio between
+  the two to four decimal places. Cached 30 seconds, never per-note,
+  public by design. `MONEYER_STATS=false` switches it off and
+  `MONEYER_STATS_RATIO_ONLY=true` publishes the ratio alone. Both the
+  mint's site and the fallback landing page carry a coverage row.
+- `MONEYER_STATS_PUBLISH=true` publishes an hourly signed snapshot of
+  those figures to Nostr (kind 30078, `d` tag `lnurlcash-liabilities`),
+  signed with the note signing key so anyone can check the history
+  against the mint's advertised pubkey. `scripts/verify-stats.mjs` does
+  exactly that, and `verifyStatsSnapshot` is exported for wallets.
+- The lnd and cln backends report the node's local channel balance;
+  the fake one reports a configurable balance, one bitcoin by default.
 
 ## [0.1.2] - 2026-08-21
 

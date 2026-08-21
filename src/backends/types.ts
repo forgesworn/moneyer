@@ -15,6 +15,11 @@ export type NodeInfo = {
   capacityMsat?: number
   numChannels?: number
   numPeers?: number
+  // What the node can actually pay out with: the sum of local balances
+  // over usable channels. This is the number a coverage ratio is built
+  // from, so a backend that cannot answer must leave it out rather than
+  // guess low.
+  localBalanceMsat?: number
 }
 
 export type PaymentOutcome = {

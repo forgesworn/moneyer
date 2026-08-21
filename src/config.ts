@@ -62,6 +62,19 @@ export type MoneyerConfig = {
   // https://wallet.example. Unset means the site offers copy/QR only.
   walletUrl?: string
   maxK1s: number
+  // GET /stats: what the mint owes and what its node holds. Public by
+  // design and on by default - a custodial mint that will not say its
+  // liabilities is asking for trust it has not earned. Optional on the
+  // type because MoneyerConfig is public API and an embedder should not
+  // have to name a field to get the sensible answer.
+  stats?: boolean
+  // Publish the coverage ratio and nothing else, for an operator who
+  // would rather not put the size of the book on the internet.
+  statsRatioOnly?: boolean
+  // Publish a signed hourly snapshot of the stats to Nostr, so the
+  // history can be checked after the fact. Needs a signing key and the
+  // zap Nostr identity.
+  statsPublish?: boolean
   // Winding down: refuse anything that grows liabilities (mints and
   // splits). Rotate, merge and melt stay available so holders can leave.
   sunset: boolean
@@ -93,7 +106,10 @@ export const DEFAULTS = {
   verify: true,
   maxK1s: 21,
   sunset: false,
-  roundFeeToSat: false
+  roundFeeToSat: false,
+  stats: true,
+  statsRatioOnly: false,
+  statsPublish: false
 } as const
 
 const int = (value: string | undefined, fallback: number): number => {
@@ -247,6 +263,9 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     dbPath: env.MONEYER_DB ?? DEFAULTS.dbPath,
     backend,
     verify: flag(env.MONEYER_VERIFY, DEFAULTS.verify),
+    stats: flag(env.MONEYER_STATS, DEFAULTS.stats),
+    statsRatioOnly: flag(env.MONEYER_STATS_RATIO_ONLY, DEFAULTS.statsRatioOnly),
+    statsPublish: flag(env.MONEYER_STATS_PUBLISH, DEFAULTS.statsPublish),
     ...(env.MONEYER_WALLET_URL ? {walletUrl: env.MONEYER_WALLET_URL.replace(/\/+$/, '')} : {}),
     maxK1s: int(env.MONEYER_MAX_K1S, DEFAULTS.maxK1s),
     sunset: flag(env.MONEYER_SUNSET, DEFAULTS.sunset),

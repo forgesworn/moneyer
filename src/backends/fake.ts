@@ -50,13 +50,21 @@ export type FakeBackend = LightningBackend & {
     // shared-funding-source shape the melt pre-check exists for.
     seedForeignPayment(paymentHashHex: string, status?: 'complete' | 'pending'): void
     invoiceByHash(paymentHashHex: string): {preimageHex: string; amountMsat: number; settled: boolean} | undefined
+    // What this pretend node says it can pay out with, for the coverage
+    // ratio. Under-coverage is a state the mint has to render honestly,
+    // so a test must be able to ask for it.
+    setLocalBalanceMsat(msat: number | undefined): void
   }
 }
+
+// One bitcoin, so a development mint covers anything it is likely to mint.
+export const FAKE_LOCAL_BALANCE_MSAT = 100_000_000_000
 
 export const createFakeBackend = (): FakeBackend => {
   const invoices = new Map<string, {preimageHex: string; amountMsat: number; settled: boolean}>()
   const payments = new Map<string, PaymentRecord>()
   const knownPreimages = new Map<string, string>()
+  let localBalanceMsat: number | undefined = FAKE_LOCAL_BALANCE_MSAT
   let payMode: FakePayMode = 'succeed'
 
   return {
@@ -124,7 +132,11 @@ export const createFakeBackend = (): FakeBackend => {
     },
 
     async nodeInfo(): Promise<NodeInfo> {
-      return {alias: 'moneyer (fake funding source)', color: '#c9ced8'}
+      return {
+        alias: 'moneyer (fake funding source)',
+        color: '#c9ced8',
+        ...(localBalanceMsat !== undefined ? {localBalanceMsat} : {})
+      }
     },
 
     control: {
@@ -148,6 +160,9 @@ export const createFakeBackend = (): FakeBackend => {
       },
       seedForeignPayment(paymentHashHex, status = 'complete') {
         payments.set(paymentHashHex, {status, preimageHex: null})
+      },
+      setLocalBalanceMsat(msat) {
+        localBalanceMsat = msat
       },
       invoiceByHash(paymentHashHex) {
         return invoices.get(paymentHashHex)

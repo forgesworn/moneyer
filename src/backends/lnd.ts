@@ -200,6 +200,14 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
           0
         )
       }
+      // Outbound liquidity, best-effort for the same reason as capacity:
+      // the macaroon may not carry offchain:read.
+      let localBalanceMsat: number | undefined
+      const balance = await json('/v1/balance/channels')
+      if (balance.ok) {
+        const msat = Number(balance.json?.local_balance?.msat)
+        if (Number.isSafeInteger(msat)) localBalanceMsat = msat
+      }
       return {
         ...(res.json?.alias ? {alias: res.json.alias} : {}),
         ...(uris[0] || res.json?.identity_pubkey ? {uri: uris[0] ?? res.json.identity_pubkey} : {}),
@@ -208,7 +216,8 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
         // half keeps a NaN from an unparseable channel capacity out.
         ...(capacityMsat !== undefined && Number.isFinite(capacityMsat) ? {capacityMsat} : {}),
         ...(Number.isSafeInteger(numChannels) ? {numChannels} : {}),
-        ...(Number.isSafeInteger(numPeers) ? {numPeers} : {})
+        ...(Number.isSafeInteger(numPeers) ? {numPeers} : {}),
+        ...(localBalanceMsat !== undefined ? {localBalanceMsat} : {})
       }
     }
   }

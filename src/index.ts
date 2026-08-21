@@ -22,9 +22,22 @@ export {
   type NoteRow,
   type NoteState,
   type MeltRow,
-  type MintInvoiceRow
+  type MintInvoiceRow,
+  type Liabilities
 } from './store.ts'
 export {createNoteSigner, noteIdSignatureDigest, type NoteSigner} from './signing.ts'
+export {
+  STATS_D_TAG,
+  STATS_KIND,
+  buildStats,
+  canonicalJson,
+  signStats,
+  statsDigest,
+  statsSnapshotContent,
+  verifyStatsSignature,
+  verifyStatsSnapshot,
+  type MintStats
+} from './stats.ts'
 export {
   PaymentAlreadyKnownError,
   PaymentFailedError,
