@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.2] - 2026-08-21
+
+- `MONEYER_ROUND_FEE_TO_SAT` ceilings the mint fee to a whole sat, as
+  dni's lnurl-mint does on purpose so the mint is "never short a sat".
+  LUD-25 says nothing about rounding and `lnurlcash-kit`'s `mintFeeBand`
+  accepts both readings, so this is a posture choice rather than a
+  compliance one. **Off by default**: turning it on raises what the mint
+  withholds, which is not a change to make on a redeploy.
+- The mint path called `applyMintFee` directly rather than the fee helper,
+  so it would have ignored that setting entirely - advertising one fee and
+  withholding another. Every fee site now goes through one
+  `netAfterMintFee`.
+- `roundFeeToSat` is optional on `MoneyerConfig`: that type is public API,
+  and an embedder constructing a config should not have to name a field it
+  does not care about.
+
 ## [0.1.1] - 2026-08-21
 
 - `withdrawLink` is now the plain URL (`https://host/w`), the form
