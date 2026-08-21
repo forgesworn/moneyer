@@ -128,6 +128,9 @@ maths, hashing, signature agreement) and
 decoding and preimage verification on the melt path). The companion wallet
 is [`@forgesworn/notecase`](https://github.com/forgesworn/notecase).
 
+Other mints, wallets and libraries speaking the same protocol are indexed
+in [awesome-lnurlcash](https://github.com/TheCryptoDonkey/awesome-lnurlcash).
+
 ## Licence
 
 MIT.

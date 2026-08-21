@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.1.1] - 2026-08-21
 
 - `withdrawLink` is now the plain URL (`https://host/w`), the form
   lnurl-mint emits and the LUD-25 diagram shows, instead of
