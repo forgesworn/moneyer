@@ -97,6 +97,19 @@ import {createMoneyer, configFromEnv} from '@forgesworn/moneyer'
 const mint = await createMoneyer(configFromEnv())
 ```
 
+## The mint fee, and the rounding question
+
+LUD-25 gives the fee as a flat `base_fee_msat` plus a ppm cut and says
+nothing about rounding. dni's lnurl-mint, the reference, ceilings it to a
+whole sat on purpose so the mint is never short a sat; moneyer withholds
+the msat-exact amount. Neither is out of spec - lnurlcash-kit's
+`mintFeeBand` treats anything between the two as the mint keeping its
+word, and the conformance grader accepts both.
+
+`MONEYER_ROUND_FEE_TO_SAT=true` switches this mint to the reference's
+behaviour. Off by default: turning it on raises what the mint withholds,
+and that is not a change to make behind an operator's back on a redeploy.
+
 ## Endpoints
 
 | | |

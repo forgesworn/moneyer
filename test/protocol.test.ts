@@ -346,3 +346,30 @@ describe('verify switch', () => {
     expect(res.status).toBe(404)
   })
 })
+
+describe('a sat-ceilinged mint fee', () => {
+  // dni's lnurl-mint ceilings its fee to a whole sat on purpose, and
+  // LUD-25 does not say whether that is right - the kit's mintFeeBand
+  // accepts both readings. These are the reference's own numbers on the
+  // fee mint.forgesworn.dev advertises: 40_000 gross gives a 1_000 + 40 =
+  // 1_040 msat fee, ceilinged to 2_000.
+  const fee = {baseFeeMsat: 1000, feePpm: 1000}
+
+  const mintedValue = async (mint: TestMint): Promise<number> => {
+    const pay = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
+    const invoice = await requestInvoice(pay.callback, 40_000)
+    const {paymentHashHex} = decodeBolt11(invoice.pr)!
+    mint.backend.control.settleInvoice(paymentHashHex)
+    const preimage = mint.backend.control.invoiceByHash(paymentHashHex)!.preimageHex
+    const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, preimage))
+    return info.maxWithdrawable
+  }
+
+  it('withholds what the reference mint withholds', async () => {
+    expect(await mintedValue(await start({mintFee: fee, roundFeeToSat: true}))).toBe(38_000)
+  })
+
+  it('stays msat-exact when the operator leaves it off', async () => {
+    expect(await mintedValue(await start({mintFee: fee}))).toBe(38_960)
+  })
+})

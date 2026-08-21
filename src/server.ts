@@ -68,8 +68,18 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   // skips these - see melt.ts.
   const inFlight = new Set<string>()
 
-  const mintFeeMsat = (grossMsat: number): number =>
-    config.mintFee ? grossMsat - applyMintFee(grossMsat, config.mintFee) : 0
+  const mintFeeMsat = (grossMsat: number): number => {
+    if (!config.mintFee) return 0
+    const exact = grossMsat - applyMintFee(grossMsat, config.mintFee)
+    // Both readings sit inside lnurlcash-kit's mintFeeBand, so a wallet
+    // is not misled either way - it is told the range up front.
+    return config.roundFeeToSat === true ? Math.ceil(exact / 1000) * 1000 : exact
+  }
+
+  // Every quote and every credit goes through here, so the fee posture
+  // cannot drift between what is advertised and what is withheld.
+  const netAfterMintFee = (grossMsat: number): number =>
+    Math.max(0, grossMsat - mintFeeMsat(grossMsat))
 
   // What the mint advertises as its minimum must survive its own fee: a
   // payRequest whose minSendable nets below the dust floor invites a
@@ -202,7 +212,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         callback: `${origin}/w`,
         minWithdrawable: config.minMintMsat,
         maxWithdrawable: config.mintFee
-          ? applyMintFee(config.maxSendableMsat, config.mintFee)
+          ? netAfterMintFee(config.maxSendableMsat)
           : config.maxSendableMsat,
         defaultDescription: config.description,
         payLink: `${origin}/.well-known/lnurlp/${lnurlwMatch[1]}`,
@@ -224,7 +234,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       if (amount < effectiveMinSendableMsat || amount > config.maxSendableMsat) {
         return fail('Amount out of range.')
       }
-      const net = config.mintFee ? applyMintFee(amount, config.mintFee) : amount
+      const net = netAfterMintFee(amount)
       if (net < config.minMintMsat) return fail('Amount too small to mint a note.')
 
       // The preimage is the future note's spend secret; its hash is the
