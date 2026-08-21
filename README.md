@@ -110,13 +110,46 @@ word, and the conformance grader accepts both.
 behaviour. Off by default: turning it on raises what the mint withholds,
 and that is not a change to make behind an operator's back on a redeploy.
 
+## Zap-to-note: a lightning address that pays out as a note
+
+A Nostr zap is an ordinary LNURL-pay. Paid to the mint's own address it
+would mint a note, but to the payer: the invoice preimage is the secret
+and on Lightning the payer always learns it. So moneyer can also serve
+names that work the other way round. A zap to `alice@<host>` gets an
+invoice with a throwaway preimage; when it settles, the mint creates a
+note with a fresh secret, seals it in a NIP-59 gift wrap (a kind 2525
+rumor, the shape heartwood-esp32 and notecase read) to alice's pubkey,
+leaves it on her NIP-17 inbox relays, and publishes the kind 9735 receipt
+so the zap shows up in her client like any other. A hardware wallet that
+catches up on its inbox when it powers on will find the note waiting.
+
+Until alice rotates the note, the mint knows its secret. That is the
+position every freshly minted note is in, and it is why wallets rotate on
+receipt; notecase does it on `heartwood collect`. What is new is that the
+mint learns who was paid, which a lightning address always did.
+
+```bash
+MONEYER_PUBLIC_ORIGIN=https://mint.example      # required: settlement is on a timer
+MONEYER_NOSTR_KEY=<32 bytes hex>                # the mint's own Nostr identity
+MONEYER_NOSTR_RELAYS=wss://relay.example,wss://nos.lol
+MONEYER_ZAP_NAMES="alice=npub1...,bob=<hex pubkey>"
+```
+
+All three or none. A zap name's payRequest carries `allowsNostr` and the
+mint's `nostrPubkey`, and deliberately no `withdrawLink`. The receipt
+carries no preimage tag: it is optional in NIP-57, and here it would only
+invite someone to mistake it for the note. A zap name must not be the
+mint username or `_`.
+
 ## Endpoints
 
 | | |
 | --- | --- |
 | `/.well-known/lnurlp/<user>` | LUD-16 payRequest; paying mints a note |
+| `/.well-known/lnurlp/<zap name>` | NIP-57 payRequest; paying mints a note *to the name's pubkey* |
 | `/.well-known/lnurlw/<user>` | LUD-25 mint address discovery (experimental) |
 | `/p/cb` | LUD-06 pay callback; issues the mint invoice |
+| `/z/cb/<zap name>` | the zap callback; validates the kind 9734 and issues the invoice |
 | `/verify/<hash>` | LUD-21 verify, for mint invoices and melt payments |
 | `/w` | LUD-03 informational GET |
 | `/w/cb` | the mutating callback: melt, rotate, split, merge |

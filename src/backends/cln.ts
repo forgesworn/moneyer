@@ -42,11 +42,14 @@ export const createClnBackend = (config: {url: string; rune: string}): Lightning
   return {
     name: 'cln',
 
-    async createInvoice({amountMsat, preimageHex, memo}) {
+    async createInvoice({amountMsat, preimageHex, memo, descriptionForHash}) {
       const result = await mustCall('/v1/invoice', {
         amount_msat: amountMsat,
         label: bytesToHex(randomBytes(16)),
-        description: memo,
+        description: descriptionForHash ?? memo,
+        // Commit to the hash of the description rather than carry it: the
+        // zap request is far over bolt11's description limit.
+        ...(descriptionForHash === undefined ? {} : {deschashonly: true}),
         preimage: preimageHex
       })
       if (typeof result?.bolt11 !== 'string') throw new Error('cln did not return a bolt11 invoice.')

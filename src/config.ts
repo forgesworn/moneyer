@@ -1,4 +1,7 @@
 import type {MintFee} from 'lnurlcash-kit'
+import {getPublicKey} from 'nostr-tools/pure'
+import {decode as decodeNip19} from 'nostr-tools/nip19'
+import {hexToBytes} from '@noble/hashes/utils.js'
 
 export type BackendConfig =
   | {kind: 'fake'}
@@ -45,6 +48,20 @@ export type MoneyerConfig = {
   // Winding down: refuse anything that grows liabilities (mints and
   // splits). Rotate, merge and melt stay available so holders can leave.
   sunset: boolean
+  // Zap-to-note: lightning addresses on this host that, when paid, mint a
+  // note to a Nostr pubkey and gift-wrap it there (see zap.ts). Unset means
+  // the feature is off and those names 404 like any other.
+  zap?: ZapConfig
+}
+
+export type ZapConfig = {
+  // The mint's own Nostr identity: seals the wraps, signs the zap receipts,
+  // and is the `nostrPubkey` a zapping client checks receipts against.
+  nostrKey: string
+  // Where receipts go, and where a recipient's inbox list is looked for.
+  relays: string[]
+  // name -> recipient pubkey (hex). `name@<host>` is the lightning address.
+  names: Record<string, string>
 }
 
 export const DEFAULTS = {
@@ -131,6 +148,16 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     }
   }
 
+  const zap = zapFromEnv(env)
+  if (zap && zap.names[env.MONEYER_USERNAME ?? DEFAULTS.username]) {
+    throw new Error('MONEYER_ZAP_NAMES must not reuse the mint username.')
+  }
+  if (zap && !publicOrigin) {
+    // A settled zap is minted by a timer, with no request to read a Host
+    // header from, and the note URL it wraps must be right first time.
+    throw new Error('Zap-to-note needs MONEYER_PUBLIC_ORIGIN.')
+  }
+
   return {
     host: env.MONEYER_HOST ?? DEFAULTS.host,
     port: int(env.MONEYER_PORT, DEFAULTS.port),
@@ -148,6 +175,59 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     verify: flag(env.MONEYER_VERIFY, DEFAULTS.verify),
     ...(env.MONEYER_WALLET_URL ? {walletUrl: env.MONEYER_WALLET_URL.replace(/\/+$/, '')} : {}),
     maxK1s: int(env.MONEYER_MAX_K1S, DEFAULTS.maxK1s),
-    sunset: flag(env.MONEYER_SUNSET, DEFAULTS.sunset)
+    sunset: flag(env.MONEYER_SUNSET, DEFAULTS.sunset),
+    ...(zap ? {zap} : {})
   }
+}
+
+const NAME = /^[a-z0-9._-]{1,64}$/
+
+// An npub or 32-byte hex, to hex. Throws on anything else.
+export const pubkeyHex = (value: string): string => {
+  const trimmed = value.trim()
+  if (HEX32.test(trimmed)) return trimmed.toLowerCase()
+  if (/^npub1/i.test(trimmed)) {
+    try {
+      const decoded = decodeNip19(trimmed.toLowerCase())
+      if (decoded.type === 'npub') return decoded.data
+    } catch {
+      // fall through to the one error below
+    }
+  }
+  throw new Error(`Not a Nostr pubkey: ${JSON.stringify(value)}.`)
+}
+
+// MONEYER_ZAP_NAMES="alice=npub1...,bob=<hex>" with MONEYER_NOSTR_KEY and
+// MONEYER_NOSTR_RELAYS. All three or none: a name without a key cannot
+// wrap, a key without names has nothing to do.
+const zapFromEnv = (env: NodeJS.ProcessEnv): ZapConfig | undefined => {
+  const rawNames = env.MONEYER_ZAP_NAMES?.trim()
+  const nostrKey = env.MONEYER_NOSTR_KEY?.trim()
+  const rawRelays = env.MONEYER_NOSTR_RELAYS?.trim()
+  if (!rawNames && !nostrKey && !rawRelays) return undefined
+  if (!rawNames || !nostrKey || !rawRelays) {
+    throw new Error('Zap-to-note needs all of MONEYER_ZAP_NAMES, MONEYER_NOSTR_KEY and MONEYER_NOSTR_RELAYS.')
+  }
+  if (!HEX32.test(nostrKey)) throw new Error('MONEYER_NOSTR_KEY must be 32 bytes of hex.')
+  // Refuse a key the curve refuses, at startup rather than on the first zap.
+  getPublicKey(hexToBytes(nostrKey))
+  const relays = rawRelays
+    .split(',')
+    .map(r => r.trim())
+    .filter(Boolean)
+  if (!relays.length || relays.some(r => !/^wss?:\/\//.test(r))) {
+    throw new Error('MONEYER_NOSTR_RELAYS must be a comma-separated list of ws:// or wss:// URLs.')
+  }
+  const names: Record<string, string> = {}
+  for (const entry of rawNames.split(',')) {
+    const [name, pubkey, ...rest] = entry.split('=').map(s => s.trim())
+    if (!name || !pubkey || rest.length) {
+      throw new Error(`MONEYER_ZAP_NAMES entry is not name=pubkey: ${JSON.stringify(entry)}.`)
+    }
+    const lowered = name.toLowerCase()
+    if (!NAME.test(lowered)) throw new Error(`MONEYER_ZAP_NAMES name is not a lightning-address local part: ${JSON.stringify(name)}.`)
+    if (lowered === '_') throw new Error('MONEYER_ZAP_NAMES must not claim the bare-domain name "_".')
+    names[lowered] = pubkeyHex(pubkey)
+  }
+  return {nostrKey: nostrKey.toLowerCase(), relays, names}
 }

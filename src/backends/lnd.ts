@@ -1,4 +1,5 @@
-import {hexToBytes} from '@noble/hashes/utils.js'
+import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
+import {sha256} from '@noble/hashes/sha2.js'
 import {verifyPreimage} from 'farrier-kit/preimage'
 import {PaymentAlreadyKnownError, PaymentFailedError, PaymentPendingError, type LightningBackend} from './types.ts'
 
@@ -87,10 +88,16 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
   return {
     name: 'lnd',
 
-    async createInvoice({amountMsat, preimageHex, memo}) {
+    async createInvoice({amountMsat, preimageHex, memo, descriptionForHash}) {
       const res = await json('/v1/invoices', {
         method: 'POST',
-        body: {value_msat: String(amountMsat), memo, r_preimage: hexToBase64(preimageHex)}
+        body: {
+          value_msat: String(amountMsat),
+          r_preimage: hexToBase64(preimageHex),
+          ...(descriptionForHash === undefined
+            ? {memo}
+            : {description_hash: hexToBase64(bytesToHex(sha256(utf8ToBytes(descriptionForHash))))})
+        }
       })
       if (!res.ok || typeof res.json?.payment_request !== 'string') {
         throw new Error(`lnd did not return a payment_request (${res.status}).`)
