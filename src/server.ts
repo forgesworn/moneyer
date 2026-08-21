@@ -4,7 +4,7 @@ import {finalizeEvent} from 'nostr-tools/pure'
 import {applyMintFee, grossUpForMintFee, hashK1} from 'lnurlcash-kit'
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import type {MoneyerConfig} from './config.ts'
-import {NotePendingError, NoteStore, NoteUnavailableError, type NoteRow} from './store.ts'
+import {NotePendingError, NoteStore, NoteUnavailableError, swapFingerprint, type NoteRow} from './store.ts'
 import {createNoteSigner, type NoteSigner} from './signing.ts'
 import {createFakeBackend} from './backends/fake.ts'
 import {createClnBackend} from './backends/cln.ts'
@@ -571,6 +571,50 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       // merge or split. Atomic refusal, same as an invalid one.
       if (new Set(k1s).size !== k1s.length) return fail('Invalid or already spent k1.')
 
+      // ---- the retried mutation ----
+      //
+      // A rotate, split or merge is a GET, and transports retry GETs.
+      // Go's net/http retries one that failed on a reused idle
+      // connection; the JDK's HttpClient retries idempotent methods with
+      // no switch to turn it off. The retry is byte-identical and arrives
+      // after the inputs are burned, so the honest-looking answer -
+      // "already spent" - tells a wallet to drop the only copy of a
+      // secret this mint really did mint a note against.
+      //
+      // So a request that already minted its outputs is answered with the
+      // same reply. This branch burns nothing, mints nothing and moves no
+      // balance: it is a read. The signature is deterministic over the
+      // output id and its amount, so it is recomputed rather than stored.
+      // Anything else naming a burned input is a double-spend attempt and
+      // still gets today's reason string, unchanged.
+      // Every k1 has to be hex before it can be hashed into a
+      // fingerprint; a malformed one falls through to the loop below and
+      // gets the same refusal it always did.
+      const fingerprint = pr !== null || !k1s.every(k1 => HEX32.test(k1))
+        ? null
+        : swapFingerprint({
+            inputIds: k1s.map(hashK1),
+            h: h!,
+            h2,
+            ...(amountRaw !== null ? {amountMsat: Number(amountRaw)} : {})
+          })
+      const alreadyMinted = fingerprint === null ? null : store.swapByFingerprint(fingerprint)
+      if (alreadyMinted) {
+        const first = alreadyMinted.find(output => output.id === h)
+        const second = h2 === undefined ? undefined : alreadyMinted.find(output => output.id === h2)
+        if (first) {
+          return send({
+            status: 'OK',
+            ...(signer
+              ? {
+                  sig: signer.sign(first.id, first.amountMsat),
+                  ...(second ? {sig2: signer.sign(second.id, second.amountMsat)} : {})
+                }
+              : {})
+          })
+        }
+      }
+
       const found: NoteRow[] = []
       for (const k1 of k1s) {
         if (!HEX32.test(k1)) return fail('Invalid or already spent k1.')
@@ -668,10 +712,14 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         const changeMsat = changeBeforeFeeMsat - baseFeeMsat
         if (changeMsat < 1) return fail('insufficient value')
         try {
-          store.swap(inputIds, [
-            {id: h!, amountMsat: amount},
-            {id: h2!, amountMsat: changeMsat}
-          ])
+          store.swap(
+            inputIds,
+            [
+              {id: h!, amountMsat: amount},
+              {id: h2!, amountMsat: changeMsat}
+            ],
+            fingerprint ?? undefined
+          )
         } catch (err) {
           if (err instanceof NotePendingError) return fail('pending')
           // OutputCollisionError shares the dead-k1 reason on purpose:
@@ -690,7 +738,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       // of one - the refund is exactly 0.
       const mergedMsat = totalMsat + (inputIds.length - 1) * baseFeeMsat
       try {
-        store.swap(inputIds, [{id: h!, amountMsat: mergedMsat}])
+        store.swap(inputIds, [{id: h!, amountMsat: mergedMsat}], fingerprint ?? undefined)
       } catch (err) {
         if (err instanceof NotePendingError) return fail('pending')
         // same oracle-free reason for a collision as for a dead k1
