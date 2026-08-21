@@ -98,6 +98,7 @@ default, and a variable set to an empty string counts as unset.
 | `MONEYER_STATS_RATIO_ONLY` | `false` | publish the coverage ratio alone, without the size of the book |
 | `MONEYER_STATS_PUBLISH` | `false` | publish a signed hourly snapshot of `/stats` to Nostr |
 | `MONEYER_METRICS` | `false` | the `/metrics` endpoint, in the OpenMetrics text format |
+| `MONEYER_NAME_PRICE_MSAT` | | what a self-service lightning address costs. Unset means registration is closed; `0` means free |
 
 ### Who runs this mint
 
@@ -327,14 +328,59 @@ mint learns who was paid, which a lightning address always did.
 MONEYER_PUBLIC_ORIGIN=https://mint.example      # required: settlement is on a timer
 MONEYER_NOSTR_KEY=<32 bytes hex>                # the mint's own Nostr identity
 MONEYER_NOSTR_RELAYS=wss://relay.example,wss://nos.lol
-MONEYER_ZAP_NAMES="alice=npub1...,bob=<hex pubkey>"
+MONEYER_ZAP_NAMES="alice=npub1...,bob=<hex pubkey>"   # optional, see below
 ```
 
-All three or none. A zap name's payRequest carries `allowsNostr` and the
-mint's `nostrPubkey`, and deliberately no `withdrawLink`. The receipt
-carries no preimage tag: it is optional in NIP-57, and here it would only
-invite someone to mistake it for the note. A zap name must not be the
-mint username or `_`.
+The key and the relays go together; the names are optional, because a
+mint can open registration and start with none of its own. A zap name's
+payRequest carries `allowsNostr` and the mint's `nostrPubkey`, and
+deliberately no `withdrawLink`. The receipt carries no preimage tag: it is
+optional in NIP-57, and here it would only invite someone to mistake it
+for the note. A zap name must not be the mint username or `_`. The kind
+2525 rumor carries the zap request in a `description` tag, so a wallet can
+show who zapped and what they wrote without fetching the receipt.
+
+### Self-service: anyone with an npub can claim a name
+
+Set `MONEYER_NAME_PRICE_MSAT` and the mint takes registrations. Unset
+means registration is closed and `POST /names` 404s; `0` means free,
+capped at three names per pubkey (rate limiting per address is the
+reverse proxy's job).
+
+```bash
+curl -X POST https://mint.example/names \
+  -H "Authorization: Nostr <base64 kind 27235 event>" \
+  -d '{"name":"donkey","note":"https://mint.example/w?k1=...&amount=21000"}'
+```
+
+The NIP-98 event must be kind 27235, signed within 60 seconds, with `u`
+set to the full URL, `method` set to `POST`, and `payload` set to the
+SHA-256 of the exact body sent. **The key that signs it owns the name.**
+No pubkey in the body is accepted, and there is no account, no password
+and no recovery.
+
+A paid registration hands over a note of this mint, as a URL or as a bare
+secret. The mint burns the whole note - liabilities drop and the sats are
+revenue - so send one worth exactly the price; split first if you need to.
+A note worth less than the price is refused, and so is one from another
+host. Nothing is burned unless the name is granted: the burn and the
+registration are one transaction.
+
+Names are `^[a-z0-9][a-z0-9_.-]{2,31}$`. The mint's own username, `_`,
+`admin` and `mint` are reserved, as is any name already taken. Names are
+permanent in this version; removing one is the operator's, through
+`moneyer admin names rm`.
+
+A registered name resolves on both rails at once:
+
+- `name@mint.example` as a lightning address, paying out as a bearer note
+  gift-wrapped to the owner's key.
+- `GET /.well-known/nostr.json?name=<name>` as a NIP-05 address. Only the
+  name asked for is answered: the list of everyone here is not something
+  to hand out.
+
+The discovery endpoint advertises `namePriceMsat` while registration is
+open, so a wallet can offer the flow without asking.
 
 ## Endpoints
 
@@ -348,6 +394,8 @@ mint username or `_`.
 | `/verify/<hash>` | LUD-21 verify, for mint invoices and melt payments |
 | `/w` | LUD-03 informational GET |
 | `/w/cb` | the mutating callback: melt, rotate, split, merge |
+| `POST /names` | claim a lightning address, authenticated by NIP-98 |
+| `/.well-known/nostr.json` | NIP-05 for the names this mint serves |
 | `/stats` | what the mint owes, what the node holds, and the coverage between them |
 | `/metrics` | the same figures for a scraper, off by default |
 
@@ -373,7 +421,7 @@ path should not silently create an empty database to answer from.
 | `reconcile` | one pending-melt reconcile pass, printing what changed |
 | `sweep` | delete mint invoices whose expiry is provably past |
 | `snapshot <path>` | a consistent copy of the database, taken live, refusing to overwrite |
-| `names list` | the lightning addresses this mint pays out as notes |
+| `names list\|add <name> <npub>\|rm <name>` | the lightning addresses this mint pays out as notes |
 | `keys rotate` | generate a signing key and print the two environment lines; writes nothing |
 | `verify-note <url>` | check a note's signature offline, then say what the mint holds at that id |
 

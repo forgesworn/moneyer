@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
+import {npubEncode} from 'nostr-tools/nip19'
 import {buildNoteUrl, hashK1, withNewK1} from 'lnurlcash-kit'
 import {runAdmin} from '../src/admin.ts'
 import {NoteStore} from '../src/store.ts'
@@ -166,8 +167,11 @@ describe('moneyer admin', () => {
     expect(missing.out).toContain('has no note at this id')
   })
 
-  it('lists the zap names the mint is configured with', async () => {
+  it('lists lightning addresses, including one the mint has not loaded yet', async () => {
+    const store = new NoteStore(':memory:')
+    store.buyZapName({name: 'donkey', pubkey: '44'.repeat(32), paidMsat: 21_000})
     const {out} = await run(['names'], {
+      store,
       env: {
         MONEYER_PUBLIC_ORIGIN: 'https://mint.example',
         MONEYER_NOSTR_KEY: '22'.repeat(32),
@@ -175,8 +179,26 @@ describe('moneyer admin', () => {
         MONEYER_ZAP_NAMES: `alice=${'33'.repeat(32)}`
       }
     })
+    expect(out).toContain('donkey')
+    expect(out).toContain('paid 21 sat')
+    // Configured but not yet loaded by a running mint, and said so.
     expect(out).toContain('alice')
-    expect(out).toContain('33'.repeat(32))
+    expect(out).toContain('waiting for a restart')
+  })
+
+  it('grants and removes a name', async () => {
+    const store = new NoteStore(':memory:')
+    const bad = await run(['names', 'add', 'donkey', 'not-a-key'], {store})
+    expect(bad.code).toBe(2)
+    // An npub is taken as readily as hex, since that is what an operator
+    // is handed by whoever wants the name.
+    const added = await run(['names', 'add', 'donkey', npubEncode('33'.repeat(32))], {store})
+    expect(added.code).toBe(0)
+    expect(store.zapName('donkey')).toMatchObject({pubkey: '33'.repeat(32), source: 'env'})
+    const removed = await run(['names', 'rm', 'DONKEY'], {store})
+    expect(removed.code).toBe(0)
+    expect(store.zapName('donkey')).toBeNull()
+    expect((await run(['names', 'rm', 'donkey'], {store})).code).toBe(1)
   })
 
   it('refuses an unknown command and explains itself with no argument', async () => {

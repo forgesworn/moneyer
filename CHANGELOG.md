@@ -32,6 +32,26 @@ additive on the wire apart from the node-capacity rename below.
   exactly that, and `verifyStatsSnapshot` is exported for wallets.
 - The lnd and cln backends report the node's local channel balance;
   the fake one reports a configurable balance, one bitcoin by default.
+- **Self-service lightning addresses.** With `MONEYER_NAME_PRICE_MSAT`
+  set, anyone with an npub can claim `name@<host>` by posting to
+  `/names` with a NIP-98 Authorization and a note of this mint. The key
+  that signs the request owns the name; no other identity is accepted.
+  The note is burned and the name recorded in one transaction, so
+  nothing is ever paid for a name somebody else got first. Unset means
+  registration is closed; `0` means free, three names per pubkey.
+  Registered and operator-configured names live in one table and are
+  served by one lookup, and `GET /.well-known/nostr.json?name=` resolves
+  them over NIP-05 as well, one name at a time. Discovery advertises
+  `namePriceMsat` while registration is open.
+- The kind 2525 rumor for a zap-funded note carries the zap request in a
+  `description` tag - the same content the kind 9735 receipt carries - so
+  a wallet can show who zapped and what they wrote without fetching the
+  receipt. Readers take tags by name, so an older one does not notice.
+- `MONEYER_ZAP_NAMES` is now optional: a mint that opens registration can
+  start with no names of its own. `MONEYER_NOSTR_KEY` and
+  `MONEYER_NOSTR_RELAYS` still go together.
+- `moneyer admin names` gains `add <name> <npub>` and `rm <name>`, and
+  `list` shows configured names the running mint has not loaded yet.
 - **A retried rotate, split or merge is answered instead of refused.**
   These are GETs, and transports retry GETs on their own: the retry
   arrives byte-identical after the inputs are burned, and the old answer

@@ -80,6 +80,17 @@ export type Liabilities = {
   oldestPendingMeltAgeSecs: number
 }
 
+// A lightning address this mint pays out as a note. `source` is how it
+// got here: 'env' for one the operator set, 'self' for one somebody
+// registered and paid for.
+export type ZapNameRow = {
+  name: string
+  pubkey: string
+  createdAt: number
+  paidMsat: number
+  source: 'env' | 'self'
+}
+
 export type NoteListRow = NoteRow & {createdAt: number; updatedAt: number}
 export type MeltListRow = MeltRow & {createdAt: number; resolvedAt: number | null}
 export type StoreTotals = {
@@ -149,6 +160,13 @@ export class NoteStore {
         created_at INTEGER NOT NULL,
         settled_at INTEGER,
         published_at INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS zap_names (
+        name TEXT PRIMARY KEY,
+        pubkey TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        paid_msat INTEGER NOT NULL DEFAULT 0,
+        source TEXT NOT NULL CHECK (source IN ('env','self'))
       );
       CREATE TABLE IF NOT EXISTS swaps (
         fingerprint TEXT PRIMARY KEY,
@@ -468,6 +486,73 @@ export class NoteStore {
     this.db
       .prepare('UPDATE zap_invoices SET wrap_json = NULL, receipt_json = NULL, published_at = ? WHERE payment_hash = ?')
       .run(Date.now(), paymentHash)
+  }
+
+  // ---- lightning addresses ----
+  //
+  // One table for both kinds: names the operator set in the environment
+  // and names people registered themselves. The lookup path that serves a
+  // zap does not care which is which, so there is one of it.
+
+  zapName(name: string): ZapNameRow | null {
+    const row = this.db
+      .prepare('SELECT name, pubkey, created_at, paid_msat, source FROM zap_names WHERE name = ?')
+      .get(name.toLowerCase()) as
+      | {name: string; pubkey: string; created_at: number; paid_msat: number; source: 'env' | 'self'}
+      | undefined
+    if (!row) return null
+    return {name: row.name, pubkey: row.pubkey, createdAt: row.created_at, paidMsat: row.paid_msat, source: row.source}
+  }
+
+  zapNames(): ZapNameRow[] {
+    const rows = this.db
+      .prepare('SELECT name, pubkey, created_at, paid_msat, source FROM zap_names ORDER BY name')
+      .all() as Array<{name: string; pubkey: string; created_at: number; paid_msat: number; source: 'env' | 'self'}>
+    return rows.map(row => ({
+      name: row.name,
+      pubkey: row.pubkey,
+      createdAt: row.created_at,
+      paidMsat: row.paid_msat,
+      source: row.source
+    }))
+  }
+
+  // The operator's own names, re-applied at every startup. Idempotent, and
+  // the environment wins: it is the operator's mint, and a name they put
+  // in the environment is one they mean to have.
+  putOperatorZapName(name: string, pubkey: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO zap_names (name, pubkey, created_at, paid_msat, source) VALUES (?, ?, ?, 0, 'env')
+         ON CONFLICT(name) DO UPDATE SET pubkey = excluded.pubkey, source = 'env'`
+      )
+      .run(name.toLowerCase(), pubkey, Date.now())
+  }
+
+  // A self-service registration: burn the note that paid for the name and
+  // record the name, or do neither. One transaction, because the two
+  // failure modes either side of it are both bad - a name nobody paid
+  // for, or a note burned for a name somebody else got first. The INSERT
+  // is also the race check: two requests for one name cannot both win.
+  buyZapName(args: {name: string; pubkey: string; noteId?: string; paidMsat: number}): void {
+    this.tx(() => {
+      if (args.noteId !== undefined) {
+        this.assertOutstanding(args.noteId)
+        this.setNoteState(args.noteId, 'burned')
+      }
+      this.db
+        .prepare("INSERT INTO zap_names (name, pubkey, created_at, paid_msat, source) VALUES (?, ?, ?, ?, 'self')")
+        .run(args.name.toLowerCase(), args.pubkey, Date.now(), args.paidMsat)
+    })
+  }
+
+  removeZapName(name: string): boolean {
+    return this.db.prepare('DELETE FROM zap_names WHERE name = ?').run(name.toLowerCase()).changes > 0
+  }
+
+  zapNameCountFor(pubkey: string): number {
+    const row = this.db.prepare('SELECT COUNT(*) AS n FROM zap_names WHERE pubkey = ?').get(pubkey) as {n: number}
+    return row.n
   }
 
   // Operator/dev funding path: mint a note directly, bypassing Lightning.
