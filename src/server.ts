@@ -624,6 +624,12 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         minWithdrawable: wholeSatFloor(note.amountMsat),
         maxWithdrawable: note.amountMsat,
         defaultDescription: config.description,
+        // The way home. A payRequest advertises `withdrawLink`; this is the
+        // other direction, so a holder who has nothing but a note can still
+        // find the document that publishes this mint's terms and its retired
+        // signing keys. Without it a wallet that only ever received notes
+        // cannot tell an announced key rotation from a substituted key.
+        payLink: `${origin}/.well-known/lnurlp/${config.username}`,
         ...(signer ? {mintPubkey: signer.pubkey} : {})
       })
     }

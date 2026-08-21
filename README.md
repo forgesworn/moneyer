@@ -392,7 +392,7 @@ open, so a wallet can offer the flow without asking.
 | `/p/cb` | LUD-06 pay callback; issues the mint invoice |
 | `/z/cb/<zap name>` | the zap callback; validates the kind 9734 and issues the invoice |
 | `/verify/<hash>` | LUD-21 verify, for mint invoices and melt payments |
-| `/w` | LUD-03 informational GET |
+| `/w` | LUD-03 informational GET; a live note also carries `payLink`, the route back to this mint's discovery document |
 | `/w/cb` | the mutating callback: melt, rotate, split, merge |
 | `POST /names` | claim a lightning address, authenticated by NIP-98 |
 | `/.well-known/nostr.json` | NIP-05 for the names this mint serves |
