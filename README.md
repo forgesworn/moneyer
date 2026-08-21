@@ -63,10 +63,54 @@ node dist/cli.js
 ```
 
 The mint is then payable at `mint@mint.example` (and the bare-domain `_`
-alias). Configuration is environment-only; see `src/config.ts` for the
-full `MONEYER_*` set including fees (`MONEYER_BASE_FEE_MSAT`,
-`MONEYER_FEE_PPM`), limits, and `MONEYER_SUNSET` for winding down without
-stranding holders.
+alias).
+
+## Configuration
+
+Environment only. Every variable is `MONEYER_*`; anything unset takes the
+default, and a variable set to an empty string counts as unset.
+
+| variable | default | what it does |
+| --- | --- | --- |
+| `MONEYER_HOST` | `127.0.0.1` | listen address |
+| `MONEYER_PORT` | `3737` | listen port |
+| `MONEYER_PUBLIC_ORIGIN` | derived from `Host` | the origin wallets are told to call back on. Required behind a reverse proxy, and required for zap-to-note |
+| `MONEYER_USERNAME` | `mint` | the local part of the mint's own lightning address |
+| `MONEYER_DESCRIPTION` | `an LNURLcash note` | what a note is called on the wire (`defaultDescription`, and `description` on discovery) |
+| `MONEYER_DB` | `moneyer.sqlite` | SQLite path; `:memory:` allowed |
+| `MONEYER_BACKEND` | `fake` | `cln`, `lnd`, or `fake` (refused outside `--dev`) |
+| `MONEYER_BACKEND_URL` | | the funding source's REST endpoint |
+| `MONEYER_BACKEND_RUNE` | | cln authentication |
+| `MONEYER_BACKEND_MACAROON` | | lnd authentication, hex |
+| `MONEYER_SIGNING_KEY` | | 32 bytes of hex. Unset means notes go out unsigned, which holders will notice |
+| `MONEYER_BASE_FEE_MSAT` | `0` | flat mint fee |
+| `MONEYER_FEE_PPM` | `0` | proportional mint fee, parts per million |
+| `MONEYER_ROUND_FEE_TO_SAT` | `false` | ceiling the mint fee to a whole sat (see below) |
+| `MONEYER_MIN_SENDABLE_MSAT` | `1000` | smallest payment the mint advertises |
+| `MONEYER_MAX_SENDABLE_MSAT` | `100000000` | largest payment the mint advertises |
+| `MONEYER_MIN_MINT_MSAT` | `1000` | dust floor: the smallest note the mint will strike |
+| `MONEYER_MAX_K1S` | `21` | most notes one callback may name |
+| `MONEYER_VERIFY` | `true` | the LUD-21 `verify` endpoint. Off means 404 |
+| `MONEYER_WALLET_URL` | | a companion web wallet the mint's site links notes into |
+| `MONEYER_SUNSET` | `false` | wind down: refuse anything that grows liabilities, keep every way out open |
+
+### Who runs this mint
+
+Optional, all of it, and unset means the field is simply absent from the
+discovery endpoint rather than present and empty. This is the human layer
+a holder wants before trusting a mint with sats.
+
+| variable | what it does |
+| --- | --- |
+| `MONEYER_NAME` | the mint's name, shown on its own site and published as `name` |
+| `MONEYER_CONTACT_NOSTR` | an npub or hex pubkey to reach the operator on; published as an npub |
+| `MONEYER_CONTACT_EMAIL` | an email address to reach the operator on |
+| `MONEYER_CONTACT_URL` | a contact page |
+| `MONEYER_TOS_URL` | the terms a holder is agreeing to |
+| `MONEYER_MOTD` | a message of the day, at most 280 characters: maintenance, a sunset, a fee change. It is how an operator talks to holders without a mailing list they never signed up to |
+
+The discovery endpoint also publishes `fees` (the structured twin of the
+payRequest metadata's fee prose), `version`, and `previousPubkeys`.
 
 ## The website
 
