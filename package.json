@@ -45,7 +45,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "dev": "node --experimental-strip-types src/cli.ts --dev",
-    "conform": "node test/run-grader.mjs",
+    "conform": "vitest run test/conformance.test.ts",
     "check": "npm run typecheck && npm run typecheck:web && npm test && npm run build && npm run web:build && npm pack --dry-run",
     "web:dev": "vite web",
     "web:build": "vite build web",
