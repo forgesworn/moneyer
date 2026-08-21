@@ -1,5 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import {npubEncode} from 'nostr-tools/nip19'
+import {secp256k1} from '@noble/curves/secp256k1.js'
+import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {configFromEnv} from '../src/config.ts'
 
 // configFromEnv reads MONEYER_* and throws rather than starting with a
@@ -79,5 +81,49 @@ describe('the operator mint info', () => {
     expect(config.name).toBe('The Example Mint')
     expect(config.tosUrl).toBe('https://example.com/terms')
     expect(config.contact).toEqual({url: 'https://example.com/contact'})
+  })
+})
+
+// Rotating the note signing key must not invalidate every note already
+// out there. The old pubkeys are published so a pinned wallet can tell a
+// legitimate rotation from an impostor; the old PRIVATE keys are not
+// wanted, here or on the server.
+
+describe('previous signing pubkeys', () => {
+  const pubkeyOf = (privHex: string): string => bytesToHex(secp256k1.getPublicKey(hexToBytes(privHex), true))
+  const keyA = '11'.repeat(32)
+  const keyB = '22'.repeat(32)
+
+  it('accepts a comma-separated list and drops repeats', () => {
+    const config = configFromEnv({
+      MONEYER_SIGNING_KEY: keyB,
+      MONEYER_PREVIOUS_SIGNING_PUBKEYS: ` ${pubkeyOf(keyA)}, ${pubkeyOf(keyA).toUpperCase()} `
+    })
+    expect(config.previousSigningPubkeys).toEqual([pubkeyOf(keyA)])
+  })
+
+  it('is absent when the mint has never rotated', () => {
+    expect(configFromEnv({MONEYER_SIGNING_KEY: keyB}).previousSigningPubkeys).toBeUndefined()
+    expect(configFromEnv({MONEYER_PREVIOUS_SIGNING_PUBKEYS: ''}).previousSigningPubkeys).toBeUndefined()
+  })
+
+  it('refuses anything that is not a compressed point on the curve', () => {
+    expect(() => configFromEnv({MONEYER_PREVIOUS_SIGNING_PUBKEYS: 'nonsense'})).toThrow(
+      /compressed secp256k1 pubkey/
+    )
+    // 32-byte hex is an x-only key, not the compressed form a note
+    // signature recovers to.
+    expect(() => configFromEnv({MONEYER_PREVIOUS_SIGNING_PUBKEYS: '11'.repeat(32)})).toThrow(
+      /compressed secp256k1 pubkey/
+    )
+    expect(() => configFromEnv({MONEYER_PREVIOUS_SIGNING_PUBKEYS: `02${'11'.repeat(32)}`})).toThrow(
+      /point on the curve/
+    )
+  })
+
+  it('refuses the current key, which would say the mint rotated to itself', () => {
+    expect(() =>
+      configFromEnv({MONEYER_SIGNING_KEY: keyA, MONEYER_PREVIOUS_SIGNING_PUBKEYS: pubkeyOf(keyA)})
+    ).toThrow(/current signing key/)
   })
 })

@@ -372,10 +372,11 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // wallet that only reads a payRequest.
         ...(config.mintFee ? {fees: config.mintFee} : {}),
         ...(packageVersion ? {version: packageVersion} : {}),
-        // Keys this mint has signed under before. Empty until rotation
-        // lands; a wallet reading it can already tell "no history" from
-        // "field not implemented".
-        previousPubkeys: [],
+        // Keys this mint has signed under before, so a wallet pinned to an
+        // old one can tell a legitimate rotation from an impostor. Always
+        // present, empty included: "never rotated" and "does not
+        // implement the field" are different answers.
+        previousPubkeys: config.previousSigningPubkeys ?? [],
         ...(nodeInfo.alias ? {nodeAlias: nodeInfo.alias} : {}),
         ...(nodeInfo.uri ? {nodeUri: nodeInfo.uri} : {}),
         ...(nodeInfo.color ? {nodeColor: nodeInfo.color} : {}),

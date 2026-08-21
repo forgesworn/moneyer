@@ -131,6 +131,16 @@ describe('discovery', () => {
     expect(info.previousPubkeys).toEqual([])
   })
 
+  it('publishes the keys it signed under before, so a rotation is not a mismatch', async () => {
+    const previous = ['02'.repeat(1) + '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798']
+    const mint = await start({previousSigningPubkeys: previous})
+    const info = await discovery(mint)
+    expect(info.previousPubkeys).toEqual(previous)
+    // The current key is the one notes are signed under; the history is
+    // only there so an old note still verifies.
+    expect(info.mintPubkey).toBe(mint.moneyer.signer!.pubkey)
+  })
+
   it('shows the notice, the contact and the terms on the fallback landing page', async () => {
     const mint = await start(
       {
