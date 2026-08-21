@@ -21,10 +21,12 @@ import {
   verifyNoteSignature
 } from 'lnurlcash-kit'
 import {decodeBolt11} from 'farrier-kit/bolt11'
+import {readFileSync} from 'node:fs'
 import {npubEncode} from 'nostr-tools/nip19'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
 import {createFakeBackend, FAKE_LOCAL_BALANCE_MSAT} from '../src/backends/fake.ts'
 import {createMoneyer} from '../src/server.ts'
+import {MINT_KNOWS, MINT_KNOWS_HEADING} from '../src/privacy.ts'
 import {freshK1, startMint, testConfig, waitFor, type TestMint} from './helpers.ts'
 
 // moneyer driven end to end by lnurlcash-kit - the same client every
@@ -156,6 +158,20 @@ describe('discovery', () => {
     expect(page).toContain('Fees change on 1 September.')
     expect(page).toContain('mint@example.com')
     expect(page).toContain('https://example.com/terms')
+  })
+
+  it('says what the mint can see, in the same words everywhere', async () => {
+    const mint = await start({}, {webAssets: null})
+    const page = await (await fetch(`${mint.moneyer.url}/`)).text()
+    expect(page).toContain(MINT_KNOWS_HEADING)
+    // The whole point of the shared constant is that these three places
+    // cannot drift: README, landing page, mint site.
+    for (const paragraph of MINT_KNOWS) {
+      expect(page).toContain(paragraph.replace(/'/g, '&#39;'))
+    }
+    expect(readFileSync(new URL('../README.md', import.meta.url), 'utf8').replace(/\s+/g, ' ')).toContain(
+      MINT_KNOWS[0]!.replace(/\s+/g, ' ')
+    )
   })
 
   it('publishes node capacity under both names for one release', async () => {

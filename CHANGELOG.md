@@ -32,6 +32,11 @@ additive on the wire apart from the node-capacity rename below.
   exactly that, and `verifyStatsSnapshot` is exported for wallets.
 - The lnd and cln backends report the node's local channel balance;
   the fake one reports a configurable balance, one bitcoin by default.
+- A "What the mint knows" section in the README, on the mint's own site
+  and on the fallback landing page, in the same words: what a LUD-25 mint
+  can see, what it cannot, why the wallet-side mitigations are weak, and
+  why the design was chosen anyway. Blindness is the one ecash property
+  this cannot offer, and a reader should not have to infer that.
 - `MONEYER_PREVIOUS_SIGNING_PUBKEYS` lists the compressed pubkeys this
   mint signed notes under before, published as `previousPubkeys` on
   discovery. Rotating the signing key no longer invalidates every

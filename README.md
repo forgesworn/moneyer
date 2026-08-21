@@ -250,6 +250,27 @@ there by advertising `minWithdrawable` as the note floored to a whole sat
 and accepting a melt for that; the sub-sat remainder is dust the mint
 keeps. Rounding at mint time means it never comes up.
 
+## What the mint knows
+
+This mint knows every note it has issued and what each is worth. It
+knows every rotate, split and merge, the links between them - which note
+became which, and when - and the network address the request came from.
+It knows the invoice a melt paid.
+
+It does not know who holds a note between those operations. A note
+handed to someone else offline leaves no trace here until they rotate
+it, which is one reason a wallet rotates on receipt.
+
+The wallet-side mitigations are weak, and worth naming as weak. A Tor or
+SOCKS proxy hides the address, not the links. Rotating at unpredictable
+times blurs the timing, not the graph. Nothing a holder does stops this
+mint seeing the chain of notes it struck.
+
+The design was chosen anyway because it needs no new cryptography, any
+LUD-03 wallet can cash a note out, and verifying a note offline needs a
+signature and nothing else. The privacy story is trust the operator, and
+that is worth saying plainly.
+
 ## Zap-to-note: a lightning address that pays out as a note
 
 A Nostr zap is an ordinary LNURL-pay. Paid to the mint's own address it

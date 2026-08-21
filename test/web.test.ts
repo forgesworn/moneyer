@@ -2,6 +2,7 @@
 import {afterAll, beforeAll, describe, expect, it} from 'vitest'
 import {bolt11PaymentHash} from 'farrier-kit/bolt11'
 import {buildNoteUrl} from 'lnurlcash-kit'
+import {MINT_KNOWS, MINT_KNOWS_HEADING} from '../src/privacy.ts'
 import {installNodeFetch} from './browser-fetch-shim.ts'
 import {freshK1, startMint, type TestMint} from './helpers.ts'
 
@@ -53,6 +54,11 @@ afterAll(async () => {
 })
 
 describe('the mint website', () => {
+  it('tells a visitor what the mint can see', () => {
+    expect(text()).toContain(MINT_KNOWS_HEADING)
+    expect(text()).toContain(MINT_KNOWS[0])
+  })
+
   it('renders discovery: address, terms, fee line, signing key', () => {
     expect(text()).toContain(`mint@${new URL(mint.moneyer.url).host}`)
     expect(text()).toContain('0.5%')
