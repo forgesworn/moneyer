@@ -2,7 +2,7 @@ import {existsSync} from 'node:fs'
 import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
 import {hashK1, noteDeclaredAmount, noteK1, noteSignature, verifyNoteSignature} from 'lnurlcash-kit'
-import {configFromEnv, type MoneyerConfig} from './config.ts'
+import {configFromEnv, pubkeyHex, type MoneyerConfig} from './config.ts'
 import {NoteStore, type NoteState} from './store.ts'
 import {buildStats} from './stats.ts'
 import {reconcilePendingMelts} from './melt.ts'
@@ -44,7 +44,7 @@ const COMMANDS = [
   ['reconcile', 'resolve melts left in flight, and say what changed'],
   ['sweep', 'delete mint invoices whose expiry is provably past'],
   ['snapshot <path>', 'a consistent copy of the database, taken live'],
-  ['names list', 'the lightning addresses this mint pays out as notes'],
+  ['names list|add <name> <npub>|rm <name>', 'the lightning addresses this mint pays out as notes'],
   ['keys rotate', 'generate a signing key and print the two env lines'],
   ['verify-note <url>', 'check a note offline, then say what the mint holds']
 ] as const
@@ -158,7 +158,11 @@ export const runAdmin = async (argv: string[], deps: AdminDeps = {}): Promise<nu
     return 0
   }
 
-  const mutates = command === 'reconcile' || command === 'sweep' || command === 'snapshot'
+  const mutates =
+    command === 'reconcile' ||
+    command === 'sweep' ||
+    command === 'snapshot' ||
+    (command === 'names' && positionals[1] !== undefined && positionals[1] !== 'list')
   let store: NoteStore
   const ownsStore = deps.store === undefined
   if (deps.store) {
@@ -324,20 +328,63 @@ export const runAdmin = async (argv: string[], deps: AdminDeps = {}): Promise<nu
       }
 
       case 'names': {
-        if (positionals[1] !== undefined && positionals[1] !== 'list') {
-          // The self-service names table is not here yet; until it is,
-          // names are the MONEYER_ZAP_NAMES line and editing that is the
-          // operator's own doing.
-          err('Only "names list" is available: zap names come from MONEYER_ZAP_NAMES.')
-          return 2
-        }
-        const names = Object.entries(config.zap?.names ?? {})
-        if (!names.length) {
-          out('no zap names configured')
+        const sub = positionals[1] ?? 'list'
+        if (sub === 'list') {
+          const names = store.zapNames()
+          // A name in the environment that the mint has not started with
+          // yet is not in the table. Showing it as missing would be a lie
+          // about the configuration, so it is shown as waiting.
+          const known = new Set(names.map(row => row.name))
+          const waiting = Object.entries(config.zap?.names ?? {}).filter(([name]) => !known.has(name))
+          if (!names.length && !waiting.length) {
+            out('no lightning addresses')
+            return 0
+          }
+          for (const row of names) {
+            out(
+              `${row.name.padEnd(20)} ${row.pubkey}  ${row.source}${row.paidMsat ? ` (paid ${sats(row.paidMsat)})` : ''}`
+            )
+          }
+          for (const [name, pubkey] of waiting) out(`${name.padEnd(20)} ${pubkey}  env (waiting for a restart)`)
           return 0
         }
-        for (const [name, pubkey] of names) out(`${name.padEnd(20)} ${pubkey}`)
-        return 0
+        if (sub === 'add') {
+          const [, , name, key] = positionals
+          if (!name || !key) {
+            err('Usage: moneyer admin names add <name> <npub|hex>')
+            return 2
+          }
+          let hex: string
+          try {
+            hex = pubkeyHex(key)
+          } catch (error) {
+            err((error as Error).message)
+            return 2
+          }
+          // An operator-granted name is recorded the same way an
+          // environment one is: the operator IS the environment here, and
+          // a name they grant should not look like one somebody bought.
+          store.putOperatorZapName(name.toLowerCase(), hex)
+          out(`${name.toLowerCase()} now pays out to ${hex}`)
+          return 0
+        }
+        if (sub === 'rm') {
+          const name = positionals[2]
+          if (!name) {
+            err('Usage: moneyer admin names rm <name>')
+            return 2
+          }
+          const removed = store.removeZapName(name)
+          out(removed ? `${name.toLowerCase()} removed` : `no such name: ${name}`)
+          // A name in MONEYER_ZAP_NAMES comes back at the next restart,
+          // and an operator deleting one should know that now.
+          if (removed && config.zap?.names[name.toLowerCase()]) {
+            out('(it is still in MONEYER_ZAP_NAMES and will return on the next restart)')
+          }
+          return removed ? 0 : 1
+        }
+        err('Usage: moneyer admin names list|add <name> <npub>|rm <name>')
+        return 2
       }
 
       case 'verify-note': {

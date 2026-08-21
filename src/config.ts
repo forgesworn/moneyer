@@ -93,6 +93,10 @@ export type MoneyerConfig = {
   // note to a Nostr pubkey and gift-wrap it there (see zap.ts). Unset means
   // the feature is off and those names 404 like any other.
   zap?: ZapConfig
+  // What a self-service lightning address costs, in millisatoshis, paid
+  // with a note of this mint. Unset means registration is closed and
+  // POST /names 404s; 0 means free, capped at three names per pubkey.
+  namePriceMsat?: number
 }
 
 export type ZapConfig = {
@@ -248,6 +252,15 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
   const name = text(env.MONEYER_NAME)
 
   const zap = zapFromEnv(env)
+  // Unset is not the same as zero here: unset means registration is
+  // closed, zero means free.
+  const rawPrice = env.MONEYER_NAME_PRICE_MSAT?.trim()
+  const namePriceMsat = rawPrice === undefined || rawPrice === '' ? undefined : int(rawPrice, 0)
+  if (namePriceMsat !== undefined && !zap) {
+    // A registered name that cannot be wrapped to its owner is a name
+    // that takes payments nobody can collect.
+    throw new Error('MONEYER_NAME_PRICE_MSAT needs zap-to-note configured - a name pays out as a gift-wrapped note.')
+  }
   if (zap && zap.names[env.MONEYER_USERNAME ?? DEFAULTS.username]) {
     throw new Error('MONEYER_ZAP_NAMES must not reuse the mint username.')
   }
@@ -284,7 +297,8 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     ...(env.MONEYER_WALLET_URL ? {walletUrl: env.MONEYER_WALLET_URL.replace(/\/+$/, '')} : {}),
     maxK1s: int(env.MONEYER_MAX_K1S, DEFAULTS.maxK1s),
     sunset: flag(env.MONEYER_SUNSET, DEFAULTS.sunset),
-    ...(zap ? {zap} : {})
+    ...(zap ? {zap} : {}),
+    ...(namePriceMsat !== undefined ? {namePriceMsat} : {})
   }
 }
 
@@ -335,15 +349,16 @@ export const pubkeyHex = (value: string): string => {
 }
 
 // MONEYER_ZAP_NAMES="alice=npub1...,bob=<hex>" with MONEYER_NOSTR_KEY and
-// MONEYER_NOSTR_RELAYS. All three or none: a name without a key cannot
-// wrap, a key without names has nothing to do.
+// MONEYER_NOSTR_RELAYS. The key and the relays go together: a name
+// without a key cannot wrap. The names themselves are now optional, since
+// a mint can open registration and start with none of its own.
 const zapFromEnv = (env: NodeJS.ProcessEnv): ZapConfig | undefined => {
   const rawNames = env.MONEYER_ZAP_NAMES?.trim()
   const nostrKey = env.MONEYER_NOSTR_KEY?.trim()
   const rawRelays = env.MONEYER_NOSTR_RELAYS?.trim()
   if (!rawNames && !nostrKey && !rawRelays) return undefined
-  if (!rawNames || !nostrKey || !rawRelays) {
-    throw new Error('Zap-to-note needs all of MONEYER_ZAP_NAMES, MONEYER_NOSTR_KEY and MONEYER_NOSTR_RELAYS.')
+  if (!nostrKey || !rawRelays) {
+    throw new Error('Zap-to-note needs MONEYER_NOSTR_KEY and MONEYER_NOSTR_RELAYS.')
   }
   if (!HEX32.test(nostrKey)) throw new Error('MONEYER_NOSTR_KEY must be 32 bytes of hex.')
   // Refuse a key the curve refuses, at startup rather than on the first zap.
@@ -356,7 +371,7 @@ const zapFromEnv = (env: NodeJS.ProcessEnv): ZapConfig | undefined => {
     throw new Error('MONEYER_NOSTR_RELAYS must be a comma-separated list of ws:// or wss:// URLs.')
   }
   const names: Record<string, string> = {}
-  for (const entry of rawNames.split(',')) {
+  for (const entry of (rawNames ?? '').split(',').filter(Boolean)) {
     const [name, pubkey, ...rest] = entry.split('=').map(s => s.trim())
     if (!name || !pubkey || rest.length) {
       throw new Error(`MONEYER_ZAP_NAMES entry is not name=pubkey: ${JSON.stringify(entry)}.`)

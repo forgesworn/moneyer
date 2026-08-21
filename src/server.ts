@@ -15,6 +15,7 @@ import {landingPage} from './landing.ts'
 import {packageVersion} from './version.ts'
 import {createZapBridge, poolTransport, type NostrTransport, type ZapBridge} from './zap.ts'
 import {STATS_D_TAG, STATS_KIND, buildStats, statsSnapshotContent, type MintStats} from './stats.ts'
+import {isRefusal, registerName, validateNip98} from './names.ts'
 import {CONFIG_TOKEN, loadWebAssets, type WebAssets} from './web-assets.ts'
 
 const HEX32 = /^[0-9a-f]{64}$/
@@ -55,6 +56,23 @@ export type MoneyerDeps = {
   statsPublishMs?: number
 }
 
+// The one request body this mint reads. Capped hard: nothing here needs
+// more than a name and a note, and an unbounded read on a public endpoint
+// is a way to run a mint out of memory.
+const MAX_BODY_BYTES = 8 * 1024
+
+const readBody = async (req: IncomingMessage, limit = MAX_BODY_BYTES): Promise<string | null> => {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    const buffer = chunk as Buffer
+    size += buffer.length
+    if (size > limit) return null
+    chunks.push(buffer)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
 // "fee 5 sat + 0.1%" - what a payer sees in their wallet's description.
 export const describeFee = (fee: {baseFeeMsat: number; feePpm: number}, roundedToSat: boolean): string => {
   const parts: string[] = []
@@ -92,6 +110,13 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     nodeInfo = (await backend.nodeInfo?.()) ?? {}
   } catch {
     log('could not fetch funding-source node info - discovery will omit it')
+  }
+
+  // The operator's own lightning addresses, re-applied at every startup so
+  // the environment and the table cannot disagree. Self-service names
+  // live in the same table and are left alone.
+  if (config.zap) {
+    for (const [name, pubkey] of Object.entries(config.zap.names)) store.putOperatorZapName(name, pubkey)
   }
 
   // Melt payment hashes with a live attempt in this process. Reconcile
@@ -294,10 +319,66 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       }
     }
 
+    // ---- claiming a lightning address ----
+    //
+    // This sits ABOVE the GET-only gate on purpose. That gate protects
+    // the LNURL callbacks, where a retried GET carrying the same query
+    // string must never burn a note twice; this is not one of them. It is
+    // a POST because it creates something, and it is authenticated by
+    // NIP-98 rather than by anything this mint has to store.
+    if (requestUrl.pathname === '/names' && req.method === 'POST') {
+      if (config.namePriceMsat === undefined) return fail('This mint is not registering names.', 404)
+      const body = await readBody(req)
+      if (body === null) return fail('Request body too large.', 413)
+      const authorized = validateNip98(req.headers.authorization, {
+        url: `${origin}${requestUrl.pathname}`,
+        method: 'POST',
+        body
+      })
+      if ('reason' in authorized) return fail(authorized.reason, 401)
+      let parsed: {name?: unknown; note?: unknown}
+      try {
+        parsed = JSON.parse(body || '{}') as {name?: unknown; note?: unknown}
+      } catch {
+        return fail('Body must be JSON.', 400)
+      }
+      const result = registerName({
+        store,
+        // The NIP-98 signer owns the name. No other identity is accepted:
+        // a pubkey in the body would let anyone register a name to
+        // somebody else's key.
+        pubkey: authorized.pubkey,
+        body: parsed,
+        priceMsat: config.namePriceMsat,
+        reserved: [config.username],
+        host
+      })
+      if (isRefusal(result)) return fail(result.reason, result.status)
+      log(`name ${result.name} registered to ${result.pubkey.slice(0, 8)} for ${result.paidMsat} msat`)
+      return send({
+        status: 'OK',
+        name: result.name,
+        pubkey: result.pubkey,
+        address: `${result.name}@${host}`,
+        priceMsat: config.namePriceMsat,
+        paidMsat: result.paidMsat
+      })
+    }
+
     // Every LNURL endpoint below is a GET. The method matters: /w/cb
     // mutates on whatever arrives, and an OPTIONS preflight or a stray
     // retry carrying the same query string must never burn a note.
     if (req.method !== 'GET') return fail('Not found.', 404)
+
+    // ---- NIP-05 ----
+    // The same table, so a registered name resolves both as a lightning
+    // address and as a Nostr address. Only the name asked for is
+    // answered: the list of everyone here is not something to hand out.
+    if (requestUrl.pathname === '/.well-known/nostr.json') {
+      const wanted = q.get('name')?.toLowerCase()
+      const entry = wanted ? store.zapName(wanted) : null
+      return send({names: entry ? {[entry.name]: entry.pubkey} : {}})
+    }
 
     // ---- machine-readable operating figures ----
     // The OpenMetrics text format, for a scraper. Off unless asked for,
@@ -417,6 +498,9 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // wallet that only reads a payRequest.
         ...(config.mintFee ? {fees: config.mintFee} : {}),
         ...(packageVersion ? {version: packageVersion} : {}),
+        // What a lightning address at this mint costs, when anyone can
+        // claim one. Absent means registration is closed.
+        ...(config.namePriceMsat !== undefined ? {namePriceMsat: config.namePriceMsat} : {}),
         // Keys this mint has signed under before, so a wallet pinned to an
         // old one can tell a legitimate rotation from an impostor. Always
         // present, empty included: "never rotated" and "does not

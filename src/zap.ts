@@ -150,7 +150,10 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
   const origin = deps.origin
   const host = new URL(origin).host
 
-  const isZapName = (name: string): boolean => Object.hasOwn(config.names, name.toLowerCase())
+  // Names live in the store, not in the configuration: the operator's own
+  // are loaded there at startup and self-service registrations land in
+  // the same table, so one lookup serves both.
+  const isZapName = (name: string): boolean => store.zapName(name.toLowerCase()) !== null
 
   const payRequest = (name: string): Record<string, unknown> | null => {
     const lowered = name.toLowerCase()
@@ -171,7 +174,7 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
 
   const callback = async (name: string, amountMsat: number, nostrParam: string | null): Promise<ZapCallbackResult> => {
     const lowered = name.toLowerCase()
-    const recipient = config.names[lowered]
+    const recipient = store.zapName(lowered)?.pubkey
     if (!recipient) return {reason: 'Unknown user.'}
     if (!Number.isSafeInteger(amountMsat) || amountMsat <= 0) return {reason: 'Invalid amount.'}
     if (amountMsat < deps.minSendableMsat || amountMsat > deps.maxSendableMsat) return {reason: 'Amount out of range.'}
@@ -233,6 +236,11 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
       tags.push(['P', zr.pubkey])
       for (const e of tagValues(zr, 'e')) tags.push(['e', e])
       for (const a of tagValues(zr, 'a')) tags.push(['a', a])
+      // The zap request itself, the same content the kind 9735 receipt
+      // carries, so a wallet can show who zapped and what they wrote
+      // without going to a relay for it. Readers take tags by name, so an
+      // older one simply does not see this.
+      tags.push(['description', row.zapRequest])
     }
     const rumor: UnsignedEvent = {
       kind: NOTE_KIND,

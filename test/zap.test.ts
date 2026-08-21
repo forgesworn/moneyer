@@ -140,6 +140,10 @@ describe('a zap name', () => {
     expect(rumor.tags).toContainEqual(['u', 'mint.test/w'])
     expect(rumor.tags).toContainEqual(['P', zapper])
     expect(rumor.tags).toContainEqual(['e', 'ab'.repeat(32)])
+    // The zap request rides along, so a wallet can say who zapped and
+    // what they wrote without asking a relay for the receipt.
+    expect(rumor.tags).toContainEqual(['description', zr])
+    expect((JSON.parse(zr) as {content: string}).content).toBe('great post')
     const url = new URL(rumor.content)
     expect(url.origin + url.pathname).toBe('http://mint.test/w')
     const k1 = url.searchParams.get('k1')!
@@ -292,7 +296,14 @@ describe('a zap name', () => {
     expect(() => configFromEnv({...full, MONEYER_ZAP_NAMES: `Alice=${alice},bob=npub1${'q'.repeat(58)}`})).toThrow(/Not a Nostr pubkey/)
     const {zap} = configFromEnv(full)
     expect(zap).toEqual({nostrKey: MINT_NOSTR_KEY, relays: ['wss://a.example', 'wss://b.example'], names: {alice}})
-    expect(() => configFromEnv({...full, MONEYER_NOSTR_RELAYS: undefined})).toThrow(/all of/)
+    expect(() => configFromEnv({...full, MONEYER_NOSTR_RELAYS: undefined})).toThrow(/MONEYER_NOSTR_RELAYS/)
+    // A mint that opens registration starts with no names of its own, so
+    // the key and the relays are what is required, not the names.
+    expect(configFromEnv({...full, MONEYER_ZAP_NAMES: undefined}).zap).toEqual({
+      nostrKey: MINT_NOSTR_KEY,
+      relays: ['wss://a.example', 'wss://b.example'],
+      names: {}
+    })
     expect(() => configFromEnv({...full, MONEYER_PUBLIC_ORIGIN: undefined})).toThrow(/MONEYER_PUBLIC_ORIGIN/)
     expect(() => configFromEnv({...full, MONEYER_ZAP_NAMES: `mint=${alice}`})).toThrow(/mint username/)
     expect(() => configFromEnv({...full, MONEYER_ZAP_NAMES: `_=${alice}`})).toThrow(/"_"/)
