@@ -32,6 +32,18 @@ additive on the wire apart from the node-capacity rename below.
   exactly that, and `verifyStatsSnapshot` is exported for wallets.
 - The lnd and cln backends report the node's local channel balance;
   the fake one reports a configurable balance, one bitcoin by default.
+- `moneyer admin <command>`: the operator surface. `status`, `notes`,
+  `note`, `melts`, `reconcile`, `sweep`, `snapshot`, `names list`,
+  `keys rotate` and `verify-note`, all reading the same `MONEYER_*`
+  environment the mint does, and all opening the database read-only
+  unless the command mutates. `snapshot` uses `VACUUM INTO`, so it needs
+  no sqlite3 binary and is safe against a live mint; `keys rotate`
+  generates a key and prints the two environment lines without touching
+  anything.
+- `MONEYER_METRICS=true` serves `GET /metrics` in the OpenMetrics text
+  format. Off by default and never authenticated by the app: restrict the
+  path at the reverse proxy. The README's Operating section names the
+  three alerts worth having.
 - A "What the mint knows" section in the README, on the mint's own site
   and on the fallback landing page, in the same words: what a LUD-25 mint
   can see, what it cannot, why the wallet-side mitigations are weak, and

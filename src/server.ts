@@ -299,6 +299,51 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     // retry carrying the same query string must never burn a note.
     if (req.method !== 'GET') return fail('Not found.', 404)
 
+    // ---- machine-readable operating figures ----
+    // The OpenMetrics text format, for a scraper. Off unless asked for,
+    // and deliberately unauthenticated: the deployment notes restrict the
+    // path at the reverse proxy, which is where that decision belongs.
+    if (requestUrl.pathname === '/metrics') {
+      if (config.metrics !== true) return fail('Not found.', 404)
+      const liabilities = store.liabilities()
+      const totals = store.totals()
+      // The balance rides along with the /stats cache rather than hitting
+      // the funding source on every scrape.
+      const snapshot = await currentStats()
+      const lines: string[] = []
+      const metric = (name: string, help: string, type: 'gauge' | 'counter', samples: Array<[string, number]>): void => {
+        lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} ${type}`)
+        for (const [labels, value] of samples) lines.push(`${name}${labels} ${value}`)
+      }
+      metric('moneyer_outstanding_msat', 'Value of every note this mint still owes.', 'gauge', [['', liabilities.outstandingMsat]])
+      metric('moneyer_outstanding_notes', 'Number of notes this mint still owes.', 'gauge', [['', liabilities.outstandingNotes]])
+      metric('moneyer_pending_melts', 'Melts reserved against a note and not yet resolved.', 'gauge', [['', liabilities.pendingMelts]])
+      metric('moneyer_oldest_pending_melt_seconds', 'Age of the oldest unresolved melt.', 'gauge', [
+        ['', liabilities.oldestPendingMeltAgeSecs]
+      ])
+      if (snapshot.localBalanceMsat !== undefined) {
+        metric('moneyer_local_balance_msat', 'Outbound balance reported by the funding source.', 'gauge', [
+          ['', snapshot.localBalanceMsat]
+        ])
+      }
+      metric('moneyer_unsettled_mint_invoices', 'Mint invoices issued and not yet paid.', 'gauge', [
+        ['', totals.unsettledMintInvoices]
+      ])
+      metric('moneyer_mints_total', 'Notes minted from a settled invoice.', 'counter', [['', totals.mints]])
+      metric('moneyer_melts_total', 'Melts by outcome.', 'counter', [
+        ['{outcome="paid"}', totals.melts.paid],
+        ['{outcome="restored"}', totals.melts.restored],
+        ['{outcome="pending"}', totals.melts.pending]
+      ])
+      metric('moneyer_zaps_total', 'Zaps that settled into a note.', 'counter', [['', totals.zaps]])
+      res.writeHead(200, {
+        'content-type': 'text/plain; version=0.0.4; charset=utf-8',
+        'x-content-type-options': 'nosniff'
+      })
+      res.end(`${lines.join('\n')}\n`)
+      return
+    }
+
     // ---- what the mint owes ----
     // Public by design, and never per-note: a mint that will not say its
     // liabilities is asking for trust it has not earned, but a mint that

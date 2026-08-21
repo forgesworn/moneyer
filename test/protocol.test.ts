@@ -260,6 +260,29 @@ describe('liabilities', () => {
   })
 })
 
+describe('metrics', () => {
+  it('serves operating figures a scraper can read, when asked for', async () => {
+    const mint = await start({metrics: true})
+    creditNote(mint, 40_000)
+    const res = await fetch(`${mint.moneyer.url}/metrics`)
+    expect(res.headers.get('content-type')).toContain('text/plain')
+    const body = await res.text()
+    expect(body).toContain('# TYPE moneyer_outstanding_msat gauge')
+    expect(body).toContain('moneyer_outstanding_msat 40000')
+    expect(body).toContain('moneyer_outstanding_notes 1')
+    expect(body).toContain('moneyer_pending_melts 0')
+    expect(body).toContain('moneyer_oldest_pending_melt_seconds 0')
+    expect(body).toContain(`moneyer_local_balance_msat ${FAKE_LOCAL_BALANCE_MSAT}`)
+    expect(body).toContain('moneyer_melts_total{outcome="paid"} 0')
+    expect(body).toContain('moneyer_zaps_total 0')
+  })
+
+  it('is off unless the operator turned it on', async () => {
+    const mint = await start()
+    expect((await fetch(`${mint.moneyer.url}/metrics`)).status).toBe(404)
+  })
+})
+
 describe('minting', () => {
   it('mints a claimable note whose invoice preimage is the spend secret', async () => {
     const mint = await start()

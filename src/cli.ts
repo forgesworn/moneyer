@@ -11,13 +11,24 @@ import {createMoneyer} from './server.ts'
 //   moneyer --dev      in-memory fake funding source, an ephemeral signing
 //                      key, and one funded 21-sat note printed for a wallet
 //                      to play with. Nothing here is payable.
+//   moneyer admin ...  operate a running mint - see admin.ts
 
-const {values} = parseArgs({
+const {values, positionals} = parseArgs({
   options: {
     dev: {type: 'boolean', default: false},
     help: {type: 'boolean', default: false}
-  }
+  },
+  allowPositionals: true,
+  // The admin subcommand carries flags of its own (--state, --limit,
+  // --pending), parsed there rather than declared here.
+  strict: false
 })
+
+if (positionals[0] === 'admin') {
+  const args = process.argv.slice(2)
+  const {runAdmin} = await import('./admin.ts')
+  process.exit(await runAdmin(args.slice(args.indexOf('admin') + 1)))
+}
 
 if (values.help) {
   console.log(
@@ -25,10 +36,14 @@ if (values.help) {
       'moneyer - an LNURLcash (LUD-25) mint',
       '',
       'Usage: moneyer [--dev]',
+      '       moneyer admin <command>',
       '',
       '  --dev   fake funding source, in-memory store, ephemeral signing key,',
       '          and a funded 21 sat note printed at startup. Unpayable, for',
       '          wallets to develop against.',
+      '  admin   operate a running mint: status, notes, melts, reconcile,',
+      '          sweep, snapshot, names, keys, verify-note.',
+      '          `moneyer admin help` lists them.',
       '',
       'Configuration is MONEYER_* environment variables - see README.md.'
     ].join('\n')
