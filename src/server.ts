@@ -102,11 +102,14 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
 
   // What the mint advertises as its minimum must survive its own fee: a
   // payRequest whose minSendable nets below the dust floor invites a
-  // payment it would then refuse.
-  const effectiveMinSendableMsat = Math.max(
-    config.minSendableMsat,
-    config.mintFee ? grossUpForMintFee(config.minMintMsat, config.mintFee) : 0
-  )
+  // payment it would then refuse. grossUpForMintFee inverts the exact
+  // formula; with the fee rounded up to the sat the net can land just
+  // under the floor, so walk up until it clears. At most a sat of steps.
+  const effectiveMinSendableMsat = (() => {
+    let min = Math.max(config.minSendableMsat, config.mintFee ? grossUpForMintFee(config.minMintMsat, config.mintFee) : 0)
+    while (config.mintFee && netAfterMintFee(min) < config.minMintMsat) min += 1
+    return min
+  })()
 
   // The routing-fee budget for a melt. LUD-25 has the mint fee cover the
   // eventual payout's routing cost, so the budget follows what this mint
