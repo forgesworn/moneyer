@@ -32,6 +32,13 @@ additive on the wire apart from the node-capacity rename below.
   exactly that, and `verifyStatsSnapshot` is exported for wallets.
 - The lnd and cln backends report the node's local channel balance;
   the fake one reports a configurable balance, one bitcoin by default.
+- `MONEYER_PREVIOUS_SIGNING_PUBKEYS` lists the compressed pubkeys this
+  mint signed notes under before, published as `previousPubkeys` on
+  discovery. Rotating the signing key no longer invalidates every
+  outstanding note's signature or trips a pinned wallet's mismatch
+  check. Pubkeys only, validated as points on the curve at startup: the
+  old private keys are not needed to verify and should not stay on the
+  server. The runbook is in the README.
 
 ## [0.1.2] - 2026-08-21
 

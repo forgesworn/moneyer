@@ -83,6 +83,7 @@ default, and a variable set to an empty string counts as unset.
 | `MONEYER_BACKEND_RUNE` | | cln authentication |
 | `MONEYER_BACKEND_MACAROON` | | lnd authentication, hex |
 | `MONEYER_SIGNING_KEY` | | 32 bytes of hex. Unset means notes go out unsigned, which holders will notice |
+| `MONEYER_PREVIOUS_SIGNING_PUBKEYS` | | compressed pubkeys this mint signed under before, comma separated (see below) |
 | `MONEYER_BASE_FEE_MSAT` | `0` | flat mint fee |
 | `MONEYER_FEE_PPM` | `0` | proportional mint fee, parts per million |
 | `MONEYER_ROUND_FEE_TO_SAT` | `false` | ceiling the mint fee to a whole sat (see below) |
@@ -143,6 +144,39 @@ As a library:
 import {createMoneyer, configFromEnv} from '@forgesworn/moneyer'
 const mint = await createMoneyer(configFromEnv())
 ```
+
+## Rotating the signing key
+
+moneyer signs notes with its own key rather than the funding node's, so
+the node can be swapped without touching a single outstanding note. The
+signing key itself is the harder one: rotate it naively and every note
+already out there stops verifying at once, and every wallet that pinned
+the old key refuses the mint on its next contact.
+
+So the old pubkeys stay published. `previousPubkeys` on the discovery
+endpoint lists the keys this mint has signed under before, and a wallet
+that finds its pin in that list treats the change as a rotation rather
+than an impostor. The trust argument is TOFU's own: whoever controls the
+host controls the pin either way, and the history only stops a legitimate
+rotation from looking like an attack.
+
+To rotate:
+
+1. Generate a new key: `openssl rand -hex 32`.
+2. Set `MONEYER_SIGNING_KEY` to the new key, and add the **old public**
+   key to `MONEYER_PREVIOUS_SIGNING_PUBKEYS` (compressed, 33 bytes of
+   hex, comma separated, oldest last). The old private key is not wanted
+   here and should not stay on the server: verifying an old note needs
+   only the pubkey.
+3. Restart. Notes signed under the old key keep verifying against it;
+   every note minted or mutated from now on is signed under the new one,
+   so a holder who rotates their note re-signs it under the new key for
+   free.
+4. Tell holders through `MONEYER_MOTD`.
+
+Both variables are validated at startup: an entry that is not a
+compressed point on the curve, or that repeats the current key, stops the
+mint rather than quietly publishing a key that verifies nothing.
 
 ## Transparency: what the mint owes
 

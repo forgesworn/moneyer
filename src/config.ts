@@ -1,7 +1,8 @@
 import type {MintFee} from 'lnurlcash-kit'
 import {getPublicKey} from 'nostr-tools/pure'
+import {secp256k1} from '@noble/curves/secp256k1.js'
 import {decode as decodeNip19, npubEncode} from 'nostr-tools/nip19'
-import {hexToBytes} from '@noble/hashes/utils.js'
+import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 
 export type BackendConfig =
   | {kind: 'fake'}
@@ -52,6 +53,12 @@ export type MoneyerConfig = {
   // 32-byte hex. Unset means notes are issued unsigned, which the spec
   // allows but holders will notice.
   signingKey?: string
+  // Compressed pubkeys this mint has signed notes under before, published
+  // as `previousPubkeys` so a wallet can tell a legitimate rotation from
+  // an impostor. Pubkeys only: verifying an old note needs no private
+  // key, and an old private key left on the box is a liability with no
+  // upside.
+  previousSigningPubkeys?: string[]
   // SQLite path, ':memory:' allowed.
   dbPath: string
   backend: BackendConfig
@@ -186,6 +193,7 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
   if (signingKey !== undefined && !HEX32.test(signingKey)) {
     throw new Error('MONEYER_SIGNING_KEY must be 32 bytes of hex.')
   }
+  const previousSigningPubkeys = previousPubkeysFromEnv(env, signingKey)
 
   const kind = env.MONEYER_BACKEND ?? 'fake'
   let backend: BackendConfig
@@ -260,6 +268,7 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     mintFee: baseFeeMsat === 0 && feePpm === 0 ? null : {baseFeeMsat, feePpm},
     roundFeeToSat: flag(env.MONEYER_ROUND_FEE_TO_SAT, DEFAULTS.roundFeeToSat),
     ...(signingKey ? {signingKey: signingKey.toLowerCase()} : {}),
+    ...(previousSigningPubkeys.length ? {previousSigningPubkeys} : {}),
     dbPath: env.MONEYER_DB ?? DEFAULTS.dbPath,
     backend,
     verify: flag(env.MONEYER_VERIFY, DEFAULTS.verify),
@@ -271,6 +280,35 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     sunset: flag(env.MONEYER_SUNSET, DEFAULTS.sunset),
     ...(zap ? {zap} : {})
   }
+}
+
+// MONEYER_PREVIOUS_SIGNING_PUBKEYS="02ab...,03cd..." - the keys this mint
+// signed under before the current one. Every entry must be a point the
+// curve accepts, because a typo here would quietly tell wallets to accept
+// a key that verifies nothing, and it must not be the current key, which
+// would say the mint had rotated to itself.
+const previousPubkeysFromEnv = (env: NodeJS.ProcessEnv, signingKey: string | undefined): string[] => {
+  const raw = env.MONEYER_PREVIOUS_SIGNING_PUBKEYS?.trim()
+  if (!raw) return []
+  const current = signingKey ? bytesToHex(secp256k1.getPublicKey(hexToBytes(signingKey.toLowerCase()), true)) : null
+  const pubkeys: string[] = []
+  for (const entry of raw.split(',')) {
+    const pubkey = entry.trim().toLowerCase()
+    if (!pubkey) continue
+    if (!/^0[23][0-9a-f]{64}$/.test(pubkey)) {
+      throw new Error(`MONEYER_PREVIOUS_SIGNING_PUBKEYS entry is not a compressed secp256k1 pubkey: ${JSON.stringify(entry)}.`)
+    }
+    try {
+      secp256k1.Point.fromHex(pubkey)
+    } catch {
+      throw new Error(`MONEYER_PREVIOUS_SIGNING_PUBKEYS entry is not a point on the curve: ${JSON.stringify(entry)}.`)
+    }
+    if (pubkey === current) {
+      throw new Error('MONEYER_PREVIOUS_SIGNING_PUBKEYS must not repeat the current signing key - a mint has not rotated to itself.')
+    }
+    if (!pubkeys.includes(pubkey)) pubkeys.push(pubkey)
+  }
+  return pubkeys
 }
 
 const NAME = /^[a-z0-9._-]{1,64}$/
