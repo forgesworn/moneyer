@@ -1,5 +1,6 @@
 import type {MoneyerConfig} from './config.ts'
 import type {NodeInfo} from './backends/types.ts'
+import type {MintStats} from './stats.ts'
 import {applyMintFee} from 'lnurlcash-kit'
 
 // The mint's face: one self-contained page at GET /, no build step, no
@@ -16,8 +17,11 @@ export const landingPage = (args: {
   host: string
   mintPubkey: string | null
   nodeInfo: NodeInfo
+  // Null when the operator has switched /stats off.
+  stats?: MintStats | null
 }): string => {
   const {config, host, mintPubkey, nodeInfo} = args
+  const stats = args.stats ?? null
   const address = `${config.username}@${host}`
   const fee = config.mintFee
   const feeLine = fee
@@ -29,6 +33,21 @@ export const landingPage = (args: {
   // Contacts are shown as text, not links: a mailto or an npub someone
   // else chose is not something this page should hand a click to. The
   // terms are a link because a URL the operator set is the point of it.
+  // "coverage 1.92x (outstanding 48,120 sat, node 92,400 sat)", or the
+  // ratio alone in ratio-only mode. A mint with nothing outstanding has
+  // no ratio to state, so it says so in words instead.
+  const coverageLine = ((): string | null => {
+    if (!stats) return null
+    if (stats.coverage !== undefined) {
+      const ratio = `${stats.coverage.toFixed(2)}\u00d7`
+      return stats.outstandingMsat === undefined || stats.localBalanceMsat === undefined
+        ? ratio
+        : `${ratio} (outstanding ${sats(stats.outstandingMsat)}, node ${sats(stats.localBalanceMsat)})`
+    }
+    if (stats.outstandingMsat === 0) return 'nothing outstanding'
+    return stats.outstandingMsat === undefined ? null : `outstanding ${sats(stats.outstandingMsat)}`
+  })()
+
   const contacts = [
     config.contact?.email ? {label: 'email', value: config.contact.email} : null,
     config.contact?.nostr ? {label: 'nostr', value: config.contact.nostr} : null,
@@ -78,6 +97,7 @@ ${config.motd ? `<div class="motd"><b>notice</b>${escapeHtml(config.motd)}</div>
 <div class="kv"><span>largest note</span><b>${sats(maxNet)}</b></div>
 ${mintPubkey ? `<div class="kv"><span>notes signed by</span><code>${escapeHtml(mintPubkey)}</code></div>` : '<div class="kv"><span>note signatures</span><b>not offered</b></div>'}
 ${nodeInfo.uri ? `<div class="kv"><span>node</span><code>${escapeHtml(nodeInfo.uri)}</code></div>` : ''}
+${coverageLine ? `<div class="kv"><span>coverage</span><b>${escapeHtml(coverageLine)}</b></div>` : ''}
 ${config.sunset ? '<div class="kv"><span>status</span><b>sunsetting - redeem only</b></div>' : ''}
 ${contacts.map(entry => `<div class="kv"><span>${entry.label}</span><code>${escapeHtml(entry.value)}</code></div>`).join('\n')}
 ${config.tosUrl ? `<div class="kv"><span>terms</span><a href="${escapeHtml(config.tosUrl)}" rel="noopener noreferrer">${escapeHtml(config.tosUrl)}</a></div>` : ''}

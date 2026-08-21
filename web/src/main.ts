@@ -51,6 +51,19 @@ type MintRuntime = {username: string; walletUrl?: string; sunset?: boolean; orig
 // types today. The kit passes unknown fields through untouched, so they
 // arrive whether or not its own type has caught up; every one is optional
 // and a mint that publishes none of them renders exactly as before.
+// GET /stats: what the mint owes and what its node holds. Every field is
+// optional - an operator can publish the ratio alone, or switch the
+// endpoint off entirely, and the page just shows one row fewer.
+type MintStats = {
+  at?: number
+  outstandingMsat?: number
+  outstandingNotes?: number
+  pendingMsat?: number
+  pendingMelts?: number
+  localBalanceMsat?: number
+  coverage?: number
+}
+
 type MintInfo = MintAddressInfo & {
   name?: string
   description?: string
@@ -76,6 +89,7 @@ let viewEpoch = 0
 let pay: PayRequestInfo | null = null
 let addr: MintInfo | null = null
 let fee: MintFee | null = null
+let stats: MintStats | null = null
 
 // ---------- tiny DOM + motion helpers ----------
 
@@ -477,12 +491,19 @@ const boot = async (): Promise<void> => {
     return view
   })
   try {
-    const [payInfo, addrInfo] = await Promise.all([
+    const [payInfo, addrInfo, statsInfo] = await Promise.all([
       fetchPayRequest(`${API}/.well-known/lnurlp/${runtime.username}`),
-      fetchMintAddress(`${API}/.well-known/lnurlw/${runtime.username}`).catch(() => null)
+      fetchMintAddress(`${API}/.well-known/lnurlw/${runtime.username}`).catch(() => null),
+      // Optional and unauthenticated; a mint with it switched off simply
+      // 404s and the row is not drawn.
+      fetch(`${API}/stats`)
+        .then(res => (res.ok ? (res.json() as Promise<MintStats & {status?: string}>) : null))
+        .then(body => (body && body.status !== 'ERROR' ? body : null))
+        .catch(() => null)
     ])
     pay = payInfo
     addr = addrInfo as MintInfo | null
+    stats = statsInfo
     fee = payInfo.mintFee ?? null
     if (addr?.nodeColor && /^#[0-9a-fA-F]{6}$/.test(addr.nodeColor)) {
       document.querySelector('meta[name="theme-color"]')?.setAttribute('content', addr.nodeColor)
@@ -628,6 +649,20 @@ const viewHome = (): void => {
   })
 }
 
+// What the mint owes against what its node holds. The absolute figures
+// come with the ratio unless the operator publishes the ratio alone.
+const coverageLine = (): string | null => {
+  if (!stats) return null
+  if (stats.coverage !== undefined) {
+    const ratio = `${stats.coverage.toFixed(2)}\u00d7`
+    return stats.outstandingMsat === undefined || stats.localBalanceMsat === undefined
+      ? ratio
+      : `${ratio} - ${sats(stats.outstandingMsat)} sat outstanding, ${sats(stats.localBalanceMsat)} sat on the node`
+  }
+  if (stats.outstandingMsat === 0) return 'nothing outstanding'
+  return stats.outstandingMsat === undefined ? null : `${sats(stats.outstandingMsat)} sat outstanding`
+}
+
 const termsCard = (): HTMLElement => {
   const p = pay!
   const minNet = netFor(p.minSendable)
@@ -639,6 +674,7 @@ const termsCard = (): HTMLElement => {
     <div class="kv"><span>note values</span><b>${sats(minNet)} to ${sats(maxNet)} sat</b></div>
     <div class="kv"><span>the fee falls</span><b>once, at the striking - mutations free, merges refund</b></div>
     ${addr?.nodePubkey ? `<div class="kv"><span>notes signed by</span><code>${esc(addr.nodePubkey)}</code></div>` : '<div class="kv"><span>note signatures</span><b>not offered</b></div>'}
+    ${coverageLine() ? `<div class="kv"><span>coverage</span><b>${esc(coverageLine()!)}</b></div>` : ''}
     ${addr?.contact?.email ? `<div class="kv"><span>email</span><code>${esc(addr.contact.email)}</code></div>` : ''}
     ${addr?.contact?.nostr ? `<div class="kv"><span>nostr</span><code>${esc(addr.contact.nostr)}</code></div>` : ''}
     ${addr?.contact?.url ? `<div class="kv"><span>contact</span><a href="${esc(addr.contact.url)}" target="_blank" rel="noopener">${esc(addr.contact.url)}</a></div>` : ''}

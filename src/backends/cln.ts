@@ -131,12 +131,24 @@ export const createClnBackend = (config: {url: string; rune: string}): Lightning
       const color = typeof info?.color === 'string' ? `#${info.color.replace(/^#/, '')}` : undefined
       const numChannels = Number(info?.num_active_channels)
       const numPeers = Number(info?.num_peers)
+      // Outbound liquidity over channels that can actually route today.
+      // A channel still opening or already closing holds funds this mint
+      // cannot pay out with, so it is not counted.
+      let localBalanceMsat: number | undefined
+      const funds = await call('/v1/listfunds', {})
+      if (funds.ok && Array.isArray(funds.json?.channels)) {
+        const total = funds.json.channels
+          .filter((channel: {state?: string}) => channel?.state === 'CHANNELD_NORMAL')
+          .reduce((sum: number, channel: {our_amount_msat?: number | string}) => sum + Number(channel.our_amount_msat ?? 0), 0)
+        if (Number.isSafeInteger(total)) localBalanceMsat = total
+      }
       return {
         ...(info?.alias ? {alias: info.alias} : {}),
         ...(uri ? {uri} : {}),
         ...(color && /^#[0-9a-fA-F]{6}$/.test(color) ? {color} : {}),
         ...(Number.isSafeInteger(numChannels) ? {numChannels} : {}),
-        ...(Number.isSafeInteger(numPeers) ? {numPeers} : {})
+        ...(Number.isSafeInteger(numPeers) ? {numPeers} : {}),
+        ...(localBalanceMsat !== undefined ? {localBalanceMsat} : {})
       }
     }
   }

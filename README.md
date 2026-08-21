@@ -93,6 +93,9 @@ default, and a variable set to an empty string counts as unset.
 | `MONEYER_VERIFY` | `true` | the LUD-21 `verify` endpoint. Off means 404 |
 | `MONEYER_WALLET_URL` | | a companion web wallet the mint's site links notes into |
 | `MONEYER_SUNSET` | `false` | wind down: refuse anything that grows liabilities, keep every way out open |
+| `MONEYER_STATS` | `true` | the `/stats` endpoint. Off means 404 |
+| `MONEYER_STATS_RATIO_ONLY` | `false` | publish the coverage ratio alone, without the size of the book |
+| `MONEYER_STATS_PUBLISH` | `false` | publish a signed hourly snapshot of `/stats` to Nostr |
 
 ### Who runs this mint
 
@@ -139,6 +142,58 @@ As a library:
 ```ts
 import {createMoneyer, configFromEnv} from '@forgesworn/moneyer'
 const mint = await createMoneyer(configFromEnv())
+```
+
+## Transparency: what the mint owes
+
+LNURLcash notes are not blinded, so a mint can state its liabilities
+exactly. No epochs, no blinded sums, no ceremony: the mint knows every
+note it has issued and what each is worth, and it can add them up.
+
+```bash
+curl -s https://mint.example/stats | jq
+```
+
+```json
+{
+  "at": 1755800000000,
+  "outstandingMsat": 48120000,
+  "outstandingNotes": 12,
+  "pendingMsat": 0,
+  "pendingMelts": 0,
+  "oldestPendingMeltAgeSecs": 0,
+  "localBalanceMsat": 92400000,
+  "coverage": 1.9202,
+  "reconciledAt": 1755799800000
+}
+```
+
+`coverage` is the funding node's outbound balance over the mint's
+outstanding liabilities, to four decimal places. Under 1 means the node
+could not pay every note out today; that is the operator's business to
+show, not the endpoint's to hide. A mint with nothing outstanding has no
+coverage figure at all, because "infinitely covered" is not a claim worth
+making, and a funding source that will not report its balance leaves both
+`localBalanceMsat` and `coverage` out rather than have them guessed.
+
+The figures are cached for 30 seconds, are never per-note, and appear as
+one row on the mint's own site and its fallback landing page. The
+endpoint is public by design. `MONEYER_STATS=false` switches it off;
+`MONEYER_STATS_RATIO_ONLY=true` publishes the ratio without the size of
+the book.
+
+### Signed snapshots
+
+With `MONEYER_STATS_PUBLISH=true`, and the Nostr identity that
+zap-to-note uses, the mint publishes an hourly snapshot as a
+parameterised replaceable event (kind 30078, `d` tag
+`lnurlcash-liabilities`). Its content is the `/stats` JSON plus a `sig`
+over the canonicalised (RFC 8785) body, made with the **note signing
+key** - the key a holder already checks their own notes against, so the
+history adds nothing new to trust.
+
+```bash
+node scripts/verify-stats.mjs <mintPubkey> snapshot.json
 ```
 
 ## The mint fee, and the rounding question
@@ -204,6 +259,7 @@ mint username or `_`.
 | `/verify/<hash>` | LUD-21 verify, for mint invoices and melt payments |
 | `/w` | LUD-03 informational GET |
 | `/w/cb` | the mutating callback: melt, rotate, split, merge |
+| `/stats` | what the mint owes, what the node holds, and the coverage between them |
 
 ## Testing
 

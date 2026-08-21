@@ -1,5 +1,6 @@
 import {createServer, type IncomingMessage, type ServerResponse} from 'node:http'
-import {bytesToHex, randomBytes} from '@noble/hashes/utils.js'
+import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
+import {finalizeEvent} from 'nostr-tools/pure'
 import {applyMintFee, grossUpForMintFee, hashK1} from 'lnurlcash-kit'
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import type {MoneyerConfig} from './config.ts'
@@ -13,6 +14,7 @@ import {reconcilePendingMelts, runMelt} from './melt.ts'
 import {landingPage} from './landing.ts'
 import {packageVersion} from './version.ts'
 import {createZapBridge, poolTransport, type NostrTransport, type ZapBridge} from './zap.ts'
+import {STATS_D_TAG, STATS_KIND, buildStats, statsSnapshotContent, type MintStats} from './stats.ts'
 import {CONFIG_TOKEN, loadWebAssets, type WebAssets} from './web-assets.ts'
 
 const HEX32 = /^[0-9a-f]{64}$/
@@ -27,6 +29,12 @@ export type Moneyer = {
   // Null unless zap-to-note is configured.
   zap: ZapBridge | null
   reconcile: () => Promise<void>
+  // The current liabilities snapshot, cached for 30 seconds - the same
+  // object /stats serves.
+  stats: () => Promise<MintStats>
+  // One signed snapshot to Nostr, if snapshots are configured. Runs
+  // hourly on its own; exposed so a caller (and a test) can force a pass.
+  publishStats: () => Promise<void>
   close: () => Promise<void>
 }
 
@@ -43,6 +51,8 @@ export type MoneyerDeps = {
   nostr?: NostrTransport
   // How often settled zap invoices are looked for. Tests shrink it.
   zapPollMs?: number
+  // How often a signed liabilities snapshot is published. Tests shrink it.
+  statsPublishMs?: number
 }
 
 // "fee 5 sat + 0.1%" - what a payer sees in their wallet's description.
@@ -162,6 +172,58 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     return null
   }
 
+  // ---- transparency: what the mint owes, and what the node holds ----
+  //
+  // Cached for 30 seconds so a public endpoint cannot be turned into a
+  // load generator against the funding source, and so the landing page
+  // and /stats never disagree with each other by a request.
+  let localBalanceMsat = nodeInfo.localBalanceMsat
+  let reconciledAt: number | undefined
+  let statsCache: {builtAt: number; value: MintStats} | null = null
+  const currentStats = async (): Promise<MintStats> => {
+    const now = Date.now()
+    if (statsCache && now - statsCache.builtAt < 30_000) return statsCache.value
+    try {
+      // An answer that omits the balance is the funding source saying it
+      // does not know, and coverage must disappear with it rather than be
+      // computed against a stale number. A THROWN error is different: the
+      // node is unreachable this minute, and the last known figure stands.
+      const fresh = await backend.nodeInfo?.()
+      if (fresh) localBalanceMsat = fresh.localBalanceMsat
+    } catch {
+      // unreachable - keep the last figure
+    }
+    const value = buildStats({
+      liabilities: store.liabilities(now),
+      localBalanceMsat,
+      reconciledAt,
+      at: now,
+      ratioOnly: config.statsRatioOnly === true
+    })
+    statsCache = {builtAt: now, value}
+    return value
+  }
+
+  // An hourly signed snapshot, so the coverage history can be checked
+  // after the fact rather than taken on the operator's word for it today.
+  // Signed with the NOTE key: a holder already trusts that key for their
+  // own notes, so this adds nothing new to trust.
+  const publishStats = async (): Promise<void> => {
+    if (config.statsPublish !== true || !signer || !config.signingKey || !config.zap || !nostr) return
+    const stats = await currentStats()
+    const event = finalizeEvent(
+      {
+        kind: STATS_KIND,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [['d', STATS_D_TAG]],
+        content: statsSnapshotContent(stats, config.signingKey)
+      },
+      hexToBytes(config.zap.nostrKey)
+    )
+    const {ok, failed} = await nostr.publish(config.zap.relays, event)
+    log(`liabilities snapshot published to ${ok.length} relay${ok.length === 1 ? '' : 's'}${failed.length ? `, ${failed.length} refused` : ''}`)
+  }
+
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const requestUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`)
     const q = requestUrl.searchParams
@@ -207,7 +269,15 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           'x-frame-options': 'DENY',
           'referrer-policy': 'no-referrer'
         })
-        res.end(landingPage({config, host, mintPubkey: signer?.pubkey ?? null, nodeInfo}))
+        res.end(
+          landingPage({
+            config,
+            host,
+            mintPubkey: signer?.pubkey ?? null,
+            nodeInfo,
+            stats: config.stats === false ? null : await currentStats()
+          })
+        )
       }
       return
     }
@@ -228,6 +298,15 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     // mutates on whatever arrives, and an OPTIONS preflight or a stray
     // retry carrying the same query string must never burn a note.
     if (req.method !== 'GET') return fail('Not found.', 404)
+
+    // ---- what the mint owes ----
+    // Public by design, and never per-note: a mint that will not say its
+    // liabilities is asking for trust it has not earned, but a mint that
+    // listed its notes would be handing out an oracle.
+    if (requestUrl.pathname === '/stats') {
+      if (config.stats === false) return fail('Not found.', 404)
+      return send(await currentStats())
+    }
 
     // ---- Zap-to-note: a name that pays out as a note over Nostr ----
     const lnurlpMatch = requestUrl.pathname.match(/^\/\.well-known\/lnurlp\/(.+)$/)
@@ -605,6 +684,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     const swept = sweepExpiredMintInvoices(store) + (zap?.sweep() ?? 0)
     if (swept > 0) log(`swept ${swept} expired mint invoice${swept === 1 ? '' : 's'}`)
     await reconcilePendingMelts(store, backend, inFlight, log)
+    reconciledAt = Date.now()
   }
   await housekeeping()
   const housekeepingTimer = setInterval(() => {
@@ -633,6 +713,14 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   const zapTimer = zap ? setInterval(() => void zapTick(), deps.zapPollMs ?? 5_000) : null
   zapTimer?.unref()
 
+  const statsTimer =
+    config.statsPublish === true && signer && config.zap
+      ? setInterval(() => {
+          publishStats().catch(err => log(`liabilities snapshot failed: ${(err as Error).message}`))
+        }, deps.statsPublishMs ?? 3_600_000)
+      : null
+  statsTimer?.unref()
+
   return {
     url: `http://${config.host}:${port}`,
     port,
@@ -643,11 +731,15 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     zap,
     reconcile: async () => {
       await reconcilePendingMelts(store, backend, inFlight, log)
+      reconciledAt = Date.now()
       await zapTick()
     },
+    stats: currentStats,
+    publishStats,
     close: async () => {
       clearInterval(housekeepingTimer)
       if (zapTimer) clearInterval(zapTimer)
+      if (statsTimer) clearInterval(statsTimer)
       nostr?.close()
       await new Promise<void>((resolve, reject) => server.close(err => (err ? reject(err) : resolve())))
       await backend.close?.()
