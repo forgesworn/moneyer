@@ -11,6 +11,7 @@ import {createLndBackend} from './backends/lnd.ts'
 import {PaymentPendingError, type LightningBackend, type NodeInfo} from './backends/types.ts'
 import {reconcilePendingMelts, runMelt} from './melt.ts'
 import {landingPage} from './landing.ts'
+import {createZapBridge, poolTransport, type NostrTransport, type ZapBridge} from './zap.ts'
 import {CONFIG_TOKEN, loadWebAssets, type WebAssets} from './web-assets.ts'
 
 const HEX32 = /^[0-9a-f]{64}$/
@@ -22,6 +23,8 @@ export type Moneyer = {
   store: NoteStore
   backend: LightningBackend
   signer: NoteSigner | null
+  // Null unless zap-to-note is configured.
+  zap: ZapBridge | null
   reconcile: () => Promise<void>
   close: () => Promise<void>
 }
@@ -35,6 +38,10 @@ export type MoneyerDeps = {
   // The built website to serve at GET /. Omitted means load web/dist from
   // disk; null means serve the self-contained landing page instead.
   webAssets?: WebAssets | null
+  // Relay access for zap-to-note. Omitted means a real relay pool.
+  nostr?: NostrTransport
+  // How often settled zap invoices are looked for. Tests shrink it.
+  zapPollMs?: number
 }
 
 const backendFor = (config: MoneyerConfig): LightningBackend => {
@@ -95,6 +102,30 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   // route.
   const meltFeeLimitMsat = (amountMsat: number): number =>
     Math.max(Math.round(amountMsat * 0.005), 5_000, mintFeeMsat(amountMsat))
+
+  const mintFeeLine = config.mintFee ? `Mint fees: ${config.mintFee.baseFeeMsat},${config.mintFee.feePpm}` : null
+  const nostr = config.zap ? (deps.nostr ?? poolTransport()) : null
+  const zap: ZapBridge | null =
+    config.zap && nostr
+      ? createZapBridge({
+          config: config.zap,
+          store,
+          backend,
+          transport: nostr,
+          netAfterMintFee,
+          minSendableMsat: effectiveMinSendableMsat,
+          maxSendableMsat: config.maxSendableMsat,
+          minMintMsat: config.minMintMsat,
+          mintFeeLine,
+          verify: config.verify,
+          // configFromEnv guarantees this when zap is set; a caller
+          // building the config by hand gets the same rule.
+          origin: config.publicOrigin ?? (() => {
+            throw new Error('Zap-to-note needs publicOrigin.')
+          })(),
+          log
+        })
+      : null
 
   // A note whose id we do not know yet may be a settled mint invoice whose
   // claim simply has not been observed: settle it lazily against the
@@ -178,8 +209,21 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     // retry carrying the same query string must never burn a note.
     if (req.method !== 'GET') return fail('Not found.', 404)
 
-    // ---- LUD-16 payRequest: paying this mints a note ----
+    // ---- Zap-to-note: a name that pays out as a note over Nostr ----
     const lnurlpMatch = requestUrl.pathname.match(/^\/\.well-known\/lnurlp\/(.+)$/)
+    if (lnurlpMatch && zap && zap.isZapName(lnurlpMatch[1]!)) {
+      return send(zap.payRequest(lnurlpMatch[1]!))
+    }
+    const zapCbMatch = requestUrl.pathname.match(/^\/z\/cb\/(.+)$/)
+    if (zapCbMatch) {
+      if (!zap || !zap.isZapName(zapCbMatch[1]!)) return fail('Unknown user.', 404)
+      if (config.sunset) return fail('This mint is sunsetting - minting is disabled.')
+      const result = await zap.callback(zapCbMatch[1]!, Number(q.get('amount')), q.get('nostr'))
+      if ('reason' in result) return fail(result.reason)
+      return send({...result, disposable: false})
+    }
+
+    // ---- LUD-16 payRequest: paying this mints a note ----
     if (lnurlpMatch) {
       if (!knownUser(lnurlpMatch[1]!)) return fail('Unknown user.', 404)
       const metadata: Array<[string, string]> = [
@@ -493,7 +537,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   // otherwise grow by one dead row per /p/cb call forever. The timer is
   // unref'd so it never keeps the process alive.
   const housekeeping = async (): Promise<void> => {
-    const swept = sweepExpiredMintInvoices(store)
+    const swept = sweepExpiredMintInvoices(store) + (zap?.sweep() ?? 0)
     if (swept > 0) log(`swept ${swept} expired mint invoice${swept === 1 ? '' : 's'}`)
     await reconcilePendingMelts(store, backend, inFlight, log)
   }
@@ -503,6 +547,27 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   }, 300_000)
   housekeepingTimer.unref()
 
+  // A zap settles on the funding source's clock, not ours, so look often.
+  // One pass at a time: a slow relay must not stack passes.
+  let zapPass: Promise<void> | null = null
+  const zapTick = (): Promise<void> => {
+    if (!zap) return Promise.resolve()
+    if (zapPass) return zapPass
+    zapPass = (async () => {
+      try {
+        await zap.settle()
+        await zap.publish()
+      } catch (err) {
+        log(`zap pass failed: ${(err as Error).message}`)
+      } finally {
+        zapPass = null
+      }
+    })()
+    return zapPass
+  }
+  const zapTimer = zap ? setInterval(() => void zapTick(), deps.zapPollMs ?? 5_000) : null
+  zapTimer?.unref()
+
   return {
     url: `http://${config.host}:${port}`,
     port,
@@ -510,9 +575,15 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     store,
     backend,
     signer,
-    reconcile: () => reconcilePendingMelts(store, backend, inFlight, log),
+    zap,
+    reconcile: async () => {
+      await reconcilePendingMelts(store, backend, inFlight, log)
+      await zapTick()
+    },
     close: async () => {
       clearInterval(housekeepingTimer)
+      if (zapTimer) clearInterval(zapTimer)
+      nostr?.close()
       await new Promise<void>((resolve, reject) => server.close(err => (err ? reject(err) : resolve())))
       await backend.close?.()
       store.close()

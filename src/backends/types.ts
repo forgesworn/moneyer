@@ -44,7 +44,10 @@ export class PaymentAlreadyKnownError extends Error {}
 
 export interface LightningBackend {
   readonly name: string
-  createInvoice(args: {amountMsat: number; preimageHex: string; memo: string}): Promise<{pr: string}>
+  // `descriptionForHash`, when given, is what the invoice commits to via
+  // its description hash (LUD-06 metadata, or a NIP-57 zap request) in
+  // place of the plain memo.
+  createInvoice(args: {amountMsat: number; preimageHex: string; memo: string; descriptionForHash?: string}): Promise<{pr: string}>
   // Throws PaymentFailedError on a clean terminal failure, anything else on
   // an ambiguous one.
   payInvoice(args: {pr: string; feeLimitMsat: number}): Promise<PaymentOutcome>

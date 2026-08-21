@@ -25,6 +25,25 @@ export type MeltRow = {
   amountMsat: number
   outcome: 'paid' | 'restored' | null
 }
+// A zap-to-note invoice (zap.ts). Unlike a mint invoice its payment hash
+// is NOT a note id: the payer learns the preimage on settlement, so the
+// note minted for the recipient gets a secret of its own. `noteId` is
+// sha256 of that secret once minted. The wrap and receipt are kept only
+// until published: the wrap is ciphertext only the recipient can open,
+// and the receipt is public by design.
+export type ZapInvoiceRow = {
+  paymentHash: string
+  name: string
+  recipient: string
+  pr: string
+  grossMsat: number
+  netMsat: number
+  zapRequest: string | null
+  settled: boolean
+  noteId: string | null
+  wrapJson: string | null
+  receiptJson: string | null
+}
 
 // A note named by the request is reserved by an in-flight melt. The wire
 // reply for this is the exact reason string "pending".
@@ -60,6 +79,22 @@ export class NoteStore {
         net_msat INTEGER NOT NULL,
         settled INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS zap_invoices (
+        payment_hash TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        recipient TEXT NOT NULL,
+        pr TEXT NOT NULL,
+        gross_msat INTEGER NOT NULL,
+        net_msat INTEGER NOT NULL,
+        zap_request TEXT,
+        settled INTEGER NOT NULL DEFAULT 0,
+        note_id TEXT,
+        wrap_json TEXT,
+        receipt_json TEXT,
+        created_at INTEGER NOT NULL,
+        settled_at INTEGER,
+        published_at INTEGER
       );
       CREATE TABLE IF NOT EXISTS melts (
         payment_hash TEXT PRIMARY KEY,
@@ -255,6 +290,97 @@ export class NoteStore {
       this.db.prepare('UPDATE mint_invoices SET settled = 1 WHERE payment_hash = ?').run(paymentHash)
       if (!this.noteById(paymentHash)) this.insertNote(paymentHash, invoice.netMsat)
     })
+  }
+
+  // ---- zap-to-note ----
+
+  recordZapInvoice(row: {
+    paymentHash: string
+    name: string
+    recipient: string
+    pr: string
+    grossMsat: number
+    netMsat: number
+    zapRequest: string | null
+  }): void {
+    this.db
+      .prepare(
+        'INSERT INTO zap_invoices (payment_hash, name, recipient, pr, gross_msat, net_msat, zap_request, settled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)'
+      )
+      .run(row.paymentHash, row.name, row.recipient, row.pr, row.grossMsat, row.netMsat, row.zapRequest, Date.now())
+  }
+
+  private zapRow(row: Record<string, unknown>): ZapInvoiceRow {
+    return {
+      paymentHash: row.payment_hash as string,
+      name: row.name as string,
+      recipient: row.recipient as string,
+      pr: row.pr as string,
+      grossMsat: row.gross_msat as number,
+      netMsat: row.net_msat as number,
+      zapRequest: (row.zap_request as string | null) ?? null,
+      settled: row.settled === 1,
+      noteId: (row.note_id as string | null) ?? null,
+      wrapJson: (row.wrap_json as string | null) ?? null,
+      receiptJson: (row.receipt_json as string | null) ?? null
+    }
+  }
+
+  private static readonly ZAP_COLUMNS =
+    'payment_hash, name, recipient, pr, gross_msat, net_msat, zap_request, settled, note_id, wrap_json, receipt_json'
+
+  zapInvoiceByHash(paymentHash: string): ZapInvoiceRow | null {
+    const row = this.db
+      .prepare(`SELECT ${NoteStore.ZAP_COLUMNS} FROM zap_invoices WHERE payment_hash = ?`)
+      .get(paymentHash) as Record<string, unknown> | undefined
+    return row ? this.zapRow(row) : null
+  }
+
+  unsettledZapInvoices(): ZapInvoiceRow[] {
+    const rows = this.db
+      .prepare(`SELECT ${NoteStore.ZAP_COLUMNS} FROM zap_invoices WHERE settled = 0`)
+      .all() as Record<string, unknown>[]
+    return rows.map(row => this.zapRow(row))
+  }
+
+  deleteUnsettledZapInvoice(paymentHash: string): void {
+    this.db.prepare('DELETE FROM zap_invoices WHERE payment_hash = ? AND settled = 0').run(paymentHash)
+  }
+
+  // The note comes into being and the events that announce it are parked
+  // for publishing, in one transaction: a crash between the two would
+  // otherwise leave a liability nobody was ever told about. Returns false
+  // if the row was already settled (a racing poll), in which case nothing
+  // was minted.
+  settleZapInvoice(paymentHash: string, noteId: string, wrapJson: string, receiptJson: string | null): boolean {
+    return this.tx(() => {
+      const row = this.zapInvoiceByHash(paymentHash)
+      if (!row || row.settled) return false
+      this.assertOutputIdFree(noteId)
+      this.insertNote(noteId, row.netMsat)
+      this.db
+        .prepare(
+          'UPDATE zap_invoices SET settled = 1, note_id = ?, wrap_json = ?, receipt_json = ?, settled_at = ? WHERE payment_hash = ?'
+        )
+        .run(noteId, wrapJson, receiptJson, Date.now(), paymentHash)
+      return true
+    })
+  }
+
+  // Settled zaps whose wrap has not yet reached a relay.
+  unpublishedZaps(): ZapInvoiceRow[] {
+    const rows = this.db
+      .prepare(`SELECT ${NoteStore.ZAP_COLUMNS} FROM zap_invoices WHERE settled = 1 AND published_at IS NULL`)
+      .all() as Record<string, unknown>[]
+    return rows.map(row => this.zapRow(row))
+  }
+
+  // The wrap is on a relay: drop our copy. The receipt is dropped with it
+  // whether or not every relay took it - it is public and best-effort.
+  markZapPublished(paymentHash: string): void {
+    this.db
+      .prepare('UPDATE zap_invoices SET wrap_json = NULL, receipt_json = NULL, published_at = ? WHERE payment_hash = ?')
+      .run(Date.now(), paymentHash)
   }
 
   // Operator/dev funding path: mint a note directly, bypassing Lightning.
