@@ -109,14 +109,22 @@ describe('a zap name', () => {
     expect(cb.reason).toBeUndefined()
     expect(cb.pr).toBeTypeOf('string')
 
-    // Nothing exists before settlement.
+    // Nothing exists before settlement, and verify says so.
     const paymentHash = cb.verify!.split('/').pop()!
     expect(mint.moneyer.store.noteById(paymentHash)).toBeNull()
     await mint.moneyer.reconcile()
     expect(relay.published).toHaveLength(0)
+    const verifyUrl = cb.verify!.replace('http://mint.test', mint.moneyer.url)
+    expect(await (await fetch(verifyUrl)).json()).toMatchObject({status: 'OK', settled: false, preimage: null, pr: cb.pr})
 
     mint.backend.control.settleInvoice(paymentHash)
     await waitFor(() => relay.published.some(p => p.event.kind === 9735))
+    // LUD-21 for the payer: settled, with the throwaway preimage they hold anyway.
+    expect(await (await fetch(verifyUrl)).json()).toMatchObject({
+      status: 'OK',
+      settled: true,
+      preimage: mint.backend.control.invoiceByHash(paymentHash)!.preimageHex
+    })
 
     // The wrap went to alice's inbox (and the mint's relay), not the zapper's.
     const wrapPub = relay.published.find(p => p.event.kind === 1059)!
