@@ -369,6 +369,21 @@ describe('a sat-ceilinged mint fee', () => {
     expect(await mintedValue(await start({mintFee: fee, roundFeeToSat: true}))).toBe(38_000)
   })
 
+  it('advertises a minimum that still nets the dust floor once the fee rounds up', async () => {
+    // Found by the grader on the live mint: grossUp inverts the exact
+    // formula, and with rounding the advertised minimum netted under the
+    // floor, so paying the minimum the mint itself advertised was refused.
+    const mint = await start({mintFee: {baseFeeMsat: 5000, feePpm: 1000}, roundFeeToSat: true, minMintMsat: 50_000})
+    const pay = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
+    const invoice = await requestInvoice(pay.callback, pay.minSendable)
+    expect(invoice.pr).toBeTypeOf('string')
+    const {paymentHashHex} = decodeBolt11(invoice.pr)!
+    mint.backend.control.settleInvoice(paymentHashHex)
+    const preimage = mint.backend.control.invoiceByHash(paymentHashHex)!.preimageHex
+    const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, preimage))
+    expect(info.maxWithdrawable).toBeGreaterThanOrEqual(50_000)
+  })
+
   it('stays msat-exact when the operator leaves it off', async () => {
     expect(await mintedValue(await start({mintFee: fee}))).toBe(38_960)
   })
