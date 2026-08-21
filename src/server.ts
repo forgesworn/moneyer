@@ -342,6 +342,15 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         const preimageHex = settled ? await backend.paymentPreimage(paymentHash) : null
         return send({status: 'OK', settled, preimage: preimageHex, pr: melt.pr})
       }
+      // A zap invoice's preimage is a throwaway the payer already holds,
+      // so serving it is LUD-21 as written and leaks nothing: the note's
+      // secret is a different value, sealed to the recipient.
+      const zapInvoice = store.zapInvoiceByHash(paymentHash)
+      if (zapInvoice) {
+        const settled = zapInvoice.settled || (await backend.isInvoiceSettled(paymentHash))
+        const preimageHex = settled ? await backend.invoicePreimage(paymentHash) : null
+        return send({status: 'OK', settled, preimage: preimageHex, pr: zapInvoice.pr})
+      }
       return fail('Unknown payment hash.')
     }
 
