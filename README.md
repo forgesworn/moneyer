@@ -110,6 +110,13 @@ word, and the conformance grader accepts both.
 behaviour. Off by default: turning it on raises what the mint withholds,
 and that is not a change to make behind an operator's back on a redeploy.
 
+Why you probably want it on anyway: msat-exact fees make notes like 94.9
+sat, and most Lightning wallets can only invoice whole sats, so such a
+note cannot be withdrawn by them. moneyer covers the notes already out
+there by advertising `minWithdrawable` as the note floored to a whole sat
+and accepting a melt for that; the sub-sat remainder is dust the mint
+keeps. Rounding at mint time means it never comes up.
+
 ## Zap-to-note: a lightning address that pays out as a note
 
 A Nostr zap is an ordinary LNURL-pay. Paid to the mint's own address it

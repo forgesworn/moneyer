@@ -85,6 +85,7 @@ export type ZapBridgeDeps = {
   maxSendableMsat: number
   minMintMsat: number
   mintFeeLine: string | null
+  feeInWords: string | null
   verify: boolean
   // The mint's public origin. Required when zaps are on: a settled zap is
   // minted by a timer, with no request to read a Host header from.
@@ -109,9 +110,9 @@ export type ZapBridge = {
   sweep(nowMs?: number): number
 }
 
-const metadataFor = (name: string, host: string, mintFeeLine: string | null): string => {
+const metadataFor = (name: string, host: string, mintFeeLine: string | null, feeInWords: string | null = null): string => {
   const metadata: Array<[string, string]> = [
-    ['text/plain', `Zap ${name}@${host}: paid out as an LNURLcash note over Nostr`],
+    ['text/plain', `Zap ${name}@${host}: arrives as a Lightning bearer note${feeInWords ? ` (${feeInWords})` : ''}`],
     ['text/identifier', `${name}@${host}`]
   ]
   if (mintFeeLine) metadata.push(['text/plain', mintFeeLine])
@@ -140,7 +141,7 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
       callback: `${origin}/z/cb/${lowered}`,
       minSendable: deps.minSendableMsat,
       maxSendable: deps.maxSendableMsat,
-      metadata: metadataFor(lowered, host, deps.mintFeeLine),
+      metadata: metadataFor(lowered, host, deps.mintFeeLine, deps.feeInWords),
       allowsNostr: true,
       nostrPubkey: pubkey
       // Deliberately no withdrawLink: the preimage of this invoice is NOT
@@ -184,7 +185,7 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
           amountMsat,
           preimageHex: preimage,
           memo: `Zap ${lowered}@${host}`,
-          descriptionForHash: zapRequest ?? metadataFor(lowered, host, deps.mintFeeLine)
+          descriptionForHash: zapRequest ?? metadataFor(lowered, host, deps.mintFeeLine, deps.feeInWords)
         })
       ).pr
     } catch (err) {

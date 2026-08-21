@@ -32,6 +32,44 @@ const meltOnce = async (mint: TestMint, amountMsat = 21_000) => {
 
 const noteState = (mint: TestMint, noteId: string) => mint.moneyer.store.noteById(noteId)?.state
 
+describe('a note that is not a whole sat', () => {
+  // Most Lightning wallets can only invoice whole sats. A 94.9 sat note
+  // that insists on exactly 94,900 msat cannot be withdrawn by any of them.
+  it('advertises its whole-sat floor as the minimum and melts for it, keeping the dust', async () => {
+    active = await startMint()
+    const k1 = freshK1()
+    active.moneyer.store.creditNote(hashK1(k1), 94_900)
+    const info = await fetchNoteInfo(buildNoteUrl(`${active.moneyer.url}/w`, k1, 94_900))
+    expect(info.maxWithdrawable).toBe(94_900)
+    expect(info.minWithdrawable).toBe(94_000)
+
+    // Below the floor, or above the value: refused, note untouched.
+    for (const wrong of [93_000, 95_000, 94_901]) {
+      const res = await fetch(`${info.callback}?k1=${k1}&pr=${fakeBolt11({amountMsat: wrong, paymentHashHex: hashK1(freshK1())})}`)
+      const body = (await res.json()) as {status: string; reason?: string}
+      expect(body.status).toBe('ERROR')
+      expect(body.reason).toMatch(/94900 msat, or 94000 msat/)
+    }
+    expect(noteState(active, hashK1(k1))).toBe('outstanding')
+
+    // The whole-sat floor pays out; the 900 msat of dust stays with the mint.
+    const paymentHash = hashK1(freshK1())
+    await meltNote(info.callback, k1, fakeBolt11({amountMsat: 94_000, paymentHashHex: paymentHash}))
+    await waitFor(() => noteState(active!, hashK1(k1)) === 'burned')
+    expect(active.moneyer.store.meltByHash(paymentHash)).toMatchObject({amountMsat: 94_900, outcome: 'paid'})
+  })
+
+  it('still demands the exact amount for a whole-sat note', async () => {
+    active = await startMint()
+    const k1 = freshK1()
+    active.moneyer.store.creditNote(hashK1(k1), 21_000)
+    const info = await fetchNoteInfo(buildNoteUrl(`${active.moneyer.url}/w`, k1, 21_000))
+    expect(info.minWithdrawable).toBe(21_000)
+    const res = await fetch(`${info.callback}?k1=${k1}&pr=${fakeBolt11({amountMsat: 20_000, paymentHashHex: hashK1(freshK1())})}`)
+    expect(((await res.json()) as {reason?: string}).reason).toMatch(/exactly 21000 msat/)
+  })
+})
+
 describe('melt discipline', () => {
   it('burns the note when the payment succeeds', async () => {
     const mint = (active = await startMint())

@@ -44,6 +44,18 @@ export type MoneyerDeps = {
   zapPollMs?: number
 }
 
+// "fee 5 sat + 0.1%" - what a payer sees in their wallet's description.
+export const describeFee = (fee: {baseFeeMsat: number; feePpm: number}, roundedToSat: boolean): string => {
+  const parts: string[] = []
+  if (fee.baseFeeMsat > 0) parts.push(`${fee.baseFeeMsat % 1000 === 0 ? fee.baseFeeMsat / 1000 : (fee.baseFeeMsat / 1000).toFixed(3)} sat`)
+  if (fee.feePpm > 0) parts.push(`${(fee.feePpm / 10_000).toString()}%`)
+  const base = parts.length ? `fee ${parts.join(' + ')}` : 'no fee'
+  return roundedToSat && parts.length ? `${base}, rounded up to the sat` : base
+}
+
+// A note's value rounded down to a whole sat; unchanged when already whole.
+const wholeSatFloor = (msat: number): number => Math.floor(msat / 1000) * 1000
+
 const backendFor = (config: MoneyerConfig): LightningBackend => {
   switch (config.backend.kind) {
     case 'fake':
@@ -104,6 +116,9 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     Math.max(Math.round(amountMsat * 0.005), 5_000, mintFeeMsat(amountMsat))
 
   const mintFeeLine = config.mintFee ? `Mint fees: ${config.mintFee.baseFeeMsat},${config.mintFee.feePpm}` : null
+  // The same fee for a person: "Mint fees: 5000,1000" is for wallets that
+  // parse LUD-25, and reads as nonsense to anyone who does not.
+  const feeInWords = config.mintFee ? describeFee(config.mintFee, config.roundFeeToSat === true) : null
   const nostr = config.zap ? (deps.nostr ?? poolTransport()) : null
   const zap: ZapBridge | null =
     config.zap && nostr
@@ -117,6 +132,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           maxSendableMsat: config.maxSendableMsat,
           minMintMsat: config.minMintMsat,
           mintFeeLine,
+          feeInWords,
           verify: config.verify,
           // configFromEnv guarantees this when zap is set; a caller
           // building the config by hand gets the same rule.
@@ -227,7 +243,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     if (lnurlpMatch) {
       if (!knownUser(lnurlpMatch[1]!)) return fail('Unknown user.', 404)
       const metadata: Array<[string, string]> = [
-        ['text/plain', `Mint an LNURLcash bearer note at ${config.username}@${host}`],
+        ['text/plain', `Mint an LNURLcash bearer note at ${config.username}@${host}${feeInWords ? ` (${feeInWords})` : ''}`],
         ['text/identifier', `${lnurlpMatch[1]}@${host}`]
       ]
       if (config.mintFee) {
@@ -361,11 +377,16 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       const note = await resolveNote(k1)
       if (!note) return fail('Unknown note.')
       if (note.state === 'burned') return fail('Note already spent.')
+      // maxWithdrawable states the note's value, as the reference does.
+      // minWithdrawable is that value floored to a whole sat: most Lightning
+      // wallets can only invoice whole sats, and a note of 94.9 sat that
+      // insists on exactly 94,900 msat cannot be withdrawn by any of them.
+      // The sub-sat remainder of such a melt is dust the mint keeps.
       return send({
         tag: 'withdrawRequest',
         callback: `${origin}/w/cb`,
         k1,
-        minWithdrawable: 0,
+        minWithdrawable: wholeSatFloor(note.amountMsat),
         maxWithdrawable: note.amountMsat,
         defaultDescription: config.description,
         ...(signer ? {mintPubkey: signer.pubkey} : {})
@@ -414,8 +435,17 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       if (pr) {
         const decoded = tryDecodeBolt11(pr.trim())
         if (!decoded) return fail('Invalid invoice.')
-        if (decoded.amountMsats === null || decoded.amountMsats !== BigInt(totalMsat)) {
-          return fail(`Invoice must be for exactly ${totalMsat} msat.`)
+        // Exactly the notes' value, or the whole-sat floor of it when the
+        // value is not a whole sat (see the informational GET above). Never
+        // less than the floor: that would let a holder leave real value on
+        // the table by accident, and never more.
+        const floorMsat = wholeSatFloor(totalMsat)
+        if (decoded.amountMsats === null || decoded.amountMsats > BigInt(totalMsat) || decoded.amountMsats < BigInt(floorMsat)) {
+          return fail(
+            floorMsat === totalMsat
+              ? `Invoice must be for exactly ${totalMsat} msat.`
+              : `Invoice must be for ${totalMsat} msat, or ${floorMsat} msat (the whole-sat floor).`
+          )
         }
         const paymentHash = decoded.paymentHashHex
         // Paying an invoice this mint itself issued would route the funding
