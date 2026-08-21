@@ -219,6 +219,10 @@ button { font: inherit; color: inherit; border: none; background: none; cursor: 
 .kv code { font-family: var(--mono); font-size: 11px; word-break: break-all; text-align: right; color: var(--ink); max-width: 30ch; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--silver); margin-right: 7px; }
 .card .row { border-top: 1px solid var(--hair); padding-top: 12px; margin-top: 2px; }
+/* Plain prose inside a card - what the mint knows, and anything else that
+   is read rather than scanned. */
+.card p.prose { font-size: 15.5px; line-height: 1.7; color: var(--ink); padding-top: 12px; }
+.card p.prose + p.prose { padding-top: 10px; }
 
 /* ---------- the three steps, numbered like plates ---------- */
 .steps { display: grid; gap: 0; border: 1px solid var(--hair); }

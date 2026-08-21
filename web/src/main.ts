@@ -36,6 +36,7 @@ import {
   type MintFee,
   type PayRequestInfo
 } from 'lnurlcash-kit'
+import {MINT_KNOWS, MINT_KNOWS_HEADING} from '../../src/privacy.ts'
 import {icons} from './icons.ts'
 import {rosette} from './guilloche.ts'
 import {banknote} from './banknote.ts'
@@ -589,6 +590,8 @@ const viewHome = (): void => {
         <div class="step"><span class="n">III</span><b>Spend it anywhere</b><p>Hand it to anyone, split it, merge it, or melt it back onto Lightning. No account, ever.</p></div>
       </div>
       <div class="grid2" data-cards></div>
+      <div class="rubric">${esc(MINT_KNOWS_HEADING)}</div>
+      <div data-knows></div>
       <footer>
         <div class="microprint">${Array(8).fill('MONEYER · PAYS THE BEARER ON DEMAND · LNURLCASH · NOT LEGAL TENDER · ').join('')}</div>
         <div class="luds">${LUDS.map(([n, href]) => `<a href="${href}" target="_blank" rel="noopener" title="LUD-${n}">LUD-${n}</a>`).join('')}</div>
@@ -626,6 +629,7 @@ const viewHome = (): void => {
 
     const cards = view.querySelector('[data-cards]') as HTMLElement
     cards.append(termsCard(), nodeCard())
+    view.querySelector('[data-knows]')!.append(knowsCard())
 
     // motion: the wordmark settles, the lathe turns the rosette on, and
     // the SPECIMEN overstamp lands once the note scrolls into view
@@ -662,6 +666,14 @@ const coverageLine = (): string | null => {
   if (stats.outstandingMsat === 0) return 'nothing outstanding'
   return stats.outstandingMsat === undefined ? null : `${sats(stats.outstandingMsat)} sat outstanding`
 }
+
+// The one property a LUD-25 mint cannot offer is blindness, said plainly
+// and in the same words as the README and the landing page.
+const knowsCard = (): HTMLElement =>
+  el(`<div class="card">
+    <h3>${esc(MINT_KNOWS_HEADING)}</h3>
+    ${MINT_KNOWS.map(paragraph => `<p class="prose">${esc(paragraph)}</p>`).join('')}
+  </div>`)
 
 const termsCard = (): HTMLElement => {
   const p = pay!

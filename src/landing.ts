@@ -1,6 +1,7 @@
 import type {MoneyerConfig} from './config.ts'
 import type {NodeInfo} from './backends/types.ts'
 import type {MintStats} from './stats.ts'
+import {MINT_KNOWS, MINT_KNOWS_HEADING} from './privacy.ts'
 import {applyMintFee} from 'lnurlcash-kit'
 
 // The mint's face: one self-contained page at GET /, no build step, no
@@ -80,6 +81,9 @@ h1 small{display:block;font-size:16px;color:var(--dim);font-weight:500;margin-to
 .kv span{color:var(--dim)}
 .kv code{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;word-break:break-all;text-align:right}
 p.small{color:var(--dim);font-size:13.5px;line-height:1.65;text-align:center}
+.knows{background:var(--raise);border:1px solid var(--line);border-radius:20px;padding:20px 22px;display:flex;flex-direction:column;gap:10px}
+.knows h2{font-size:15px;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);font-weight:600}
+.knows p{font-size:14px;line-height:1.65}
 .motd{background:var(--raise);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:14px;padding:14px 18px;font-size:14.5px;line-height:1.6}
 .motd b{display:block;font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin-bottom:4px}
 a{color:var(--accent)}
@@ -102,6 +106,10 @@ ${config.sunset ? '<div class="kv"><span>status</span><b>sunsetting - redeem onl
 ${contacts.map(entry => `<div class="kv"><span>${entry.label}</span><code>${escapeHtml(entry.value)}</code></div>`).join('\n')}
 ${config.tosUrl ? `<div class="kv"><span>terms</span><a href="${escapeHtml(config.tosUrl)}" rel="noopener noreferrer">${escapeHtml(config.tosUrl)}</a></div>` : ''}
 </div>
+<section class="knows">
+<h2>${escapeHtml(MINT_KNOWS_HEADING)}</h2>
+${MINT_KNOWS.map(paragraph => `<p>${escapeHtml(paragraph)}</p>`).join('\n')}
+</section>
 <p class="small">Works with any LUD-25 wallet - <a href="https://github.com/forgesworn/notecase">notecase</a> among them. Verify a note offline against the signing key above.<br/>Independent implementation of the <a href="https://github.com/lnurl/luds/pull/301">LNURLcash draft</a> - graded by <a href="https://github.com/TheCryptoDonkey/lnurlcash-conformance">lnurlcash-conformance</a>.</p>
 </main>
 </body>
