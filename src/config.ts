@@ -22,6 +22,13 @@ export type MoneyerConfig = {
   // Advertised in the payRequest metadata and withheld on minting. Null
   // means fee-free.
   mintFee: MintFee | null
+  // Ceiling the mint fee to a whole sat, as dni's lnurl-mint does on
+  // purpose so it is "never short a sat". LUD-25 says nothing either way,
+  // and lnurlcash-kit's mintFeeBand accepts both, so this is a posture
+  // choice rather than a compliance one. Off by default: turning it on
+  // raises what this mint withholds, and that is not a change to make
+  // behind an operator's back on a redeploy.
+  roundFeeToSat?: boolean
   // 32-byte hex. Unset means notes are issued unsigned, which the spec
   // allows but holders will notice.
   signingKey?: string
@@ -51,7 +58,8 @@ export const DEFAULTS = {
   dbPath: 'moneyer.sqlite',
   verify: true,
   maxK1s: 21,
-  sunset: false
+  sunset: false,
+  roundFeeToSat: false
 } as const
 
 const int = (value: string | undefined, fallback: number): number => {
@@ -133,6 +141,7 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     maxSendableMsat,
     minMintMsat: int(env.MONEYER_MIN_MINT_MSAT, DEFAULTS.minMintMsat),
     mintFee: baseFeeMsat === 0 && feePpm === 0 ? null : {baseFeeMsat, feePpm},
+    roundFeeToSat: flag(env.MONEYER_ROUND_FEE_TO_SAT, DEFAULTS.roundFeeToSat),
     ...(signingKey ? {signingKey: signingKey.toLowerCase()} : {}),
     dbPath: env.MONEYER_DB ?? DEFAULTS.dbPath,
     backend,

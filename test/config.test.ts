@@ -31,3 +31,14 @@ describe('configFromEnv', () => {
     expect(configFromEnv({MONEYER_PUBLIC_ORIGIN: ''}).publicOrigin).toBeUndefined()
   })
 })
+
+describe('the sat-ceilinged mint fee', () => {
+  // dni's lnurl-mint ceilings its fee to a whole sat on purpose. LUD-25
+  // says nothing either way, so this is a posture choice, and turning it
+  // on raises what the mint withholds - never a redeploy's doing.
+  it('is off unless the operator asks for it', () => {
+    expect(configFromEnv({}).roundFeeToSat).toBe(false)
+    expect(configFromEnv({MONEYER_ROUND_FEE_TO_SAT: 'true'}).roundFeeToSat).toBe(true)
+    expect(configFromEnv({MONEYER_ROUND_FEE_TO_SAT: 'false'}).roundFeeToSat).toBe(false)
+  })
+})
