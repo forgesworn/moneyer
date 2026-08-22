@@ -16,6 +16,38 @@ import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 export const noteIdSignatureDigest = (noteId: string, amountMsat: number): Uint8Array =>
   sha256(sha256(utf8ToBytes(`Lightning Signed Message:LNURLcash:${amountMsat}:${noteId}`)))
 
+// A recoverable signature in the LUD-25 wire layout, r || s || recovery_id.
+// noble v2 emits recovery_id || r || s, so the leading byte moves to the
+// back. Anything this mint signs for a third party to check goes through
+// here.
+export const signDigestRecoverable = (digest: Uint8Array, privateKeyHex: string): string => {
+  const lead = secp256k1.sign(digest, hexToBytes(privateKeyHex), {format: 'recovered', prehash: false})
+  return bytesToHex(new Uint8Array([...lead.subarray(1), lead[0]!]))
+}
+
+// Does this signature recover to that public key? Both byte orders are
+// tried for the same reason lnurlcash-kit tries both: recovery-id-first is
+// what noble emits, recovery-id-last is what the wire carries.
+export const recoversToPubkey = (digest: Uint8Array, signatureHex: string, pubkeyHex: string): boolean => {
+  let wireSig: Uint8Array
+  try {
+    wireSig = hexToBytes(signatureHex)
+  } catch {
+    return false
+  }
+  if (wireSig.length !== 65) return false
+  const target = pubkeyHex.trim().toLowerCase()
+  const recoveryIdFirst = new Uint8Array([wireSig[64]!, ...wireSig.subarray(0, 64)])
+  for (const candidate of [recoveryIdFirst, wireSig]) {
+    try {
+      if (bytesToHex(secp256k1.recoverPublicKey(candidate, digest, {prehash: false})) === target) return true
+    } catch {
+      // wrong recovery id for this order - try the other
+    }
+  }
+  return false
+}
+
 export type NoteSigner = {
   pubkey: string
   sign: (noteId: string, amountMsat: number) => string

@@ -98,6 +98,7 @@ default, and a variable set to an empty string counts as unset.
 | `MONEYER_STATS` | `true` | the `/stats` endpoint. Off means 404 |
 | `MONEYER_STATS_RATIO_ONLY` | `false` | publish the coverage ratio alone, without the size of the book |
 | `MONEYER_STATS_PUBLISH` | `false` | publish a signed hourly snapshot of `/stats` to Nostr |
+| `MONEYER_ANNOUNCE` | `false` | announce this mint on Nostr, hourly, so a wallet can find it (see below) |
 | `MONEYER_METRICS` | `false` | the `/metrics` endpoint, in the OpenMetrics text format |
 | `MONEYER_NAME_PRICE_MSAT` | | what a self-service lightning address costs. Unset means registration is closed; `0` means free |
 
@@ -232,6 +233,32 @@ history adds nothing new to trust.
 ```bash
 node scripts/verify-stats.mjs <mintPubkey> snapshot.json
 ```
+
+## Announcing the mint
+
+A wallet only ever learns of a mint by being told its address. There is no
+way to find one, and nothing that might follow from finding one, a list or
+a recommendation, can exist until that first step does.
+
+With `MONEYER_ANNOUNCE=true`, and the same Nostr identity zap-to-note
+uses, the mint announces itself on the same hourly pass as the snapshot:
+kind 30078 again, `d` tag `lnurlcash-mint`. The content is this mint's own
+discovery document, exactly as `/.well-known/lnurlw/<user>` serves it, so
+there is one description of a mint rather than two that drift apart. It
+carries a `sig` over the canonicalised (RFC 8785) document made with the
+**note signing key**, so a holder can check that the mint announcing
+itself is the mint their notes verify against, whoever the Nostr identity
+publishing it belongs to. `verifyAnnouncement` in this package does that
+check.
+
+Off by default, deliberately. A mint that does not want to be listed says
+nothing, and turning it on is the operator saying otherwise. Announcing
+needs `MONEYER_PUBLIC_ORIGIN`, since an announcement made with a `Host`
+header nobody sent is an address nobody can call back on.
+
+There is no recommendation or review here, and no new event kind. Both are
+protocol decisions that belong with the LNURLcash NIPs rather than with a
+single mint's implementation.
 
 ## The mint fee, and the rounding question
 

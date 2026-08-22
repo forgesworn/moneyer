@@ -25,7 +25,7 @@ export {
   type MintInvoiceRow,
   type Liabilities
 } from './store.ts'
-export {createNoteSigner, noteIdSignatureDigest, type NoteSigner} from './signing.ts'
+export {createNoteSigner, noteIdSignatureDigest, recoversToPubkey, signDigestRecoverable, type NoteSigner} from './signing.ts'
 export {
   STATS_D_TAG,
   STATS_KIND,
@@ -38,6 +38,17 @@ export {
   verifyStatsSnapshot,
   type MintStats
 } from './stats.ts'
+export {
+  ANNOUNCE_D_TAG,
+  ANNOUNCE_KIND,
+  ANNOUNCE_MESSAGE_PREFIX,
+  announcementContent,
+  announcementDigest,
+  canonicalise,
+  signAnnouncement,
+  verifyAnnouncement,
+  type MintAddressDocument
+} from './announce.ts'
 export {
   PaymentAlreadyKnownError,
   PaymentFailedError,

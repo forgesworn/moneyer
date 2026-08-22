@@ -82,6 +82,12 @@ export type MoneyerConfig = {
   // history can be checked after the fact. Needs a signing key and the
   // zap Nostr identity.
   statsPublish?: boolean
+  // Announce this mint on Nostr, hourly, alongside the snapshot: the
+  // discovery document as a replaceable event, so a wallet can find the
+  // mint rather than having to be told its address. Off unless the
+  // operator turns it on - a mint that does not want to be listed says
+  // nothing. Needs the zap Nostr identity and a public origin.
+  announce?: boolean
   // GET /metrics in the OpenMetrics text format, for a scraper. Off by
   // default and never authenticated by the app: the deployment notes
   // restrict the path at the reverse proxy, which is where that belongs.
@@ -125,6 +131,7 @@ export const DEFAULTS = {
   stats: true,
   statsRatioOnly: false,
   statsPublish: false,
+  announce: false,
   metrics: false
 } as const
 
@@ -264,6 +271,12 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
   if (zap && zap.names[env.MONEYER_USERNAME ?? DEFAULTS.username]) {
     throw new Error('MONEYER_ZAP_NAMES must not reuse the mint username.')
   }
+  if (flag(env.MONEYER_ANNOUNCE, DEFAULTS.announce) && !zap) {
+    // An announcement is a Nostr event, and the mint's Nostr identity is
+    // the zap one. Turning this on without it would be a mint that thinks
+    // it is listed and is not.
+    throw new Error('MONEYER_ANNOUNCE needs the mint Nostr identity - set MONEYER_NOSTR_KEY and MONEYER_NOSTR_RELAYS.')
+  }
   if (zap && !publicOrigin) {
     // A settled zap is minted by a timer, with no request to read a Host
     // header from, and the note URL it wraps must be right first time.
@@ -293,6 +306,7 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     stats: flag(env.MONEYER_STATS, DEFAULTS.stats),
     statsRatioOnly: flag(env.MONEYER_STATS_RATIO_ONLY, DEFAULTS.statsRatioOnly),
     statsPublish: flag(env.MONEYER_STATS_PUBLISH, DEFAULTS.statsPublish),
+    announce: flag(env.MONEYER_ANNOUNCE, DEFAULTS.announce),
     metrics: flag(env.MONEYER_METRICS, DEFAULTS.metrics),
     ...(env.MONEYER_WALLET_URL ? {walletUrl: env.MONEYER_WALLET_URL.replace(/\/+$/, '')} : {}),
     maxK1s: int(env.MONEYER_MAX_K1S, DEFAULTS.maxK1s),

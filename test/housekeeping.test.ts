@@ -5,6 +5,7 @@ import {hashK1} from 'lnurlcash-kit'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
 import {sweepExpiredMintInvoices} from '../src/server.ts'
 import {STATS_D_TAG, STATS_KIND, verifyStatsSnapshot} from '../src/stats.ts'
+import {ANNOUNCE_D_TAG, ANNOUNCE_KIND, verifyAnnouncement} from '../src/announce.ts'
 import type {NostrTransport} from '../src/zap.ts'
 import {TEST_SIGNING_KEY, freshK1, startMint, waitFor, type TestMint} from './helpers.ts'
 
@@ -136,6 +137,60 @@ describe('the signed liabilities snapshot', () => {
     const relay = recordingRelay()
     const mint = await startPublishingMint(relay, {statsPublish: false})
     await mint.moneyer.publishStats()
+    expect(relay.published).toHaveLength(0)
+  })
+})
+
+// The mint announcing itself. A wallet has no way to discover a mint at
+// all otherwise, and everything that might follow - a list, a
+// recommendation - needs a mint to be findable first.
+
+describe('the mint announcement', () => {
+  it('announces the discovery document, signed by the key its notes verify against', async () => {
+    const relay = recordingRelay()
+    const mint = await startPublishingMint(relay, {statsPublish: false, announce: true})
+    await mint.moneyer.publishAnnouncement()
+
+    const event = relay.published.at(-1)!
+    expect(event.kind).toBe(ANNOUNCE_KIND)
+    expect(event.tags).toContainEqual(['d', ANNOUNCE_D_TAG])
+    expect(event.pubkey).toBe(getPublicKey(hexToBytes(MINT_NOSTR_KEY)))
+
+    const checked = verifyAnnouncement(event.content, mint.moneyer.signer!.pubkey)
+    expect(checked.valid).toBe(true)
+    // The same document the endpoint serves, so a wallet reading the
+    // announcement and a wallet reading the mint see one description.
+    const served = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlw/mint`)).json()) as Record<string, unknown>
+    expect(checked.document).toEqual(served)
+    expect(checked.document!.callback).toBe('http://mint.test/w')
+    expect(checked.document!.mintPubkey).toBe(mint.moneyer.signer!.pubkey)
+  })
+
+  it('refuses a tampered announcement', async () => {
+    const relay = recordingRelay()
+    const mint = await startPublishingMint(relay, {statsPublish: false, announce: true})
+    await mint.moneyer.publishAnnouncement()
+
+    const announced = JSON.parse(relay.published.at(-1)!.content) as Record<string, unknown>
+    // Somebody republishing a mint's own words with the callback pointed
+    // at themselves is the whole reason this carries a signature.
+    const tampered = JSON.stringify({...announced, callback: 'http://not-the-mint.test/w'})
+    expect(verifyAnnouncement(tampered, mint.moneyer.signer!.pubkey).valid).toBe(false)
+    // And so is a mint pubkey other than the one that signed it.
+    expect(verifyAnnouncement(relay.published.at(-1)!.content, '02'.repeat(33)).valid).toBe(false)
+  })
+
+  it('goes out on the hourly pass beside the snapshot', async () => {
+    const relay = recordingRelay()
+    await startPublishingMint(relay, {announce: true})
+    await waitFor(() => relay.published.some(event => event.tags.some(tag => tag[1] === ANNOUNCE_D_TAG)))
+    await waitFor(() => relay.published.some(event => event.tags.some(tag => tag[1] === STATS_D_TAG)))
+  })
+
+  it('stays quiet unless the operator turned it on', async () => {
+    const relay = recordingRelay()
+    const mint = await startPublishingMint(relay, {statsPublish: false})
+    await mint.moneyer.publishAnnouncement()
     expect(relay.published).toHaveLength(0)
   })
 })
