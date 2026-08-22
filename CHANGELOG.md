@@ -47,8 +47,10 @@ additive on the wire apart from the node-capacity rename below.
   and the discovery document advertise `mintToHash: true` so a wallet
   knows before it asks. Claiming needs no `verify` poll: the wallet asks
   `/w?k1=<its own secret>` directly. Entirely optional and additive: a
-  wallet that sends no `h` gets exactly today's behaviour, and the LUD-25
-  draft needs no change. Wallets are urged to persist the secret before
+  wallet that sends no `h` gets exactly today's behaviour, and no existing
+  wallet or service breaks. The draft itself does need one additive
+  amendment, because it says a `SERVICE` MUST accept `k1=P` and a bound
+  mint deliberately does not; that is proposed separately. Wallets are urged to persist the secret before
   requesting the invoice, which is the one thing that could make this
   worse than what it replaces.
 - A live note's informational GET now carries `payLink`, pointing at this
