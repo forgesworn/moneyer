@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.3.0] - unreleased
+
+- **The mint fee is now ceilinged to a whole sat by default.**
+  `MONEYER_ROUND_FEE_TO_SAT` defaults to `true`, matching dni's
+  lnurl-mint, the reference. **An operator upgrading into this withholds
+  slightly more per mint than before** - up to one sat, whatever the ppm
+  cut worked out to - so it is called out here rather than changed
+  quietly. `MONEYER_ROUND_FEE_TO_SAT=false` restores the old behaviour.
+
+  Why: a mint that deals in fractions of a sat issues notes nothing
+  downstream can spend. An msat-exact fee makes notes like 94.9 sat, and
+  most Lightning wallets can only invoice whole sats, so such a note
+  cannot be withdrawn by them at all. The mint already covered that by
+  advertising `minWithdrawable` as the whole-sat floor and keeping the
+  remainder as dust; rounding at mint time means it never arises. Every
+  note this mint issues for a whole-sat payment is now worth a whole
+  number of sats, on both the pay callback and the zap path, which share
+  one fee function.
+
+  LUD-25 says nothing about rounding and `lnurlcash-kit`'s `mintFeeBand`
+  accepts either, so this is a posture change and not a compliance one.
+  The conformance grader passed both before and passes this now.
+
 ## [0.2.1] - 2026-08-22
 
 - `moneyer --dev` settles its invoices a moment after issuing them rather

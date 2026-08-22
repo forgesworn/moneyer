@@ -87,7 +87,7 @@ default, and a variable set to an empty string counts as unset.
 | `MONEYER_PREVIOUS_SIGNING_PUBKEYS` | | compressed pubkeys this mint signed under before, comma separated (see below) |
 | `MONEYER_BASE_FEE_MSAT` | `0` | flat mint fee |
 | `MONEYER_FEE_PPM` | `0` | proportional mint fee, parts per million |
-| `MONEYER_ROUND_FEE_TO_SAT` | `false` | ceiling the mint fee to a whole sat (see below) |
+| `MONEYER_ROUND_FEE_TO_SAT` | `true` | ceiling the mint fee to a whole sat (see below) |
 | `MONEYER_MIN_SENDABLE_MSAT` | `1000` | smallest payment the mint advertises |
 | `MONEYER_MAX_SENDABLE_MSAT` | `100000000` | largest payment the mint advertises |
 | `MONEYER_MIN_MINT_MSAT` | `1000` | dust floor: the smallest note the mint will strike |
@@ -269,16 +269,20 @@ the msat-exact amount. Neither is out of spec - lnurlcash-kit's
 `mintFeeBand` treats anything between the two as the mint keeping its
 word, and the conformance grader accepts both.
 
-`MONEYER_ROUND_FEE_TO_SAT=true` switches this mint to the reference's
-behaviour. Off by default: turning it on raises what the mint withholds,
-and that is not a change to make behind an operator's back on a redeploy.
+**moneyer rounds, by default.** A mint that deals in fractions of a sat
+issues notes nothing downstream can spend: msat-exact fees make notes like
+94.9 sat, and most Lightning wallets can only invoice whole sats, so such
+a note cannot be withdrawn by them at all. moneyer covers the notes
+already out there by advertising `minWithdrawable` as the note floored to
+a whole sat and accepting a melt for that, keeping the sub-sat remainder
+as dust - a wart it should not need. Rounding at mint time means it never
+comes up, and every note this mint issues for a whole-sat payment is worth
+a whole number of sats.
 
-Why you probably want it on anyway: msat-exact fees make notes like 94.9
-sat, and most Lightning wallets can only invoice whole sats, so such a
-note cannot be withdrawn by them. moneyer covers the notes already out
-there by advertising `minWithdrawable` as the note floored to a whole sat
-and accepting a melt for that; the sub-sat remainder is dust the mint
-keeps. Rounding at mint time means it never comes up.
+`MONEYER_ROUND_FEE_TO_SAT=false` restores the msat-exact fee. An operator
+upgrading into this default withholds slightly more per mint than before,
+which is why the changelog says so plainly rather than letting a redeploy
+change it quietly.
 
 ## Melting to an invoice with no amount
 
