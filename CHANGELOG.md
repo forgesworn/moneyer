@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.0] - unreleased
+## [0.2.0] - 2026-08-22
 
 While LUD-25 is a draft, a `0.x` minor bump may be breaking; this one is
 additive on the wire apart from the node-capacity rename below.
