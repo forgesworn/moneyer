@@ -63,6 +63,14 @@ if (config.backend.kind === 'fake' && !values.dev) {
   console.error('The fake funding source mints unpayable invoices - refusing to run it outside --dev.')
   process.exit(1)
 }
+// --dev means a mint a wallet can actually use. Without settling invoices
+// the fake source hands out quotes nobody can pay, so a wallet pointed at
+// it mints nothing and has no note to split, merge, melt or send - the
+// mint looks alive and every flow that needs money dead-ends. Only ever
+// reachable here, on the one backend that moves nothing.
+if (config.backend.kind === 'fake' && values.dev) {
+  config.backend = {...config.backend, autoSettle: true}
+}
 
 const log = (message: string) => console.error(`[moneyer] ${message}`)
 const moneyer = await createMoneyer(config, {log})
@@ -76,7 +84,9 @@ if (values.dev) {
   const k1 = bytesToHex(randomBytes(32))
   moneyer.store.creditNote(hashK1(k1), 21_000)
   console.log(`  a 21 sat note:     ${buildNoteUrl(`${moneyer.url}/w`, k1, 21_000)}`)
-  console.log('\nnothing here is payable - the fake funding source invents its invoices')
+  console.log(
+    '\nDEV MINT - the fake funding source invents its invoices and treats every one\nof them as paid the moment it is issued, so minting here costs nothing and\nthe notes it hands out are worth nothing. Melts always succeed and send no\nsats anywhere. Never point a wallet holding real money at this.'
+  )
 }
 
 const shutdown = () => {

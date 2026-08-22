@@ -5,6 +5,23 @@
 While LUD-25 is a draft, a `0.x` minor bump may be breaking; this one is
 additive on the wire apart from the node-capacity rename below.
 
+- The test suite has a 30 second timeout rather than vitest's 5 second
+  default. Nearly every test here starts an HTTP server, opens a database
+  and does real curve and KDF work; 5 seconds is a unit test's budget, and
+  on a loaded machine the slower cases crossed it while passing perfectly
+  well. A gate that fails at random teaches people to bypass it.
+- **`moneyer --dev` is a mint a wallet can actually use.** The fake
+  funding source settled nothing on its own: settlement was reachable only
+  through an in-process handle a test holds, so a wallet pointed at a
+  standalone `MONEYER_BACKEND=fake` mint asked for an invoice, nothing ever
+  paid it, no note was ever minted, and every flow needing a note - split,
+  merge, melt, send - dead-ended behind an empty wallet while the mint
+  looked healthy throughout. `--dev` now treats every invoice it issues as
+  paid the moment it is issued, so minting, splitting and melting all work
+  locally against a wallet. It can only be set on the fake backend, which
+  moves no money, and the startup banner says plainly that the notes are
+  worth nothing. `MONEYER_FAKE_AUTOSETTLE=true` sets it explicitly for a
+  compose file that cannot pass a flag.
 - The mint can announce itself. With `MONEYER_ANNOUNCE=true` and the Nostr
   identity zap-to-note already uses, it publishes its own discovery
   document hourly as a parameterised replaceable event (kind 30078, `d`

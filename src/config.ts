@@ -5,7 +5,7 @@ import {decode as decodeNip19, npubEncode} from 'nostr-tools/nip19'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 
 export type BackendConfig =
-  | {kind: 'fake'}
+  | {kind: 'fake'; autoSettle?: boolean}
   | {kind: 'cln'; url: string; rune: string}
   | {kind: 'lnd'; url: string; macaroon: string}
 
@@ -214,7 +214,12 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
   const kind = env.MONEYER_BACKEND ?? 'fake'
   let backend: BackendConfig
   if (kind === 'fake') {
-    backend = {kind: 'fake'}
+    // A development-only shortcut, and only reachable on the backend that
+    // moves no money: every invoice this mint issues is treated as paid
+    // the instant it is issued. It is what makes a local mint usable to a
+    // wallet, and it would be a licence to print sats on any other
+    // backend, which is why it is read here and nowhere else.
+    backend = {kind: 'fake', autoSettle: env.MONEYER_FAKE_AUTOSETTLE === 'true'}
   } else if (kind === 'cln') {
     if (!env.MONEYER_BACKEND_URL || !env.MONEYER_BACKEND_RUNE) {
       throw new Error('The cln backend needs MONEYER_BACKEND_URL and MONEYER_BACKEND_RUNE.')
