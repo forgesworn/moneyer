@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.2] - 2026-08-22
+
+- **A note with a melt in flight is no longer advertised as withdrawable.**
+  The mutating callback already refused a pending note; the informational
+  GET did not, so the check LUD-25 points a careful holder at was the one
+  that lied. That is the exact gap a sell-during-melt needs: start a melt,
+  show the buyer a healthy GET, take payment out of band, let the melt
+  settle. `fetchNoteInfo` on a pending note now fails the same way the
+  callback does, and lnurlcash-kit classifies it as `PendingNoteError`, so
+  a wallet parks the note rather than writing it off as unknown. Found by
+  re-reading LUD-25 against dni's lnurl-mint, which has had this guard.
+- A flake in the melt suite: `leaves an unconfirmable outcome pending`
+  slept a fixed 100 ms, which was waiting for an in-flight melt to finish
+  exhausting its confirmations rather than for any state, and reconcile
+  deliberately skips a melt this process still has in flight. It now
+  retries reconcile until it can act.
+
 ## [0.3.1] - 2026-08-22
 
 - **Rounding the fee to a whole sat now really is the default.** 0.3.0
