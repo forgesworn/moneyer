@@ -34,6 +34,22 @@ export type FakePayMode =
   | 'ambiguous-unpaid'
   | 'ambiguous-pending'
 
+// Long enough that an unpaid invoice reads as unpaid to anything looking
+// at it in the same breath it was issued, short enough that nobody
+// developing against a dev mint notices the wait.
+export const DEFAULT_AUTO_SETTLE_AFTER_MS = 1_500
+
+// An invoice is paid if something paid it, or if autoSettle's moment has
+// arrived. Read rather than scheduled: no timer to leak when a mint is
+// closed, and a test that fakes the clock sees the same answer.
+const isSettled = (
+  invoice: {settled: boolean; settleAt: number | null} | undefined
+): boolean => {
+  if (!invoice) return false
+  if (invoice.settled) return true
+  return invoice.settleAt !== null && Date.now() >= invoice.settleAt
+}
+
 type PaymentRecord = {
   status: 'complete' | 'failed' | 'pending'
   preimageHex: string | null
@@ -42,8 +58,8 @@ type PaymentRecord = {
 }
 
 export type FakeBackendOptions = {
-  // Mint invoices are born settled, as if a payer had paid them the moment
-  // they were issued.
+  // Mint invoices settle on their own a moment after they are issued, as
+  // if a payer had paid them promptly.
   //
   // Without this a fake mint can issue invoices and nothing can ever pay
   // one: settlement is only reachable through `control.settleInvoice`,
@@ -53,6 +69,17 @@ export type FakeBackendOptions = {
   // needs one - splitting, merging, melting, sending. Off by default so
   // the tests that drive settlement by hand keep their exact timing.
   autoSettle?: boolean
+  // How long after issuing an invoice `autoSettle` treats it as paid.
+  //
+  // Not zero, and the difference matters. Settling at the instant of
+  // issuance makes the mint claim an invoice nobody has paid is already
+  // settled, which is indistinguishable on the wire from a mint that
+  // hands out a note before it has been paid for - the conformance
+  // grader fails it on exactly that, and rightly. A short delay keeps
+  // "nothing has paid this yet" true for as long as it really is true,
+  // and a wallet still mints without waiting on anything a human has to
+  // do. A fast payer, rather than one that pays before being asked.
+  autoSettleAfterMs?: number
 }
 
 export type FakeBackend = LightningBackend & {
@@ -84,7 +111,11 @@ export const FAKE_LOCAL_BALANCE_MSAT = 100_000_000_000
 
 export const createFakeBackend = (options: FakeBackendOptions = {}): FakeBackend => {
   const autoSettle = options.autoSettle === true
-  const invoices = new Map<string, {preimageHex: string; amountMsat: number; settled: boolean}>()
+  const autoSettleAfterMs = options.autoSettleAfterMs ?? DEFAULT_AUTO_SETTLE_AFTER_MS
+  // `settleAt` is when autoSettle starts calling this invoice paid; null
+  // for an invoice only control.settleInvoice can settle, which is every
+  // invoice unless autoSettle is on.
+  const invoices = new Map<string, {preimageHex: string; amountMsat: number; settled: boolean; settleAt: number | null}>()
   const payments = new Map<string, PaymentRecord>()
   const knownPreimages = new Map<string, string>()
   let localBalanceMsat: number | undefined = FAKE_LOCAL_BALANCE_MSAT
@@ -96,7 +127,12 @@ export const createFakeBackend = (options: FakeBackendOptions = {}): FakeBackend
     async createInvoice({amountMsat, preimageHex, memo}) {
       const paymentHashHex = bytesToHex(sha256(hexToBytes(preimageHex)))
       const pr = fakeBolt11({amountMsat, paymentHashHex, memo})
-      invoices.set(paymentHashHex, {preimageHex, amountMsat, settled: autoSettle})
+      invoices.set(paymentHashHex, {
+        preimageHex,
+        amountMsat,
+        settled: false,
+        settleAt: autoSettle ? Date.now() + autoSettleAfterMs : null
+      })
       return {pr}
     },
 
@@ -142,12 +178,12 @@ export const createFakeBackend = (options: FakeBackendOptions = {}): FakeBackend
     },
 
     async isInvoiceSettled(paymentHashHex) {
-      return invoices.get(paymentHashHex)?.settled ?? false
+      return isSettled(invoices.get(paymentHashHex))
     },
 
     async invoicePreimage(paymentHashHex) {
       const invoice = invoices.get(paymentHashHex)
-      return invoice?.settled ? invoice.preimageHex : null
+      return isSettled(invoice) ? invoice!.preimageHex : null
     },
 
     async paymentPreimage(paymentHashHex) {
@@ -193,7 +229,11 @@ export const createFakeBackend = (options: FakeBackendOptions = {}): FakeBackend
         localBalanceMsat = msat
       },
       invoiceByHash(paymentHashHex) {
-        return invoices.get(paymentHashHex)
+        const invoice = invoices.get(paymentHashHex)
+        // `settled` here answers "is it paid now", so autoSettle's moment
+        // counts. A caller reading the stored flag would see false for an
+        // invoice the mint itself treats as paid.
+        return invoice && {...invoice, settled: isSettled(invoice)}
       }
     }
   }

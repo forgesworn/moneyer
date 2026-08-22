@@ -5,7 +5,7 @@ import {decode as decodeNip19, npubEncode} from 'nostr-tools/nip19'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 
 export type BackendConfig =
-  | {kind: 'fake'; autoSettle?: boolean}
+  | {kind: 'fake'; autoSettle?: boolean; autoSettleAfterMs?: number}
   | {kind: 'cln'; url: string; rune: string}
   | {kind: 'lnd'; url: string; macaroon: string}
 

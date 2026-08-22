@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.1] - 2026-08-22
+
+- `moneyer --dev` settles its invoices a moment after issuing them rather
+  than at the instant of issuance. Settling immediately made the mint
+  report an invoice nobody had paid as already settled, which on the wire
+  is indistinguishable from a mint handing out a note before it has been
+  paid for - the conformance grader failed it on exactly that, and was
+  right to. A dev mint should behave like a fast payer, not one that pays
+  before being asked. `autoSettleAfterMs` sets the delay; it defaults to
+  1.5 seconds, which nobody developing against a local mint notices.
+  A freshly started `--dev` mint now grades 24 passed, 0 failed.
+
 ## [0.2.0] - 2026-08-22
 
 While LUD-25 is a draft, a `0.x` minor bump may be breaking; this one is
