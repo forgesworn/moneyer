@@ -44,11 +44,23 @@ export type MoneyerConfig = {
   // means fee-free.
   mintFee: MintFee | null
   // Ceiling the mint fee to a whole sat, as dni's lnurl-mint does on
-  // purpose so it is "never short a sat". LUD-25 says nothing either way,
+  // purpose so it is "never short a sat". LUD-25 says nothing either way
   // and lnurlcash-kit's mintFeeBand accepts both, so this is a posture
-  // choice rather than a compliance one. Off by default: turning it on
-  // raises what this mint withholds, and that is not a change to make
-  // behind an operator's back on a redeploy.
+  // choice rather than a compliance one.
+  //
+  // ON by default, because the alternative deals in fractions of a sat
+  // that nothing downstream can spend. An msat-exact fee makes notes like
+  // 94.9 sat, and most Lightning wallets can only invoice whole sats, so
+  // such a note cannot be withdrawn by them at all - the mint covers that
+  // by accepting a melt for the whole-sat floor and keeping the remainder
+  // as dust, which is a wart it should not need. Rounding at mint time
+  // means every note this mint issues for a whole-sat payment is worth a
+  // whole number of sats, and matches the reference implementation.
+  //
+  // `MONEYER_ROUND_FEE_TO_SAT=false` restores the msat-exact fee. An
+  // operator upgrading into this default withholds slightly more than
+  // before, so it is called out loudly in the changelog rather than
+  // changed quietly.
   roundFeeToSat?: boolean
   // 32-byte hex. Unset means notes are issued unsigned, which the spec
   // allows but holders will notice.
@@ -127,7 +139,7 @@ export const DEFAULTS = {
   verify: true,
   maxK1s: 21,
   sunset: false,
-  roundFeeToSat: false,
+  roundFeeToSat: true,
   stats: true,
   statsRatioOnly: false,
   statsPublish: false,
