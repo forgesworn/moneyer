@@ -26,11 +26,13 @@ parameters in one request are refused outright; they would otherwise count
 one note's value twice into the output.
 
 **A holder claiming an output id that already exists.** `h`/`h2` may not
-collide with any existing note OR any mint invoice's payment hash, settled
-or not. The invoice case is the subtle one: `/verify` hands a settled mint
-invoice's preimage to its payer, and that preimage is the k1 of whatever
-note carries the hash as its id - minting "over" such an id would point a
-future payer's money at a stranger's note.
+collide with any existing note, any mint invoice's payment hash, settled
+or not, or any note a payer has bought by naming it. The invoice cases are
+the subtle ones: `/verify` hands a settled mint invoice's preimage to its
+payer, and that preimage is the k1 of whatever note carries the hash as
+its id - minting "over" such an id would point a future payer's money at a
+stranger's note. A named note is the same hazard one step earlier, since
+it is spoken for before it exists.
 
 **A holder melting into the mint's own invoice.** Refused synchronously:
 paying it would route the funding source's money at itself, which real
@@ -70,11 +72,18 @@ runs at startup and on demand, resolving pending melts by asking the
 funding source, never by assumption.
 
 **The verify endpoint as an oracle.** `/verify` serves bearer material
-(the preimage). It is only served once the funding source reports
+(the preimage) whenever the note was minted the old way, at the invoice's
+payment hash. It is only served once the funding source reports
 settlement, is fetched live rather than cached, and has a real off switch
 (`MONEYER_VERIFY=0` makes it a 404). Anyone who saw the unpaid invoice can
 poll it, which is why wallets must rotate immediately on claim - stated in
 the spec and enforced by the companion wallet.
+
+The durable answer is for the wallet to name the note it is buying (`h` on
+the pay callback, see the README). The note is then credited at a secret
+only the buyer ever held, the preimage is bearer material for nothing, and
+what `/verify` serves is an ordinary payment proof. Wallets should prefer
+that path wherever a mint advertises `mintToHash`.
 
 ## Out of scope
 

@@ -1,8 +1,9 @@
 # moneyer
 
 LNURLcash (LUD-25) mint for Node 24+. Strikes Lightning bearer notes:
-paying an invoice it issues mints a note whose spend secret IS the
-invoice's payment preimage. ESM-only. MIT.
+paying an invoice it issues mints a note whose spend secret is the
+invoice's payment preimage, or a secret the buyer named with `h` on the
+pay callback. ESM-only. MIT.
 
 Install: not yet on npm - build from source (see README)
 Run: node dist/cli.js --dev   (fake funding source, prints a funded note)
@@ -16,12 +17,21 @@ Client library to build against a mint: lnurlcash-kit
 
 1. A mint invoice's preimage is the note secret - the funding source must
    accept a caller-supplied preimage (cln and lnd do; phoenixd and NIP-47
-   make_invoice do not, and cannot back a mint).
+   make_invoice do not, and cannot back a mint). UNLESS the payer sent
+   `h` on the pay callback: then the note is credited at `h`, the payer's
+   own secret, and the preimage is only a payment proof. Prefer that: a
+   preimage is known to the funding source, to every node on the route,
+   and to anyone who polls verify with the payment hash in the invoice.
 2. Mutations are atomic: all named k1 burn and all outputs mint, or
    nothing happens. Duplicate k1 in one request is refused.
 3. h/h2 are WALLET-supplied hashes; the mint never generates a
-   replacement secret, and refuses output ids that already exist as notes
-   or as mint-invoice payment hashes.
+   replacement secret, and refuses output ids that already exist as
+   notes, as mint-invoice payment hashes, or as a note another payer has
+   already bought with `h`. A malformed `h` on the pay callback is
+   refused BEFORE an invoice is issued; a colliding one gets the same
+   oracle-free refusal a colliding mutation output gets. The reply
+   carries mintToHash: true when the invoice was bound, and the
+   payRequest and mint address advertise mintToHash: true.
 4. Melt OK means IN FLIGHT. The note burns only on confirmed payment,
    restores only on confirmed non-payment, and stays pending otherwise.
    A clean failure REPORT is not confirmation (hodl invoices).
@@ -58,7 +68,7 @@ NoteStore - SQLite store; notes by sha256(k1), never secrets
 
 /.well-known/lnurlp/{user}  LUD-16 payRequest (mints)
 /.well-known/lnurlw/{user}  LUD-25 mint address (experimental)
-/p/cb                       LUD-06 pay callback
+/p/cb                       LUD-06 pay callback (optional h names the note)
 /verify/{payment_hash}      LUD-21 verify (mint invoices AND melt payments)
 /w                          LUD-03 informational GET
 /w/cb                       melt / rotate / split / merge
