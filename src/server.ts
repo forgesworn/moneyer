@@ -377,7 +377,20 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       })
       res.end(JSON.stringify(body))
     }
-    const fail = (reason: string, status = 200): void => send({status: 'ERROR', reason}, status)
+    // Refusals go to the operator's log, because a mint that refuses in
+    // silence cannot be debugged from the outside: a wallet shows its user
+    // "already spent" and the operator has nothing at all to compare it to.
+    //
+    // The PATHNAME only, never the query string: a note URL carries the k1,
+    // and a k1 is the money. And never the informational GET, which a
+    // single restore walks twenty-odd unknown indexes of by design - that
+    // is not news, and burying the rare refusals under it defeats the point.
+    const fail = (reason: string, status = 200): void => {
+      if (requestUrl.pathname !== '/w') {
+        log(`refused ${req.method ?? 'GET'} ${requestUrl.pathname}: ${reason}`)
+      }
+      send({status: 'ERROR', reason}, status)
+    }
 
     const knownUser = (user: string): boolean => user === config.username || user === '_'
 
