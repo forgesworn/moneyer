@@ -41,6 +41,20 @@ type PaymentRecord = {
   amountMsat: number | null
 }
 
+export type FakeBackendOptions = {
+  // Mint invoices are born settled, as if a payer had paid them the moment
+  // they were issued.
+  //
+  // Without this a fake mint can issue invoices and nothing can ever pay
+  // one: settlement is only reachable through `control.settleInvoice`,
+  // which is an in-process handle a test holds. A wallet talking to a
+  // standalone `MONEYER_BACKEND=fake` mint over HTTP therefore mints
+  // nothing, holds no notes, and cannot exercise a single thing that
+  // needs one - splitting, merging, melting, sending. Off by default so
+  // the tests that drive settlement by hand keep their exact timing.
+  autoSettle?: boolean
+}
+
 export type FakeBackend = LightningBackend & {
   control: {
     // Marks a mint invoice paid, as the payer's wallet would.
@@ -68,7 +82,8 @@ export type FakeBackend = LightningBackend & {
 // One bitcoin, so a development mint covers anything it is likely to mint.
 export const FAKE_LOCAL_BALANCE_MSAT = 100_000_000_000
 
-export const createFakeBackend = (): FakeBackend => {
+export const createFakeBackend = (options: FakeBackendOptions = {}): FakeBackend => {
+  const autoSettle = options.autoSettle === true
   const invoices = new Map<string, {preimageHex: string; amountMsat: number; settled: boolean}>()
   const payments = new Map<string, PaymentRecord>()
   const knownPreimages = new Map<string, string>()
@@ -81,7 +96,7 @@ export const createFakeBackend = (): FakeBackend => {
     async createInvoice({amountMsat, preimageHex, memo}) {
       const paymentHashHex = bytesToHex(sha256(hexToBytes(preimageHex)))
       const pr = fakeBolt11({amountMsat, paymentHashHex, memo})
-      invoices.set(paymentHashHex, {preimageHex, amountMsat, settled: false})
+      invoices.set(paymentHashHex, {preimageHex, amountMsat, settled: autoSettle})
       return {pr}
     },
 

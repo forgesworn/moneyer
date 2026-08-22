@@ -46,8 +46,11 @@ afterEach(async () => {
 
 type CallbackReply = {status?: string; reason?: string; pr?: string; verify?: string; mintToHash?: boolean}
 
-// The pay callback called directly: lnurlcash-kit 0.1.x has no way to send
-// `h` yet, and the wire is the contract being tested.
+// The pay callback called directly. lnurlcash-kit can send `h` now, and
+// test/bound-mint-e2e.test.ts drives the whole purchase through it, but
+// these cases stay on the raw wire on purpose: most of them send shapes a
+// wallet library refuses client-side, and refusing to send is not the same
+// property as refusing to honour.
 const payCallback = async (mint: TestMint, params: Record<string, string>): Promise<CallbackReply> => {
   const url = new URL(`${mint.moneyer.url}/p/cb`)
   for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value)
