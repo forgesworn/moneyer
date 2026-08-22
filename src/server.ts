@@ -734,6 +734,15 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       const note = await resolveNote(k1)
       if (!note) return fail('Unknown note.')
       if (note.state === 'burned') return fail('Note already spent.')
+      // A note reserved by an in-flight melt is not withdrawable, and must
+      // not be advertised as though it were. LUD-25 makes this GET the way
+      // anyone checks what a note is worth, so answering "live, worth all
+      // of it" about a note halfway out of the door is the exact lie a
+      // sell-during-melt needs: the seller starts a melt, shows the buyer a
+      // healthy GET, takes payment out of band, and the melt settles. Same
+      // reason the mutating callback already gives, and the same one dni's
+      // lnurl-mint gives here.
+      if (note.state === 'pending') return fail('pending')
       // maxWithdrawable states the note's value, as the reference does.
       // minWithdrawable is that value floored to a whole sat: most Lightning
       // wallets can only invoice whole sats, and a note of 94.9 sat that
