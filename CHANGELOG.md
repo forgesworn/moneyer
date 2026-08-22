@@ -5,6 +5,20 @@
 While LUD-25 is a draft, a `0.x` minor bump may be breaking; this one is
 additive on the wire apart from the node-capacity rename below.
 
+- The mint can announce itself. With `MONEYER_ANNOUNCE=true` and the Nostr
+  identity zap-to-note already uses, it publishes its own discovery
+  document hourly as a parameterised replaceable event (kind 30078, `d`
+  tag `lnurlcash-mint`), alongside the liabilities snapshot. Until now a
+  wallet could only learn of a mint by being told its address; this is the
+  half that has to exist before finding one means anything. The content is
+  the document exactly as the discovery endpoint serves it, so there is one
+  description of a mint and not two, plus a `sig` over the canonicalised
+  body made with the note signing key, so a holder can check the
+  announcement against the same key their notes verify against.
+  `verifyAnnouncement` is exported for that. Off unless the operator turns
+  it on: a mint that does not want to be listed says nothing. No new event
+  kind, and no recommendations or reviews; both are protocol decisions that
+  belong with the NIPs.
 - A note melts to an invoice that states no amount. Such an invoice used
   to be refused outright, which is a papercut for anyone paying one: for a
   bearer note the amount was never in question, since the note's value is

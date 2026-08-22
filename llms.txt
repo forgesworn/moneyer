@@ -60,6 +60,10 @@ Client library to build against a mint: lnurlcash-kit
 ## Library API
 
 createMoneyer(config, deps?) -> {url, port, store, backend, signer, reconcile, close}
+verifyAnnouncement(content, mintPubkey) -> {valid, document}
+  kind 30078 / d=lnurlcash-mint: a mint announcing itself, content = its
+  discovery document + sig by the note signing key. MONEYER_ANNOUNCE=true,
+  off by default.
 configFromEnv(env?) -> MoneyerConfig     MONEYER_* environment variables
 createFakeBackend() -> LightningBackend with .control test hooks
 createClnBackend({url, rune}) / createLndBackend({url, macaroon})

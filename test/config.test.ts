@@ -127,3 +127,26 @@ describe('previous signing pubkeys', () => {
     ).toThrow(/current signing key/)
   })
 })
+
+describe('announcing the mint', () => {
+  const NOSTR_KEY = '33'.repeat(32)
+
+  it('is off unless the operator turns it on', () => {
+    expect(configFromEnv({}).announce).toBe(false)
+  })
+
+  it('needs the mint Nostr identity to announce with', () => {
+    expect(() => configFromEnv({MONEYER_ANNOUNCE: 'true'})).toThrow(/MONEYER_NOSTR_KEY/)
+  })
+
+  it('turns on with the Nostr identity and a public origin', () => {
+    const config = configFromEnv({
+      MONEYER_ANNOUNCE: 'true',
+      MONEYER_NOSTR_KEY: NOSTR_KEY,
+      MONEYER_NOSTR_RELAYS: 'wss://relay.example',
+      MONEYER_PUBLIC_ORIGIN: 'https://mint.example'
+    })
+    expect(config.announce).toBe(true)
+    expect(config.zap?.nostrKey).toBe(NOSTR_KEY)
+  })
+})

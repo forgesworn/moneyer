@@ -22,6 +22,7 @@ import {landingPage} from './landing.ts'
 import {packageVersion} from './version.ts'
 import {createZapBridge, poolTransport, type NostrTransport, type ZapBridge} from './zap.ts'
 import {STATS_D_TAG, STATS_KIND, buildStats, statsSnapshotContent, type MintStats} from './stats.ts'
+import {ANNOUNCE_D_TAG, ANNOUNCE_KIND, announcementContent} from './announce.ts'
 import {isRefusal, registerName, validateNip98} from './names.ts'
 import {CONFIG_TOKEN, loadWebAssets, type WebAssets} from './web-assets.ts'
 
@@ -43,6 +44,9 @@ export type Moneyer = {
   // One signed snapshot to Nostr, if snapshots are configured. Runs
   // hourly on its own; exposed so a caller (and a test) can force a pass.
   publishStats: () => Promise<void>
+  // One announcement to Nostr, if the operator turned announcing on. Same
+  // hourly pass, exposed for the same reason.
+  publishAnnouncement: () => Promise<void>
   close: () => Promise<void>
 }
 
@@ -245,6 +249,60 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     return value
   }
 
+  // ---- the mint address document ----
+  //
+  // LUD-25 discovery, built here rather than inline in its route because
+  // the mint also announces itself with it, and there must be one
+  // description of a mint rather than two that can drift apart.
+  const mintAddressDocument = (origin: string, user: string): Record<string, unknown> => ({
+    tag: 'withdrawRequest',
+    callback: `${origin}/w`,
+    minWithdrawable: config.minMintMsat,
+    maxWithdrawable: config.mintFee
+      ? netAfterMintFee(config.maxSendableMsat)
+      : config.maxSendableMsat,
+    defaultDescription: config.description,
+    payLink: `${origin}/.well-known/lnurlp/${user}`,
+    ...(signer ? {mintPubkey: signer.pubkey} : {}),
+    // The human layer: who runs this, how to reach them, the terms,
+    // and today's message. Absent unless the operator set it.
+    ...(config.name ? {name: config.name} : {}),
+    description: config.description,
+    ...(config.contact ? {contact: config.contact} : {}),
+    ...(config.tosUrl ? {tosUrl: config.tosUrl} : {}),
+    ...(config.motd ? {motd: config.motd} : {}),
+    // The structured twin of the payRequest metadata's fee prose. Both
+    // stay: one is for a wallet that parses LUD-25, the other for a
+    // wallet that only reads a payRequest.
+    ...(config.mintFee ? {fees: config.mintFee} : {}),
+    ...(packageVersion ? {version: packageVersion} : {}),
+    // What a lightning address at this mint costs, when anyone can
+    // claim one. Absent means registration is closed.
+    ...(config.namePriceMsat !== undefined ? {namePriceMsat: config.namePriceMsat} : {}),
+    // Keys this mint has signed under before, so a wallet pinned to an
+    // old one can tell a legitimate rotation from an impostor. Always
+    // present, empty included: "never rotated" and "does not
+    // implement the field" are different answers.
+    previousPubkeys: config.previousSigningPubkeys ?? [],
+    // This mint accepts `h` on the pay callback: the payer's wallet may
+    // name the note it is buying, and then the payment preimage is not
+    // a spend secret for it. A wallet learns this before it asks for an
+    // invoice rather than after it has paid one.
+    mintToHash: true,
+    ...(nodeInfo.alias ? {nodeAlias: nodeInfo.alias} : {}),
+    ...(nodeInfo.uri ? {nodeUri: nodeInfo.uri} : {}),
+    ...(nodeInfo.color ? {nodeColor: nodeInfo.color} : {}),
+    // nodeCapacity is the name the reference mint, the conformance
+    // mock and lnurlcash-kit all use; nodeCapacityMsat was ours alone
+    // and only survived a round trip through the kit's rest-spread.
+    // Both go out for one release, then the old name goes.
+    ...(nodeInfo.capacityMsat !== undefined
+      ? {nodeCapacity: nodeInfo.capacityMsat, nodeCapacityMsat: nodeInfo.capacityMsat}
+      : {}),
+    ...(nodeInfo.numChannels !== undefined ? {nodeNumChannels: nodeInfo.numChannels} : {}),
+    ...(nodeInfo.numPeers !== undefined ? {nodeNumPeers: nodeInfo.numPeers} : {})
+  })
+
   // An hourly signed snapshot, so the coverage history can be checked
   // after the fact rather than taken on the operator's word for it today.
   // Signed with the NOTE key: a holder already trusts that key for their
@@ -263,6 +321,35 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     )
     const {ok, failed} = await nostr.publish(config.zap.relays, event)
     log(`liabilities snapshot published to ${ok.length} relay${ok.length === 1 ? '' : 's'}${failed.length ? `, ${failed.length} refused` : ''}`)
+  }
+
+  // The mint saying where it is. A wallet otherwise only ever learns of a
+  // mint by being told its address, and nothing that might follow - a
+  // list, a recommendation, a review - can exist until a mint can be found
+  // at all.
+  //
+  // It reuses the replaceable kind the snapshot goes out under, with a `d`
+  // tag of its own: choosing a new event kind is a protocol decision, and
+  // Cashu's NIP-87 kinds are not ours to take. The content is the
+  // discovery document exactly as the endpoint serves it, plus a signature
+  // by the NOTE signing key, so a holder can check that the mint
+  // announcing itself is the mint their notes verify against.
+  //
+  // Off unless the operator asked for it: a mint that does not want to be
+  // listed says nothing.
+  const publishAnnouncement = async (): Promise<void> => {
+    if (config.announce !== true || !config.zap || !nostr || !config.publicOrigin) return
+    const event = finalizeEvent(
+      {
+        kind: ANNOUNCE_KIND,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [['d', ANNOUNCE_D_TAG]],
+        content: announcementContent(mintAddressDocument(config.publicOrigin, config.username), config.signingKey)
+      },
+      hexToBytes(config.zap.nostrKey)
+    )
+    const {ok, failed} = await nostr.publish(config.zap.relays, event)
+    log(`mint announced to ${ok.length} relay${ok.length === 1 ? '' : 's'}${failed.length ? `, ${failed.length} refused` : ''}`)
   }
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -498,54 +585,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     const lnurlwMatch = requestUrl.pathname.match(/^\/\.well-known\/lnurlw\/(.+)$/)
     if (lnurlwMatch) {
       if (!knownUser(lnurlwMatch[1]!)) return fail('Unknown user.', 404)
-      return send({
-        tag: 'withdrawRequest',
-        callback: `${origin}/w`,
-        minWithdrawable: config.minMintMsat,
-        maxWithdrawable: config.mintFee
-          ? netAfterMintFee(config.maxSendableMsat)
-          : config.maxSendableMsat,
-        defaultDescription: config.description,
-        payLink: `${origin}/.well-known/lnurlp/${lnurlwMatch[1]}`,
-        ...(signer ? {mintPubkey: signer.pubkey} : {}),
-        // The human layer: who runs this, how to reach them, the terms,
-        // and today's message. Absent unless the operator set it.
-        ...(config.name ? {name: config.name} : {}),
-        description: config.description,
-        ...(config.contact ? {contact: config.contact} : {}),
-        ...(config.tosUrl ? {tosUrl: config.tosUrl} : {}),
-        ...(config.motd ? {motd: config.motd} : {}),
-        // The structured twin of the payRequest metadata's fee prose. Both
-        // stay: one is for a wallet that parses LUD-25, the other for a
-        // wallet that only reads a payRequest.
-        ...(config.mintFee ? {fees: config.mintFee} : {}),
-        ...(packageVersion ? {version: packageVersion} : {}),
-        // What a lightning address at this mint costs, when anyone can
-        // claim one. Absent means registration is closed.
-        ...(config.namePriceMsat !== undefined ? {namePriceMsat: config.namePriceMsat} : {}),
-        // Keys this mint has signed under before, so a wallet pinned to an
-        // old one can tell a legitimate rotation from an impostor. Always
-        // present, empty included: "never rotated" and "does not
-        // implement the field" are different answers.
-        previousPubkeys: config.previousSigningPubkeys ?? [],
-        // This mint accepts `h` on the pay callback: the payer's wallet may
-        // name the note it is buying, and then the payment preimage is not
-        // a spend secret for it. A wallet learns this before it asks for an
-        // invoice rather than after it has paid one.
-        mintToHash: true,
-        ...(nodeInfo.alias ? {nodeAlias: nodeInfo.alias} : {}),
-        ...(nodeInfo.uri ? {nodeUri: nodeInfo.uri} : {}),
-        ...(nodeInfo.color ? {nodeColor: nodeInfo.color} : {}),
-        // nodeCapacity is the name the reference mint, the conformance
-        // mock and lnurlcash-kit all use; nodeCapacityMsat was ours alone
-        // and only survived a round trip through the kit's rest-spread.
-        // Both go out for one release, then the old name goes.
-        ...(nodeInfo.capacityMsat !== undefined
-          ? {nodeCapacity: nodeInfo.capacityMsat, nodeCapacityMsat: nodeInfo.capacityMsat}
-          : {}),
-        ...(nodeInfo.numChannels !== undefined ? {nodeNumChannels: nodeInfo.numChannels} : {}),
-        ...(nodeInfo.numPeers !== undefined ? {nodeNumPeers: nodeInfo.numPeers} : {})
-      })
+      return send(mintAddressDocument(origin, lnurlwMatch[1]!))
     }
 
     // ---- LUD-06 pay callback: issue a mint invoice ----
@@ -986,10 +1026,14 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   const zapTimer = zap ? setInterval(() => void zapTick(), deps.zapPollMs ?? 5_000) : null
   zapTimer?.unref()
 
+  // One hourly pass to Nostr carries both: the signed liabilities snapshot
+  // and the mint's announcement of itself. Each re-checks its own switch,
+  // so an operator can have either, both, or neither.
   const statsTimer =
-    config.statsPublish === true && signer && config.zap
+    (config.statsPublish === true && signer && config.zap) || (config.announce === true && config.zap)
       ? setInterval(() => {
           publishStats().catch(err => log(`liabilities snapshot failed: ${(err as Error).message}`))
+          publishAnnouncement().catch(err => log(`mint announcement failed: ${(err as Error).message}`))
         }, deps.statsPublishMs ?? 3_600_000)
       : null
   statsTimer?.unref()
@@ -1009,6 +1053,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     },
     stats: currentStats,
     publishStats,
+    publishAnnouncement,
     close: async () => {
       clearInterval(housekeepingTimer)
       if (zapTimer) clearInterval(zapTimer)
