@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.3] - 2026-08-22
+
+- **Refusals are logged, so an operator can see why a wallet is failing.**
+  A holder reported "notes already spent" on every melt and the journal for
+  that whole day carried startup banners and one invoice sweep - nothing to
+  compare the report against. Refusals now log the method, the path and the
+  reason. Never the query string, because a note URL carries the k1 and log
+  files travel; and never the informational GET, which a single restore
+  walks twenty-odd unknown indexes of by design.
+
 ## [0.3.2] - 2026-08-22
 
 - **A note with a melt in flight is no longer advertised as withdrawable.**
