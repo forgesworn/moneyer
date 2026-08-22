@@ -5,6 +5,14 @@
 While LUD-25 is a draft, a `0.x` minor bump may be breaking; this one is
 additive on the wire apart from the node-capacity rename below.
 
+- A live note's informational GET now carries `payLink`, pointing at this
+  mint's payRequest, which is the counterpart of the `withdrawLink` a
+  payRequest already advertises. It is the route home for a holder who has
+  nothing but a note: from it a wallet reaches the discovery document, and
+  so the mint's terms and its retired signing keys. Without it a wallet
+  that only ever received notes cannot tell an announced key rotation from
+  a substituted key. Optional and additive; unknown and spent notes still
+  say nothing about the mint beyond the refusal.
 - Both database connections now wait up to five seconds for a lock instead
   of giving up at once. `node:sqlite` opens with no busy timeout, so a
   second writer met `database is locked` the moment the first one held it.
