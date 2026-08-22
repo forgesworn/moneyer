@@ -1,6 +1,6 @@
 import {afterEach, describe, expect, it} from 'vitest'
 import {bytesToHex, randomBytes} from '@noble/hashes/utils.js'
-import {buildNoteUrl, claimMintedNote, fetchPayRequest, hashK1, requestInvoice} from 'lnurlcash-kit'
+import {buildNoteUrl, claimMintedNote, fetchPayRequest, hashK1, mintFeeBand, requestInvoice} from 'lnurlcash-kit'
 // The grader shares no code with the kit or with this mint, which is what
 // makes agreement between the three mean something.
 import {createReport, gradeBoundMint, gradeMint} from 'lnurlcash-conformance'
@@ -98,7 +98,7 @@ describe('buying a bound note, kit to mint to grader', () => {
     const claim = await claimMintedNote(withdrawLink, secret)
     expect(claim.state).toBe('minted')
     // Binding changes where the note lives, never what it is worth.
-    expect(claim.amountMsat).toBe(50_000 - 1000 - Math.floor((50_000 * 5000) / 1_000_000))
+    expect(claim.amountMsat).toBe(mintFeeBand(50_000, fee).minNetMsat)
 
     const report = createReport()
     await gradeBoundMint(buildNoteUrl(withdrawLink, secret, claim.amountMsat!), report, {

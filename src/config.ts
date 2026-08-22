@@ -61,6 +61,10 @@ export type MoneyerConfig = {
   // operator upgrading into this default withholds slightly more than
   // before, so it is called out loudly in the changelog rather than
   // changed quietly.
+  //
+  // Absent means ON, for a config object built by hand as much as for one
+  // read from the environment: only an explicit `false` opts out. The
+  // library and the binary have to be the same mint.
   roundFeeToSat?: boolean
   // 32-byte hex. Unset means notes are issued unsigned, which the spec
   // allows but holders will notice.

@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.1] - 2026-08-22
+
+- **Rounding the fee to a whole sat now really is the default.** 0.3.0
+  documented `roundFeeToSat` as on unless turned off, and made it so for a
+  mint started from the CLI, where the environment reader fills the
+  default in. A mint built by calling `createMoneyer` with a config object
+  passes the field through as absent, and the server read absent as off -
+  so an embedder got a mint that kept fractions of a sat while the same
+  mint from the binary rounded them away. Absent now means on in both,
+  and only an explicit `false` opts out.
+
+  It hid because every test that cared about rounding set the flag
+  explicitly, so nothing exercised the default through the library at all.
+  Found from the other side: notecase's cross-implementation suite began
+  asserting what a wallet is actually credited, and the mint it builds in
+  process disagreed with the mint on the wire.
+
 ## [0.3.0] - 2026-08-22
 
 - **The mint fee is now ceilinged to a whole sat by default.**
