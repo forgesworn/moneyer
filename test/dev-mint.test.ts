@@ -25,9 +25,9 @@ afterEach(async () => {
   active = null
 })
 
-const startDevMint = async (autoSettle: boolean): Promise<Moneyer> => {
+const startDevMint = async (autoSettle: boolean, autoSettleAfterMs = 0): Promise<Moneyer> => {
   active = await createMoneyer(testConfig(), {
-    backend: createFakeBackend({autoSettle}),
+    backend: createFakeBackend({autoSettle, autoSettleAfterMs}),
     confirmDelaysMs: [0, 10, 20],
     webAssets: null
   })
@@ -66,6 +66,30 @@ describe('a fake mint a wallet can use', () => {
     // and it says so in the same figures everything else reads.
     expect(mint.store.liabilities().outstandingMsat).toBe(21_000)
     expect(mint.store.liabilities().outstandingNotes).toBe(1)
+  })
+
+  // The difference between a fast payer and one that pays before being
+  // asked. Settling at the instant of issuance makes the mint report an
+  // invoice nobody has paid as already settled, which on the wire is
+  // indistinguishable from a mint handing out a note before it is paid
+  // for - the conformance grader fails exactly that, and is right to.
+  it('does not call an invoice paid in the same breath it issued it', async () => {
+    const mint = await startDevMint(true, 60_000)
+    const pay = await fetchPayRequest(`${mint.url}/.well-known/lnurlp/mint`)
+    const quote = await requestInvoice(pay.callback, 21_000, {})
+    const verify = (await (await fetch(quote.verify!)).json()) as {settled?: boolean; preimage?: string | null}
+    expect(verify.settled).toBe(false)
+    expect(verify.preimage).toBeNull()
+  })
+
+  it('and a quote is not yet a note', async () => {
+    const mint = await startDevMint(true, 60_000)
+    const pay = await fetchPayRequest(`${mint.url}/.well-known/lnurlp/mint`)
+    const secret = 'cd'.repeat(32)
+    await requestInvoice(pay.callback, 21_000, {h: hashK1(secret)})
+    // Nothing has paid, so naming an output buys nothing yet.
+    const claim = await claimMintedNote(pay.withdrawLink!, secret)
+    expect(claim.state).toBe('unminted')
   })
 
   it('settles the invoice itself rather than pretending the note exists', async () => {

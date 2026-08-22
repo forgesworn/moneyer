@@ -99,7 +99,12 @@ const wholeSatFloor = (msat: number): number => Math.floor(msat / 1000) * 1000
 const backendFor = (config: MoneyerConfig): LightningBackend => {
   switch (config.backend.kind) {
     case 'fake':
-      return createFakeBackend({autoSettle: config.backend.autoSettle === true})
+      return createFakeBackend({
+        autoSettle: config.backend.autoSettle === true,
+        ...(config.backend.autoSettleAfterMs === undefined
+          ? {}
+          : {autoSettleAfterMs: config.backend.autoSettleAfterMs})
+      })
     case 'cln':
       return createClnBackend(config.backend)
     case 'lnd':
