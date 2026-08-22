@@ -19,6 +19,11 @@ export type MintInvoiceRow = {
   grossMsat: number
   netMsat: number
   settled: boolean
+  // The note id this invoice will credit on settlement, when the payer's
+  // wallet named one with `h`. Null means the old behaviour: the note is
+  // credited at the invoice's own payment hash, so the payment preimage is
+  // the spend secret.
+  outputId: string | null
 }
 export type MeltRow = {
   paymentHash: string
@@ -155,7 +160,8 @@ export class NoteStore {
         gross_msat INTEGER NOT NULL,
         net_msat INTEGER NOT NULL,
         settled INTEGER NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        output_id TEXT
       );
       CREATE TABLE IF NOT EXISTS zap_invoices (
         payment_hash TEXT PRIMARY KEY,
@@ -195,6 +201,17 @@ export class NoteStore {
         resolved_at INTEGER
       );
     `)
+    // `CREATE TABLE IF NOT EXISTS` leaves a database an earlier version
+    // made exactly as it found it, so a column added later is added here.
+    const invoiceColumns = (this.db.prepare('PRAGMA table_info(mint_invoices)').all() as Array<{name: string}>).map(
+      column => column.name
+    )
+    if (!invoiceColumns.includes('output_id')) {
+      this.db.exec('ALTER TABLE mint_invoices ADD COLUMN output_id TEXT')
+    }
+    // Two invoices may not name the same note. SQLite counts NULLs as
+    // distinct, so every unbound invoice still fits.
+    this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS mint_invoices_output_id ON mint_invoices (output_id)')
   }
 
   private tx<T>(fn: () => T): T {
@@ -227,16 +244,28 @@ export class NoteStore {
     this.db.prepare('UPDATE notes SET state = ?, updated_at = ? WHERE id = ?').run(state, Date.now(), id)
   }
 
-  // An output id may not collide with any existing note OR any mint
-  // invoice's payment hash, settled or not. The invoice case is the subtle
-  // one: /verify hands out a settled mint invoice's preimage, and that
-  // preimage is the k1 of whatever note carries the invoice's payment hash
-  // as its id - so letting a mutation claim such an id would point a future
-  // payer's money at a stranger's note.
-  private assertOutputIdFree(id: string): void {
+  // An output id may not collide with any existing note, any mint
+  // invoice's payment hash, settled or not, or any note an unsettled
+  // invoice has already been told to credit. The invoice cases are the
+  // subtle ones: /verify hands out a settled mint invoice's preimage, and
+  // that preimage is the k1 of whatever note carries the invoice's payment
+  // hash as its id - so letting a mutation claim such an id would point a
+  // future payer's money at a stranger's note. A bound invoice's `h` is
+  // the same hazard one step earlier: the note does not exist yet, but it
+  // is already spoken for.
+  //
+  // Public because the pay callback has to answer this before it asks the
+  // funding source for an invoice: a wallet must never pay for a quote the
+  // mint was always going to refuse.
+  outputIdInUse(id: string): boolean {
     const asNote = this.db.prepare('SELECT 1 FROM notes WHERE id = ?').get(id)
     const asInvoice = this.db.prepare('SELECT 1 FROM mint_invoices WHERE payment_hash = ?').get(id)
-    if (asNote || asInvoice) throw new OutputCollisionError(`output id ${id} is already in use`)
+    const asBoundOutput = this.db.prepare('SELECT 1 FROM mint_invoices WHERE output_id = ?').get(id)
+    return Boolean(asNote || asInvoice || asBoundOutput)
+  }
+
+  private assertOutputIdFree(id: string): void {
+    if (this.outputIdInUse(id)) throw new OutputCollisionError(`output id ${id} is already in use`)
   }
 
   private assertOutstanding(id: string): NoteRow {
@@ -350,20 +379,32 @@ export class NoteStore {
     }))
   }
 
-  recordMintInvoice(paymentHash: string, pr: string, grossMsat: number, netMsat: number): void {
+  // `outputId` is the note id the payer's wallet asked for with `h`. Both
+  // ids are checked in the same transaction that inserts the row, so two
+  // requests racing for one id cannot both be told yes.
+  recordMintInvoice(
+    paymentHash: string,
+    pr: string,
+    grossMsat: number,
+    netMsat: number,
+    outputId: string | null = null
+  ): void {
     this.tx(() => {
       this.assertOutputIdFree(paymentHash)
+      if (outputId !== null) this.assertOutputIdFree(outputId)
       this.db
-        .prepare('INSERT INTO mint_invoices (payment_hash, pr, gross_msat, net_msat, settled, created_at) VALUES (?, ?, ?, ?, 0, ?)')
-        .run(paymentHash, pr, grossMsat, netMsat, Date.now())
+        .prepare(
+          'INSERT INTO mint_invoices (payment_hash, pr, gross_msat, net_msat, settled, created_at, output_id) VALUES (?, ?, ?, ?, 0, ?, ?)'
+        )
+        .run(paymentHash, pr, grossMsat, netMsat, Date.now(), outputId)
     })
   }
 
   mintInvoiceByHash(paymentHash: string): MintInvoiceRow | null {
     const row = this.db
-      .prepare('SELECT payment_hash, pr, gross_msat, net_msat, settled FROM mint_invoices WHERE payment_hash = ?')
+      .prepare('SELECT payment_hash, pr, gross_msat, net_msat, settled, output_id FROM mint_invoices WHERE payment_hash = ?')
       .get(paymentHash) as
-      | {payment_hash: string; pr: string; gross_msat: number; net_msat: number; settled: number}
+      | {payment_hash: string; pr: string; gross_msat: number; net_msat: number; settled: number; output_id: string | null}
       | undefined
     if (!row) return null
     return {
@@ -371,8 +412,20 @@ export class NoteStore {
       pr: row.pr,
       grossMsat: row.gross_msat,
       netMsat: row.net_msat,
-      settled: row.settled === 1
+      settled: row.settled === 1,
+      outputId: row.output_id
     }
+  }
+
+  // The invoice a payer bound to this note id, if any. The lookup a claim
+  // makes when the wallet named the note it was buying: the note does not
+  // exist until the invoice settles, and the wallet knows nothing but the
+  // secret it chose.
+  mintInvoiceByOutputId(outputId: string): MintInvoiceRow | null {
+    const row = this.db.prepare('SELECT payment_hash FROM mint_invoices WHERE output_id = ?').get(outputId) as
+      | {payment_hash: string}
+      | undefined
+    return row ? this.mintInvoiceByHash(row.payment_hash) : null
   }
 
   // Every unsettled mint invoice, for the expiry sweep. An unsettled row
@@ -380,14 +433,22 @@ export class NoteStore {
   // expired invoices - so it is dead weight, and every /p/cb call adds one.
   unsettledMintInvoices(): MintInvoiceRow[] {
     const rows = this.db
-      .prepare('SELECT payment_hash, pr, gross_msat, net_msat, settled FROM mint_invoices WHERE settled = 0')
-      .all() as Array<{payment_hash: string; pr: string; gross_msat: number; net_msat: number; settled: number}>
+      .prepare('SELECT payment_hash, pr, gross_msat, net_msat, settled, output_id FROM mint_invoices WHERE settled = 0')
+      .all() as Array<{
+      payment_hash: string
+      pr: string
+      gross_msat: number
+      net_msat: number
+      settled: number
+      output_id: string | null
+    }>
     return rows.map(row => ({
       paymentHash: row.payment_hash,
       pr: row.pr,
       grossMsat: row.gross_msat,
       netMsat: row.net_msat,
-      settled: false
+      settled: false,
+      outputId: row.output_id
     }))
   }
 
@@ -399,12 +460,17 @@ export class NoteStore {
 
   // Paying a mint invoice is what brings its note into existence. Safe to
   // call twice: the second settle finds the note already minted.
+  //
+  // The note lands at the id the payer's wallet named, when it named one.
+  // Otherwise it lands at the invoice's payment hash, which is the older
+  // arrangement where the payment preimage is the spend secret.
   settleMintInvoice(paymentHash: string): void {
     this.tx(() => {
       const invoice = this.mintInvoiceByHash(paymentHash)
       if (!invoice) return
       this.db.prepare('UPDATE mint_invoices SET settled = 1 WHERE payment_hash = ?').run(paymentHash)
-      if (!this.noteById(paymentHash)) this.insertNote(paymentHash, invoice.netMsat)
+      const noteId = invoice.outputId ?? paymentHash
+      if (!this.noteById(noteId)) this.insertNote(noteId, invoice.netMsat)
     })
   }
 

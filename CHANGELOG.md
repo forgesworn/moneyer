@@ -5,6 +5,28 @@
 While LUD-25 is a draft, a `0.x` minor bump may be breaking; this one is
 additive on the wire apart from the node-capacity rename below.
 
+- A wallet can name the note it is buying. It chooses the note's spend
+  secret itself, keeps it, and sends `h`, the sha256 of that secret, on
+  the pay callback; the mint credits the note at `h` when the invoice
+  settles. The invoice's payment preimage then buys nothing and is only a
+  payment proof, which is what it always should have been: a preimage is
+  known to the funding source, to every node that forwarded the payment,
+  and to anyone who polls LUD-21 `verify` with the payment hash written
+  inside the invoice. Naming the note leaves the buyer as the only party
+  who ever held the secret, and replaces "claim and rotate faster than
+  anybody else" with nothing to race for. A malformed `h` is refused
+  before an invoice is issued, so a wallet never pays for a quote the
+  mint would reject; an `h` that already names a note or an invoice is
+  refused with `Invalid or already spent k1.`, the same oracle-free
+  sentence a colliding output gets on the withdraw callback. The reply
+  carries `mintToHash: true` when the binding was made, and the payRequest
+  and the discovery document advertise `mintToHash: true` so a wallet
+  knows before it asks. Claiming needs no `verify` poll: the wallet asks
+  `/w?k1=<its own secret>` directly. Entirely optional and additive: a
+  wallet that sends no `h` gets exactly today's behaviour, and the LUD-25
+  draft needs no change. Wallets are urged to persist the secret before
+  requesting the invoice, which is the one thing that could make this
+  worse than what it replaces.
 - A live note's informational GET now carries `payLink`, pointing at this
   mint's payRequest, which is the counterpart of the `withdrawLink` a
   payRequest already advertises. It is the route home for a holder who has

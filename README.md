@@ -4,9 +4,10 @@
 > to strike coins; this one strikes Lightning bearer notes.
 
 moneyer is an independent implementation of the LUD-25 draft: paying an
-invoice it issues mints a bearer note whose spend secret is that invoice's
-payment preimage, and a note's holder can rotate, split, merge and melt it
-against the withdraw callback. It passes the full
+invoice it issues mints a bearer note, and a note's holder can rotate,
+split, merge and melt it against the withdraw callback. The note's spend
+secret is the invoice's payment preimage, or, better, a secret the buyer
+chose and named on the way in. It passes the full
 [lnurlcash-conformance](https://github.com/TheCryptoDonkey/lnurlcash-conformance)
 grader, including the spending checks, and the grader runs in this repo's
 own test suite.
@@ -26,8 +27,8 @@ lesson, that behaviour is kept deliberately and tested.
   which is why neither can back a mint. A **fake** backend exists for
   development and tests and refuses to run outside `--dev`.
 - Notes are stored by id, `sha256(k1)` - the store never holds a spend
-  secret. A freshly minted note's preimage lives only with the payer and
-  the funding source.
+  secret. A buyer may name the note they are buying, in which case the
+  secret is theirs alone from the start.
 - Signs every note it mints with its own mint key (secp256k1, the standard
   `Lightning Signed Message` construction) for LUD-25 offline verification.
 - The melt discipline: reply OK when the note is reserved, pay in the
@@ -252,6 +253,64 @@ there by advertising `minWithdrawable` as the note floored to a whole sat
 and accepting a melt for that; the sub-sat remainder is dust the mint
 keeps. Rounding at mint time means it never comes up.
 
+## Name the note you are buying
+
+Paying a mint invoice mints a note, and by default that note's spend
+secret is the invoice's payment preimage. A payment preimage is not a
+private thing. The funding source has it, every node that forwarded the
+payment has it, and LUD-21 `verify` hands it to whoever asks with the
+payment hash, which is written inside the invoice on the payer's screen.
+The draft's answer is for the wallet to claim and rotate the instant the
+invoice settles, which is a foot race the wallet has to keep winning.
+
+So a wallet may name the note instead. It chooses the secret first, writes
+it down, and sends `h`, the sha256 of that secret, on the pay callback:
+
+```
+GET /p/cb?amount=21000&h=<64 hex>
+```
+
+The mint credits the note at `h` when the invoice settles. The payment
+preimage then buys nothing: it is an ordinary payment proof, which is why
+`verify` goes on serving it. Nobody but the buyer ever knew the secret, so
+there is no race left to run, and no window in which holding the invoice
+is nearly holding the money.
+
+`h` is optional and additive. A wallet that sends none gets exactly the
+behaviour it always got, so upgrading this mint breaks nothing that works
+today, and the LUD-25 draft needs no change to allow it.
+
+The rules:
+
+- `h` is 64 hex characters, the sha256 of a 32-byte secret: the same
+  meaning `h` carries on the withdraw callback. Upper case is accepted and
+  read as lower case, there too.
+- A malformed `h` is refused before the mint asks its funding source for
+  anything, so a wallet is never left holding a quote the mint was always
+  going to reject.
+- An `h` that already names a note, an invoice, or a note another buyer
+  has already bought is refused with `Invalid or already spent k1.`, the
+  same sentence a colliding output gets on the withdraw callback. Which
+  table an id sits in is an oracle nobody is owed.
+- The callback's reply carries `mintToHash: true` when the invoice really
+  was bound to `h`. A mint that did not implement the parameter would
+  ignore it and answer without that field, so a wallet can tell the two
+  apart before paying rather than by hunting for a note afterwards.
+- The payRequest and the discovery document both advertise `mintToHash:
+  true`, so a wallet knows this mint takes the parameter before it asks
+  rather than after it pays.
+- Claiming needs nothing else. `GET /w?k1=<the secret>` brings the note
+  into existence as soon as the invoice has settled, with no `verify` poll
+  and no preimage involved. The poll is still the way to claim from a mint
+  that does not advertise `mintToHash`.
+- **Persist the secret before asking for the invoice.** Paying and then
+  losing the secret is the one way this is worse than the old arrangement,
+  and writing it down first removes it entirely.
+
+A named note is also derived-secret friendly: a wallet whose secrets come
+from its seed can restore a note it bought but never claimed, which a note
+whose secret was a preimage could never offer.
+
 ## A retried mutation is answered, not refused
 
 Rotate, split and merge are GETs, and transports retry GETs. Go's
@@ -389,7 +448,7 @@ open, so a wallet can offer the flow without asking.
 | `/.well-known/lnurlp/<user>` | LUD-16 payRequest; paying mints a note |
 | `/.well-known/lnurlp/<zap name>` | NIP-57 payRequest; paying mints a note *to the name's pubkey* |
 | `/.well-known/lnurlw/<user>` | LUD-25 mint address discovery (experimental) |
-| `/p/cb` | LUD-06 pay callback; issues the mint invoice |
+| `/p/cb` | LUD-06 pay callback; issues the mint invoice, and takes an optional `h` naming the note |
 | `/z/cb/<zap name>` | the zap callback; validates the kind 9734 and issues the invoice |
 | `/verify/<hash>` | LUD-21 verify, for mint invoices and melt payments |
 | `/w` | LUD-03 informational GET; a live note also carries `payLink`, the route back to this mint's discovery document |

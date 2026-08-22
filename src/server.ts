@@ -4,7 +4,14 @@ import {finalizeEvent} from 'nostr-tools/pure'
 import {applyMintFee, grossUpForMintFee, hashK1} from 'lnurlcash-kit'
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import type {MoneyerConfig} from './config.ts'
-import {NotePendingError, NoteStore, NoteUnavailableError, swapFingerprint, type NoteRow} from './store.ts'
+import {
+  NotePendingError,
+  NoteStore,
+  NoteUnavailableError,
+  OutputCollisionError,
+  swapFingerprint,
+  type NoteRow
+} from './store.ts'
 import {createNoteSigner, type NoteSigner} from './signing.ts'
 import {createFakeBackend} from './backends/fake.ts'
 import {createClnBackend} from './backends/cln.ts'
@@ -189,9 +196,18 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     const id = hashK1(k1)
     const note = store.noteById(id)
     if (note) return note
-    const invoice = store.mintInvoiceByHash(id)
-    if (invoice && !invoice.settled && (await backend.isInvoiceSettled(id))) {
-      store.settleMintInvoice(id)
+    // Either the invoice whose payment hash is this id - the older
+    // arrangement, where the payment preimage is the spend secret - or the
+    // invoice a payer bound to this id by naming it with `h`. In the bound
+    // case the wallet needs nothing but its own secret to claim: no
+    // /verify poll, no preimage, and so no window in which knowing the
+    // invoice is knowing the money.
+    const invoice = store.mintInvoiceByHash(id) ?? store.mintInvoiceByOutputId(id)
+    if (invoice && !invoice.settled && (await backend.isInvoiceSettled(invoice.paymentHash))) {
+      store.settleMintInvoice(invoice.paymentHash)
+      // The note lands at the id its payer named. Looking it up by this id
+      // finds it when that id IS the name, and finds nothing when this is
+      // a bound invoice's payment hash - which is the point of binding.
       return store.noteById(id)
     }
     return null
@@ -468,6 +484,12 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // LUD-17's lnurlw:// is the scheme a wallet puts on a QR, not a
         // field in a JSON body; every other URL here is directly fetchable.
         withdrawLink: `${origin}/w`,
+        // This mint takes `h` on the callback below, so a wallet can name
+        // the note it is buying. Advertised here as well as on the
+        // discovery document because a wallet handed nothing but a
+        // lightning address never reads that document, and this has to be
+        // known BEFORE paying, not after.
+        mintToHash: true,
         disposable: false
       })
     }
@@ -506,6 +528,11 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // present, empty included: "never rotated" and "does not
         // implement the field" are different answers.
         previousPubkeys: config.previousSigningPubkeys ?? [],
+        // This mint accepts `h` on the pay callback: the payer's wallet may
+        // name the note it is buying, and then the payment preimage is not
+        // a spend secret for it. A wallet learns this before it asks for an
+        // invoice rather than after it has paid one.
+        mintToHash: true,
         ...(nodeInfo.alias ? {nodeAlias: nodeInfo.alias} : {}),
         ...(nodeInfo.uri ? {nodeUri: nodeInfo.uri} : {}),
         ...(nodeInfo.color ? {nodeColor: nodeInfo.color} : {}),
@@ -532,12 +559,42 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       const net = netAfterMintFee(amount)
       if (net < config.minMintMsat) return fail('Amount too small to mint a note.')
 
-      // The preimage is the future note's spend secret; its hash is the
-      // note id AND the invoice's payment hash. Generated here, handed to
-      // the funding source, never persisted - the store keeps hashes only.
+      // ---- naming the note being bought ----
+      //
+      // Optionally the payer's wallet chooses the note's spend secret
+      // itself and sends `h`, the sha256 of it, exactly as `h` means on
+      // the withdraw callback. The mint then credits the note at `h` on
+      // settlement, and the invoice's payment preimage buys nothing.
+      //
+      // That matters because a payment preimage is not a secret between
+      // two parties. It is known to the funding source, it is known to
+      // every node that forwarded the payment, and /verify hands it to
+      // anyone who can name the payment hash - which is written inside the
+      // invoice itself, on the QR the payer was shown. Where the preimage
+      // is the money, holding the invoice is nearly holding the money, and
+      // the wallet's only defence is to claim and rotate faster than
+      // anybody else. Naming the note removes the race instead of running
+      // it: the buyer is the only party who ever knew the secret.
+      //
+      // Both checks happen before an invoice exists, so a wallet is never
+      // left holding a quote the mint was always going to refuse. A
+      // collision gets the same reason a colliding output gets on the
+      // withdraw callback: which table an id already sits in is an oracle
+      // nobody is owed.
+      const askedOutputId = q.get('h')
+      const outputId = askedOutputId === null ? null : askedOutputId.toLowerCase()
+      if (outputId !== null) {
+        if (!HEX32.test(outputId)) return fail('missing h')
+        if (store.outputIdInUse(outputId)) return fail('Invalid or already spent k1.')
+      }
+
+      // The preimage is the future note's spend secret unless `h` named
+      // one; its hash is the invoice's payment hash either way. Generated
+      // here, handed to the funding source, never persisted - the store
+      // keeps hashes only.
       let preimage = bytesToHex(randomBytes(32))
       let paymentHash = hashK1(preimage)
-      while (store.noteById(paymentHash) || store.mintInvoiceByHash(paymentHash)) {
+      while (store.outputIdInUse(paymentHash) || paymentHash === outputId) {
         preimage = bytesToHex(randomBytes(32))
         paymentHash = hashK1(preimage)
       }
@@ -563,10 +620,24 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         log('funding source returned an invoice that does not match the requested preimage/amount')
         return fail('Temporarily unable to issue an invoice.')
       }
-      store.recordMintInvoice(paymentHash, pr, amount, net)
+      try {
+        store.recordMintInvoice(paymentHash, pr, amount, net, outputId)
+      } catch (err) {
+        // The read above already refused the collisions it could see; this
+        // closes the race where another request claimed the id in between.
+        // The invoice exists at the funding source but has been shown to
+        // nobody, so nothing can be paid against it.
+        if (err instanceof OutputCollisionError) return fail('Invalid or already spent k1.')
+        throw err
+      }
       return send({
         pr,
         disposable: false,
+        // Confirmation that this invoice really is bound to the id the
+        // wallet named. A mint that ignored an unknown parameter would
+        // answer without it, and a wallet can tell the two apart before
+        // paying rather than by looking for a note afterwards.
+        ...(outputId !== null ? {mintToHash: true} : {}),
         ...(config.verify ? {verify: `${origin}/verify/${paymentHash}`} : {})
       })
     }
