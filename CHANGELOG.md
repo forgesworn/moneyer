@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.0] - unreleased
+## [0.3.0] - 2026-08-22
 
 - **The mint fee is now ceilinged to a whole sat by default.**
   `MONEYER_ROUND_FEE_TO_SAT` defaults to `true`, matching dni's
