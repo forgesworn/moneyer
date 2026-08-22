@@ -34,7 +34,12 @@ export type FakePayMode =
   | 'ambiguous-unpaid'
   | 'ambiguous-pending'
 
-type PaymentRecord = {status: 'complete' | 'failed' | 'pending'; preimageHex: string | null}
+type PaymentRecord = {
+  status: 'complete' | 'failed' | 'pending'
+  preimageHex: string | null
+  // What the caller asked to send, for an invoice that states no amount.
+  amountMsat: number | null
+}
 
 export type FakeBackend = LightningBackend & {
   control: {
@@ -50,6 +55,9 @@ export type FakeBackend = LightningBackend & {
     // shared-funding-source shape the melt pre-check exists for.
     seedForeignPayment(paymentHashHex: string, status?: 'complete' | 'pending'): void
     invoiceByHash(paymentHashHex: string): {preimageHex: string; amountMsat: number; settled: boolean} | undefined
+    // What was sent for a payment, when the invoice named no amount and
+    // the mint chose. Null when the invoice named one.
+    sentAmountMsat(paymentHashHex: string): number | null | undefined
     // What this pretend node says it can pay out with, for the coverage
     // ratio. Under-coverage is a state the mint has to render honestly,
     // so a test must be able to ask for it.
@@ -77,7 +85,7 @@ export const createFakeBackend = (): FakeBackend => {
       return {pr}
     },
 
-    async payInvoice({pr}) {
+    async payInvoice({pr, amountMsat}) {
       const paymentHashHex = bolt11PaymentHash(pr)
       if (!paymentHashHex) throw new PaymentFailedError('That is not a decodable invoice.')
       // Real nodes dedupe sends by payment hash: a hash this node already
@@ -86,24 +94,25 @@ export const createFakeBackend = (): FakeBackend => {
         throw new PaymentAlreadyKnownError('this node already has a payment for that hash')
       }
       const preimageHex = knownPreimages.get(paymentHashHex) ?? null
+      const sentMsat = amountMsat ?? null
       switch (payMode) {
         case 'succeed':
-          payments.set(paymentHashHex, {status: 'complete', preimageHex})
+          payments.set(paymentHashHex, {status: 'complete', preimageHex, amountMsat: sentMsat})
           return {preimageHex, feeMsat: 0}
         case 'fail-clean':
-          payments.set(paymentHashHex, {status: 'failed', preimageHex: null})
+          payments.set(paymentHashHex, {status: 'failed', preimageHex: null, amountMsat: sentMsat})
           throw new PaymentFailedError('Could not find a route to pay this invoice.')
         case 'fail-then-paid':
-          payments.set(paymentHashHex, {status: 'complete', preimageHex})
+          payments.set(paymentHashHex, {status: 'complete', preimageHex, amountMsat: sentMsat})
           throw new PaymentFailedError('Timed out trying to find a route to pay this invoice.')
         case 'ambiguous-paid':
-          payments.set(paymentHashHex, {status: 'complete', preimageHex})
+          payments.set(paymentHashHex, {status: 'complete', preimageHex, amountMsat: sentMsat})
           throw new Error('connection reset mid-payment')
         case 'ambiguous-unpaid':
-          payments.set(paymentHashHex, {status: 'failed', preimageHex: null})
+          payments.set(paymentHashHex, {status: 'failed', preimageHex: null, amountMsat: sentMsat})
           throw new Error('connection reset mid-payment')
         case 'ambiguous-pending':
-          payments.set(paymentHashHex, {status: 'pending', preimageHex})
+          payments.set(paymentHashHex, {status: 'pending', preimageHex, amountMsat: sentMsat})
           throw new Error('connection reset mid-payment')
       }
     },
@@ -159,7 +168,11 @@ export const createFakeBackend = (): FakeBackend => {
         if (payment?.status === 'complete') payment.preimageHex = preimageHex
       },
       seedForeignPayment(paymentHashHex, status = 'complete') {
-        payments.set(paymentHashHex, {status, preimageHex: null})
+        payments.set(paymentHashHex, {status, preimageHex: null, amountMsat: null})
+      },
+      sentAmountMsat(paymentHashHex) {
+        const payment = payments.get(paymentHashHex)
+        return payment ? payment.amountMsat : undefined
       },
       setLocalBalanceMsat(msat) {
         localBalanceMsat = msat

@@ -25,7 +25,12 @@ export type MeltJob = {
   paymentHash: string
   noteId: string
   pr: string
+  // The note value this melt spends, which is what the routing budget is
+  // sized against and what the mint owes until it settles.
   amountMsat: number
+  // What to send, for an invoice that states no amount of its own. Absent
+  // for an invoice that names its own amount, where the payee decided.
+  payAmountMsat?: number
 }
 
 export type MeltDeps = {
@@ -70,7 +75,8 @@ export const runMelt = async (job: MeltJob, deps: MeltDeps): Promise<void> => {
   try {
     outcome = await deps.backend.payInvoice({
       pr: job.pr,
-      feeLimitMsat: deps.feeLimitMsat(job.amountMsat)
+      feeLimitMsat: deps.feeLimitMsat(job.amountMsat),
+      ...(job.payAmountMsat !== undefined ? {amountMsat: job.payAmountMsat} : {})
     })
   } catch (err) {
     if (err instanceof PaymentAlreadyKnownError) {

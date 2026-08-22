@@ -42,8 +42,15 @@ const tagged = (type: number, data: number[]): number[] => [
 
 const amountHrp = (msat: number): string => (msat % 100 === 0 ? `${msat / 100}n` : `${msat * 10}p`)
 
-export const fakeBolt11 = (args: {amountMsat: number; paymentHashHex: string; memo?: string; timestamp?: number}): string => {
-  const hrp = `lnbc${amountHrp(args.amountMsat)}`
+// `amountMsat` omitted builds an invoice that states no amount, which is
+// the shape a payee uses when the payer decides what to send.
+export const fakeBolt11 = (args: {
+  amountMsat?: number
+  paymentHashHex: string
+  memo?: string
+  timestamp?: number
+}): string => {
+  const hrp = `lnbc${args.amountMsat === undefined ? '' : amountHrp(args.amountMsat)}`
   const words: number[] = []
 
   const timestamp = args.timestamp ?? Math.floor(Date.now() / 1000)

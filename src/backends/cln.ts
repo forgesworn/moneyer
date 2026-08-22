@@ -56,13 +56,23 @@ export const createClnBackend = (config: {url: string; rune: string}): Lightning
       return {pr: result.bolt11}
     },
 
-    async payInvoice({pr, feeLimitMsat}) {
+    async payInvoice({pr, feeLimitMsat, amountMsat}) {
       // xpay resolves once it stops retrying, which is NOT proof that no
       // HTLC it already sent remains outstanding - the caller confirms via
       // isPaymentComplete before restoring anything either way. The
       // timeout sits above xpay's own default 60s retry_for so a clean
       // failure response is not turned into an ambiguous one at the wire.
-      const res = await call('/v1/xpay', {invstring: pr, maxfee: feeLimitMsat}, 90_000)
+      const res = await call(
+        '/v1/xpay',
+        {
+          invstring: pr,
+          maxfee: feeLimitMsat,
+          // xpay wants amount_msat only for an invoice that states no
+          // amount, and refuses it for one that does.
+          ...(amountMsat !== undefined ? {amount_msat: amountMsat} : {})
+        },
+        90_000
+      )
       if (!res.ok) {
         const code = res.json?.code
         // 219: this node already paid that hash. On a shared node that is
@@ -79,11 +89,11 @@ export const createClnBackend = (config: {url: string; rune: string}): Lightning
       }
       const preimageHex = res.json?.payment_preimage
       if (typeof preimageHex !== 'string') throw new Error('cln did not return a payment_preimage.')
-      const amountMsat = res.json?.amount_msat
+      const deliveredMsat = res.json?.amount_msat
       const amountSentMsat = res.json?.amount_sent_msat
       const feeMsat =
-        typeof amountMsat === 'number' && typeof amountSentMsat === 'number'
-          ? amountSentMsat - amountMsat
+        typeof deliveredMsat === 'number' && typeof amountSentMsat === 'number'
+          ? amountSentMsat - deliveredMsat
           : null
       return {preimageHex, feeMsat}
     },
