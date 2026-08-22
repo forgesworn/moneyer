@@ -2,12 +2,12 @@ import {afterEach, describe, expect, it} from 'vitest'
 import {
   NoteSpentError,
   NoteUnknownError,
-  applyMintFee,
   buildNoteUrl,
   fetchInvoiceVerification,
   fetchNoteInfo,
   fetchPayRequest,
   hashK1,
+  mintFeeBand,
   rotateNote,
   rotateNoteWithHash,
   verifyNoteSignature
@@ -114,7 +114,7 @@ describe('minting to a named note', () => {
     const reply = await payCallback(mint, {amount: '50000', h: hashK1(secret)})
     mint.backend.control.settleInvoice(decodeBolt11(reply.pr!).paymentHashHex)
     const note = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, secret))
-    expect(note.maxWithdrawable).toBe(applyMintFee(50_000, fee))
+    expect(note.maxWithdrawable).toBe(mintFeeBand(50_000, fee).minNetMsat)
   })
 
   it('leaves a wallet that sends no h exactly where it was', async () => {

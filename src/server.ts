@@ -144,7 +144,13 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     const exact = grossMsat - applyMintFee(grossMsat, config.mintFee)
     // Both readings sit inside lnurlcash-kit's mintFeeBand, so a wallet
     // is not misled either way - it is told the range up front.
-    return config.roundFeeToSat === true ? Math.ceil(exact / 1000) * 1000 : exact
+    //
+    // Absent means ON, the same as DEFAULTS and MONEYER_ROUND_FEE_TO_SAT:
+    // only an explicit false opts out. Reading it as `=== true` made the
+    // library default differ from the binary's, so a mint built by calling
+    // createMoneyer kept fractions of a sat that the same mint started from
+    // the CLI would have rounded.
+    return config.roundFeeToSat !== false ? Math.ceil(exact / 1000) * 1000 : exact
   }
 
   // Every quote and every credit goes through here, so the fee posture
@@ -173,7 +179,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   const mintFeeLine = config.mintFee ? `Mint fees: ${config.mintFee.baseFeeMsat},${config.mintFee.feePpm}` : null
   // The same fee for a person: "Mint fees: 5000,1000" is for wallets that
   // parse LUD-25, and reads as nonsense to anyone who does not.
-  const feeInWords = config.mintFee ? describeFee(config.mintFee, config.roundFeeToSat === true) : null
+  const feeInWords = config.mintFee ? describeFee(config.mintFee, config.roundFeeToSat !== false) : null
   const nostr = config.zap ? (deps.nostr ?? poolTransport()) : null
   const zap: ZapBridge | null =
     config.zap && nostr

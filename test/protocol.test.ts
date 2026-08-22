@@ -4,7 +4,6 @@ import {
   NoteUnknownError,
   PendingNoteError,
   ServiceRejectedError,
-  applyMintFee,
   buildNoteUrl,
   fetchInvoiceVerification,
   fetchMintAddress,
@@ -13,6 +12,7 @@ import {
   hashK1,
   mergeNotes,
   meltNote,
+  mintFeeBand,
   probeBurnedNote,
   requestInvoice,
   rotateNote,
@@ -318,7 +318,7 @@ describe('minting', () => {
     mint.backend.control.settleInvoice(paymentHash)
     const verification = await fetchInvoiceVerification(invoice.verify!)
     const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, verification.preimage!))
-    expect(info.maxWithdrawable).toBe(applyMintFee(50_000, fee))
+    expect(info.maxWithdrawable).toBe(mintFeeBand(50_000, fee).minNetMsat)
   })
 
   it('refuses amounts out of range and dust nets', async () => {
@@ -638,7 +638,16 @@ describe('a sat-ceilinged mint fee', () => {
     expect(info.maxWithdrawable).toBeGreaterThanOrEqual(50_000)
   })
 
-  it('stays msat-exact when the operator leaves it off', async () => {
-    expect(await mintedValue(await start({mintFee: fee}))).toBe(38_960)
+  it('stays msat-exact only when the operator turns it off', async () => {
+    // Absent is ON. Keeping fractions of a sat is the deliberate choice
+    // now, and it has to be said out loud.
+    expect(await mintedValue(await start({mintFee: fee, roundFeeToSat: false}))).toBe(38_960)
+  })
+
+  it('rounds by default, however the mint was built', async () => {
+    // The library and the binary must be the same mint. This is the case
+    // that was wrong: a config with no opinion on rounding used to mean
+    // off here and on through the CLI.
+    expect(await mintedValue(await start({mintFee: fee}))).toBe(38_000)
   })
 })
