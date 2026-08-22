@@ -1,5 +1,5 @@
 import {afterEach, describe, expect, it} from 'vitest'
-import {buildNoteUrl, hashK1, meltNote, fetchNoteInfo} from 'lnurlcash-kit'
+import {buildNoteUrl, hashK1, meltNote, fetchNoteInfo, PendingNoteError} from 'lnurlcash-kit'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
 import {NoteStore} from '../src/store.ts'
 import {createMoneyer} from '../src/server.ts'
@@ -112,13 +112,49 @@ describe('melt discipline', () => {
     mint.backend.control.setPayMode('ambiguous-pending')
     const {noteId, paymentHash} = await meltOnce(mint)
 
-    // Confirmation attempts exhaust against a still-pending payment.
-    await new Promise(resolve => setTimeout(resolve, 100))
-    expect(noteState(mint, noteId)).toBe('pending')
+    await waitFor(() => noteState(mint, noteId) === 'pending')
 
+    // reconcile deliberately skips a melt this process still has in flight,
+    // so it can only act once the attempt has finished exhausting its
+    // confirmations. The original fixed 100 ms sleep was waiting for that
+    // rather than for the state, and was long enough on an idle machine and
+    // not on a loaded one. Retrying reconcile waits for the real condition:
+    // a money-path gate that fails at random is one people learn to re-run
+    // rather than read.
     mint.backend.control.resolvePayment(paymentHash, 'complete')
-    await mint.moneyer.reconcile()
+    for (let attempt = 0; attempt < 60 && noteState(mint, noteId) !== 'burned'; attempt += 1) {
+      await mint.moneyer.reconcile()
+      if (noteState(mint, noteId) !== 'burned') await new Promise(resolve => setTimeout(resolve, 25))
+    }
     expect(noteState(mint, noteId)).toBe('burned')
+  })
+
+  // Found by re-reading LUD-25 against dni's lnurl-mint, which refuses this
+  // and says why: a note reserved by an in-flight melt must not still be
+  // advertised as withdrawable. The spec makes the informational GET the way
+  // anyone checks what a note is worth, so answering "live, worth all of it"
+  // about a note that is halfway out of the door is the exact lie a
+  // sell-during-melt needs - the seller starts a melt, shows the buyer a
+  // healthy GET, takes payment out of band, and the melt settles.
+  it('stops advertising a note as withdrawable once a melt reserves it', async () => {
+    const mint = (active = await startMint())
+    mint.backend.control.setPayMode('ambiguous-pending')
+    const k1 = freshK1()
+    mint.moneyer.store.creditNote(hashK1(k1), 21_000)
+    const url = buildNoteUrl(`${mint.moneyer.url}/w`, k1, 21_000)
+
+    // Healthy before the melt.
+    expect((await fetchNoteInfo(url)).maxWithdrawable).toBe(21_000)
+
+    const pr = fakeBolt11({amountMsat: 21_000, paymentHashHex: hashK1(freshK1())})
+    await meltNote((await fetchNoteInfo(url)).callback, k1, pr)
+    await waitFor(() => noteState(mint, hashK1(k1)) === 'pending')
+
+    // The same refusal the mutating callback already gives, and the same
+    // one the reference mint gives here - and the kit classifies it as the
+    // typed error a wallet acts on, rather than an unknown-note answer that
+    // would have it write the note off.
+    await expect(fetchNoteInfo(url)).rejects.toThrow(PendingNoteError)
   })
 
   it('refuses to melt into a hash the funding source already paid for someone else', async () => {
