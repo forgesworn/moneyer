@@ -55,7 +55,11 @@ export interface LightningBackend {
   createInvoice(args: {amountMsat: number; preimageHex: string; memo: string; descriptionForHash?: string}): Promise<{pr: string}>
   // Throws PaymentFailedError on a clean terminal failure, anything else on
   // an ambiguous one.
-  payInvoice(args: {pr: string; feeLimitMsat: number}): Promise<PaymentOutcome>
+  //
+  // `amountMsat` is given only for an invoice that states no amount of its
+  // own, where the payer chooses. A backend must send exactly it, and must
+  // never apply it to an invoice that does carry an amount.
+  payInvoice(args: {pr: string; feeLimitMsat: number; amountMsat?: number}): Promise<PaymentOutcome>
   // True/false only on a genuinely terminal answer; throws
   // PaymentPendingError while the outcome is still open.
   isPaymentComplete(paymentHashHex: string): Promise<boolean>

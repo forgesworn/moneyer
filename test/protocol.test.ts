@@ -507,6 +507,65 @@ describe('melting', () => {
     ).rejects.toThrow(PendingNoteError)
   })
 
+  it('melts to an invoice that states no amount, for the note it is spending', async () => {
+    const mint = await start()
+    const note = creditNote(mint, 21_000)
+    const info = await fetchNoteInfo(note.url)
+
+    const preimage = freshK1()
+    const paymentHash = hashK1(preimage)
+    mint.backend.control.registerPaymentPreimage(paymentHash, preimage)
+    // No amount in the invoice at all: the note's value is the amount.
+    const melt = await meltNote(info.callback, note.k1, fakeBolt11({paymentHashHex: paymentHash}))
+    expect(melt.verify).toBeDefined()
+
+    await waitFor(() => mint.moneyer.store.noteById(hashK1(note.k1))?.state === 'burned')
+    expect(mint.backend.control.sentAmountMsat(paymentHash)).toBe(21_000)
+    expect(mint.moneyer.store.outstandingLiabilityMsat()).toBe(0)
+  })
+
+  it('sends the whole-sat floor of a note that is not a whole sat', async () => {
+    const mint = await start()
+    const note = creditNote(mint, 94_900)
+    const info = await fetchNoteInfo(note.url)
+
+    const paymentHash = freshK1()
+    await meltNote(info.callback, note.k1, fakeBolt11({paymentHashHex: paymentHash}))
+    await waitFor(() => mint.moneyer.store.noteById(hashK1(note.k1))?.state === 'burned')
+    // The same 900 msat of dust the mint keeps when a wallet invoices the
+    // floor itself, because most wallets can only invoice whole sats.
+    expect(mint.backend.control.sentAmountMsat(paymentHash)).toBe(94_000)
+  })
+
+  it('tells the funding source nothing when the invoice states its own amount', async () => {
+    const mint = await start()
+    const note = creditNote(mint, 21_000)
+    const info = await fetchNoteInfo(note.url)
+
+    const paymentHash = freshK1()
+    await meltNote(info.callback, note.k1, fakeBolt11({amountMsat: 21_000, paymentHashHex: paymentHash}))
+    await waitFor(() => mint.moneyer.store.noteById(hashK1(note.k1))?.state === 'burned')
+    // A funding source refuses an amount alongside an invoice that carries
+    // one, so the mint must not send it.
+    expect(mint.backend.control.sentAmountMsat(paymentHash)).toBeNull()
+  })
+
+  it('refuses an amountless invoice from a note worth less than a sat', async () => {
+    const mint = await start()
+    const note = creditNote(mint, 900)
+    const info = await fetchNoteInfo(note.url)
+
+    await expect(meltNote(info.callback, note.k1, fakeBolt11({paymentHashHex: freshK1()}))).rejects.toThrow(
+      ServiceRejectedError
+    )
+    // Refused whole: the note is untouched and can still be melted by a
+    // wallet that invoices its exact value.
+    expect(mint.moneyer.store.noteById(hashK1(note.k1))?.state).toBe('outstanding')
+    const exact = freshK1()
+    await meltNote(info.callback, note.k1, fakeBolt11({amountMsat: 900, paymentHashHex: hashK1(exact)}))
+    await waitFor(() => mint.moneyer.store.noteById(hashK1(note.k1))?.state === 'burned')
+  })
+
   it('refuses the wrong amount, its own invoices, and a reused invoice', async () => {
     const mint = await start()
     const note = creditNote(mint, 21_000)

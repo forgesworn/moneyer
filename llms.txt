@@ -35,8 +35,11 @@ Client library to build against a mint: lnurlcash-kit
 4. Melt OK means IN FLIGHT. The note burns only on confirmed payment,
    restores only on confirmed non-payment, and stays pending otherwise.
    A clean failure REPORT is not confirmation (hodl invoices).
-5. A melt invoice must equal the note total exactly, must not be one this
-   mint issued, and must not repeat an earlier melt's payment hash.
+5. A melt invoice must equal the note total exactly, or state no amount
+   at all, in which case the mint sends the whole-sat floor of the note's
+   value and refuses with 'insufficient value' when that is zero. It must
+   not be one this mint issued, and must not repeat an earlier melt's
+   payment hash.
    On a SHARED funding source the node's own payment history is the only
    dedupe that spans every consumer: pre-check it before reserving the
    note, and treat the node's "payment already exists" refusal as a

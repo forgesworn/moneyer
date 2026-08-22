@@ -105,12 +105,19 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
       return {pr: res.json.payment_request}
     },
 
-    async payInvoice({pr, feeLimitMsat}) {
+    async payInvoice({pr, feeLimitMsat, amountMsat}) {
       const {result, error} = await streamUntil(
         '/v2/router/send',
         {
           method: 'POST',
-          body: {payment_request: pr, timeout_seconds: 60, fee_limit_msat: String(feeLimitMsat)},
+          body: {
+            payment_request: pr,
+            timeout_seconds: 60,
+            fee_limit_msat: String(feeLimitMsat),
+            // Only for an invoice that states no amount: lnd refuses
+            // amt_msat alongside one that does.
+            ...(amountMsat !== undefined ? {amt_msat: String(amountMsat)} : {})
+          },
           timeoutMs: 90_000
         },
         payment => (payment?.status === 'SUCCEEDED' || payment?.status === 'FAILED' ? payment : undefined)

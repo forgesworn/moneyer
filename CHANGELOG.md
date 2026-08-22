@@ -5,6 +5,16 @@
 While LUD-25 is a draft, a `0.x` minor bump may be breaking; this one is
 additive on the wire apart from the node-capacity rename below.
 
+- A note melts to an invoice that states no amount. Such an invoice used
+  to be refused outright, which is a papercut for anyone paying one: for a
+  bearer note the amount was never in question, since the note's value is
+  the amount. The mint sends the whole-sat floor of the note's value, the
+  same figure it already accepts from a wallet that fills the amount in
+  itself, and keeps the sub-sat remainder as the same dust. A note worth
+  less than a single satoshi has nothing left once the floor applies and
+  is refused with `insufficient value`; it can still be melted by a wallet
+  that invoices its exact value. Everything else about the melt path is
+  untouched, including the pending and restore discipline.
 - A wallet can name the note it is buying. It chooses the note's spend
   secret itself, keeps it, and sends `h`, the sha256 of that secret, on
   the pay callback; the mint credits the note at `h` when the invoice

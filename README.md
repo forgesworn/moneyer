@@ -253,6 +253,23 @@ there by advertising `minWithdrawable` as the note floored to a whole sat
 and accepting a melt for that; the sub-sat remainder is dust the mint
 keeps. Rounding at mint time means it never comes up.
 
+## Melting to an invoice with no amount
+
+An invoice that states no amount leaves the sending side to decide, and
+for a bearer note there is nothing to decide: the note's value is the
+amount. moneyer melts a note to one for the whole-sat floor of its value,
+the same figure it accepts from a wallet that fills the amount in itself,
+and keeps the sub-sat remainder as the same dust described above.
+
+A note worth less than a single satoshi has nothing left once the floor
+applies, so an amountless invoice from one is refused with `insufficient
+value`. It can still be melted the ordinary way by a wallet that invoices
+its exact millisatoshi value.
+
+Nothing else about the melt changes. `OK` still means in flight, the note
+still burns only on confirmed payment and restores only on confirmed
+non-payment, and the routing budget is still sized against the note.
+
 ## Name the note you are buying
 
 Paying a mint invoice mints a note, and by default that note's spend

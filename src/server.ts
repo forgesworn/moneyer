@@ -796,7 +796,19 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // less than the floor: that would let a holder leave real value on
         // the table by accident, and never more.
         const floorMsat = wholeSatFloor(totalMsat)
-        if (decoded.amountMsats === null || decoded.amountMsats > BigInt(totalMsat) || decoded.amountMsats < BigInt(floorMsat)) {
+        // An invoice that states no amount is the easiest case a bearer
+        // note has: the note's value IS the amount, so the mint fills it in
+        // rather than refusing. It sends the whole-sat floor, which is the
+        // arithmetic a whole-value melt already does, and keeps the sub-sat
+        // remainder as the same dust it keeps when a wallet invoices the
+        // floor itself. A note worth less than a single sat has nothing
+        // left once that applies, and is refused as it always was.
+        const payAmountMsat = decoded.amountMsats === null ? floorMsat : null
+        if (payAmountMsat === 0) return fail('insufficient value')
+        if (
+          decoded.amountMsats !== null &&
+          (decoded.amountMsats > BigInt(totalMsat) || decoded.amountMsats < BigInt(floorMsat))
+        ) {
           return fail(
             floorMsat === totalMsat
               ? `Invoice must be for exactly ${totalMsat} msat.`
@@ -841,7 +853,13 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         }
         inFlight.add(paymentHash)
         void runMelt(
-          {paymentHash, noteId: inputIds[0]!, pr: pr.trim(), amountMsat: totalMsat},
+          {
+            paymentHash,
+            noteId: inputIds[0]!,
+            pr: pr.trim(),
+            amountMsat: totalMsat,
+            ...(payAmountMsat !== null ? {payAmountMsat} : {})
+          },
           {store, backend, feeLimitMsat: meltFeeLimitMsat, log, ...(deps.confirmDelaysMs ? {confirmDelaysMs: deps.confirmDelaysMs} : {})}
         )
           .catch(err => log(`melt ${inputIds[0]}: ${(err as Error).message}`))
