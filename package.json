@@ -1,6 +1,6 @@
 {
   "name": "@forgesworn/moneyer",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "An LNURLcash (LUD-25) mint - strikes Lightning bearer notes. Independent implementation, cln/lnd funding sources, SQLite, zero HTTP framework.",
   "author": "TheCryptoDonkey",
   "license": "MIT",
