@@ -66,6 +66,15 @@ node dist/cli.js
 The mint is then payable at `mint@mint.example` (and the bare-domain `_`
 alias).
 
+**Before you point one at mainnet**, read [Before you run this](DEPLOY.md)
+in the deployment guide. A mint holds other people's bitcoin as bearer
+liabilities, and it is the custody rather than the code that a regulator
+has a view on. Two things carry most of the weight: an evaluation mint
+should be configured as one (a fee kept at or below cost recovery rather
+than zeroed, no priced names, a small cap, a MOTD that says so - or
+better, a test network), and **no mint should ever touch fiat**. moneyer is millisatoshis throughout, deliberately, and that
+boundary is what keeps a mint clear of the payments and e-money regimes.
+
 ## Configuration
 
 Environment only. Every variable is `MONEYER_*`; anything unset takes the

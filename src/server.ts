@@ -13,6 +13,7 @@ import {
   type NoteRow
 } from './store.ts'
 import {createNoteSigner, type NoteSigner} from './signing.ts'
+import {describeFee} from './fee-words.ts'
 import {createFakeBackend} from './backends/fake.ts'
 import {createClnBackend} from './backends/cln.ts'
 import {createLndBackend} from './backends/lnd.ts'
@@ -84,14 +85,7 @@ const readBody = async (req: IncomingMessage, limit = MAX_BODY_BYTES): Promise<s
   return Buffer.concat(chunks).toString('utf8')
 }
 
-// "fee 5 sat + 0.1%" - what a payer sees in their wallet's description.
-export const describeFee = (fee: {baseFeeMsat: number; feePpm: number}, roundedToSat: boolean): string => {
-  const parts: string[] = []
-  if (fee.baseFeeMsat > 0) parts.push(`${fee.baseFeeMsat % 1000 === 0 ? fee.baseFeeMsat / 1000 : (fee.baseFeeMsat / 1000).toFixed(3)} sat`)
-  if (fee.feePpm > 0) parts.push(`${(fee.feePpm / 10_000).toString()}%`)
-  const base = parts.length ? `fee ${parts.join(' + ')}` : 'no fee'
-  return roundedToSat && parts.length ? `${base}, rounded up to the sat` : base
-}
+export {describeFee} from './fee-words.ts'
 
 // A note's value rounded down to a whole sat; unchanged when already whole.
 const wholeSatFloor = (msat: number): number => Math.floor(msat / 1000) * 1000

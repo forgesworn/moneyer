@@ -2,6 +2,7 @@ import type {MoneyerConfig} from './config.ts'
 import type {NodeInfo} from './backends/types.ts'
 import type {MintStats} from './stats.ts'
 import {MINT_KNOWS, MINT_KNOWS_HEADING} from './privacy.ts'
+import {feeInUnits} from './fee-words.ts'
 import {applyMintFee} from 'lnurlcash-kit'
 
 // The mint's face: one self-contained page at GET /, no build step, no
@@ -25,9 +26,7 @@ export const landingPage = (args: {
   const stats = args.stats ?? null
   const address = `${config.username}@${host}`
   const fee = config.mintFee
-  const feeLine = fee
-    ? `${fee.baseFeeMsat > 0 ? `${fee.baseFeeMsat} msat flat` : ''}${fee.baseFeeMsat > 0 && fee.feePpm > 0 ? ' + ' : ''}${fee.feePpm > 0 ? `${fee.feePpm / 10_000}%` : ''}`
-    : 'none'
+  const feeLine = feeInUnits(fee, config.roundFeeToSat !== false)
   const maxNet = fee ? applyMintFee(config.maxSendableMsat, fee) : config.maxSendableMsat
   const sats = (msat: number) => `${(msat / 1000).toLocaleString('en-GB')} sat`
   const title = config.name ?? nodeInfo.alias ?? 'moneyer'

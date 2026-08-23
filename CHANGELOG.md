@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+- **The fee says its own units.** `Mint fees: 5000,1000` is the shape
+  LUD-25 wallets parse - lnurlcash-kit matches it anchored and
+  digits-only, so it cannot carry units - and testers were reading both
+  numbers as satoshis. On a 10k sat mint that reads as a 5000 sat fee,
+  which is alarming and false. The prose beside it now spells the pair
+  out: `fee 5 sat + 0.1% (5000 msat + 1000 ppm), rounded up to the sat`.
+  The wire format is untouched.
+- The fee prose moves to `src/fee-words.ts`, the way `privacy.ts` already
+  holds the privacy statement, so the payRequest metadata and the
+  landing page cannot drift apart on it. The landing page had grown its
+  own second version reading `5000 msat flat + 0.1%`; it now uses the
+  shared one. `describeFee` is still exported from `server.ts`.
+- **Operator guidance on the custodial position.** `DEPLOY.md` gains a
+  "Before you run this" section: the regulatory perimeter follows the
+  operator rather than the code, how to configure an evaluation mint so
+  it reads as one, why **not** to zero the fee to make that point (a
+  fee-free mint pays the melt routing floor out of its own balance and is
+  griefable by mint-and-melt cycling - see `THREAT-MODEL.md`), and the
+  no-fiat invariant. moneyer is millisatoshis throughout, and that is
+  load-bearing rather than incidental.
+- `TERMS-TEMPLATE.md`, a starting point for `MONEYER_TOS_URL`. It defers
+  to the mint's own "what the mint knows" statement rather than restating
+  it, for the same no-drift reason.
+
 ## [0.5.0] - 2026-08-23
 
 - **Both doors, named.** With `MONEYER_ONION_URL` and

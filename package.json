@@ -37,6 +37,7 @@
     "CHANGELOG.md",
     "SECURITY.md",
     "THREAT-MODEL.md",
+    "TERMS-TEMPLATE.md",
     "llms.txt"
   ],
   "scripts": {
