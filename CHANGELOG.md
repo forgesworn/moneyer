@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A standing proof-of-concept disclaimer.** moneyer is an evaluation
+  implementation of a draft spec, its funding backends are beta, and a
+  note is bearer value with no recovery - so the site now says so at the
+  top, before anyone pays, rather than leaving it to a threat model
+  nobody opens. A prominent banner on the home page and the mint flow,
+  and on the fallback landing page: "Proof of concept · for developers …
+  assume you can lose anything you put in", with a link to the operator's
+  terms when `tosUrl` is set. Always on, because it is true of every
+  moneyer deployment as the spec stands. The per-step `warn` notes and
+  the operator MOTD are unchanged and sit alongside it.
 - **The fee says its own units.** `Mint fees: 5000,1000` is the shape
   LUD-25 wallets parse - lnurlcash-kit matches it anchored and
   digits-only, so it cannot carry units - and testers were reading both

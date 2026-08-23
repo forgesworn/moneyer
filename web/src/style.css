@@ -456,6 +456,19 @@ a.qr { line-height: 0; }
   display: block; font-family: var(--mono); font-size: 10.5px; font-weight: 600;
   letter-spacing: 0.18em; text-transform: uppercase; color: var(--dim); margin-bottom: 6px;
 }
+.disclaimer {
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent);
+  border-left: 3px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, var(--paper-2));
+  padding: 13px 17px; text-align: left; line-height: 1.55; font-size: 14.5px;
+}
+.disclaimer b {
+  display: block; font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.16em; text-transform: uppercase; color: var(--warn); margin-bottom: 5px;
+}
+.disclaimer strong { color: var(--warn); font-weight: 700; }
+.disclaimer a { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+.disclaimer.compact { font-size: 13.5px; padding: 11px 15px; }
 .badge.good { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
 .badge.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
 .badge.wait { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }

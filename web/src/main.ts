@@ -557,11 +557,25 @@ const LUDS: Array<[string, string]> = [
   ['25', 'https://github.com/lnurl/luds/pull/301']
 ]
 
+// A standing, unmissable disclaimer. moneyer is an evaluation implementation
+// of a draft spec, its funding backends are beta, and a note is bearer value
+// with no recovery - so every deployment says so, at the top, before anyone
+// pays. Links to the operator's terms when there are any.
+const disclaimerBanner = (): string =>
+  `<div class="disclaimer" role="note">
+    <b>Proof of concept · for developers</b>
+    <span>An evaluation mint for the <a href="https://github.com/lnurl/luds/pull/301" target="_blank" rel="noopener">draft LNURLcash spec</a>. A note is real bearer value with no protection, no recovery and no guaranteed redemption - <strong>assume you can lose anything you put in.</strong>${addr?.tosUrl ? ` <a href="${esc(addr.tosUrl)}" target="_blank" rel="noopener">Terms</a>` : ''}</span>
+  </div>`
+
+const disclaimerInline = (): string =>
+  `<div class="disclaimer compact" role="note"><b>Demo · funds at risk</b><span>Evaluation mint - assume you can lose whatever you put in.${addr?.tosUrl ? ` <a href="${esc(addr.tosUrl)}" target="_blank" rel="noopener">Terms</a>` : ''}</span></div>`
+
 const viewHome = (): void => {
   const address = `${runtime.username}@${HOST}`
   const lnurl = toBech32Lnurl(`${API}/.well-known/lnurlp/${runtime.username}`)
   show(() => {
     const view = el(`<div class="view">
+      ${disclaimerBanner()}
       <header class="masthead">
         <h1 class="wordmark" data-wordmark>${esc((addr?.name ?? 'MONEYER').toUpperCase())}</h1>
         <div class="tagline">An LNURLcash mint · strikes Lightning bearer notes</div>
@@ -735,6 +749,7 @@ const viewMint = (): void => {
     const view = el('<div class="view"></div>')
     view.append(topBar('Mint a note', viewHome))
     const body = el(`<div class="stack">
+      ${disclaimerInline()}
       <div class="rubric">To be struck</div>
       <div class="amount-input"><input data-amount inputmode="numeric" pattern="[0-9]*" placeholder="0" autofocus /><span class="unit">sat</span></div>
       <div class="presets" data-presets></div>

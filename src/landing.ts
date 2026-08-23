@@ -85,12 +85,17 @@ p.small{color:var(--dim);font-size:13.5px;line-height:1.65;text-align:center}
 .knows p{font-size:14px;line-height:1.65}
 .motd{background:var(--raise);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:14px;padding:14px 18px;font-size:14.5px;line-height:1.6}
 .motd b{display:block;font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin-bottom:4px}
+.disclaimer{background:color-mix(in srgb,var(--warn,#c4a35e) 12%,var(--raise));border:1px solid color-mix(in srgb,var(--warn,#c4a35e) 50%,transparent);border-left:3px solid var(--warn,#c4a35e);border-radius:14px;padding:14px 18px;font-size:14.5px;line-height:1.55}
+.disclaimer b{display:block;font-size:11px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--warn,#c4a35e);margin-bottom:5px}
+.disclaimer strong{color:var(--warn,#c4a35e)}
+.disclaimer a{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
 a{color:var(--accent)}
 </style>
 </head>
 <body>
 <main>
 <svg class="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.6v8.8"/><path d="M15.4 9.4c-.7-1.1-1.9-1.8-3.4-1.8-2 0-3.6 1.1-3.6 2.7 0 3.4 7.2 1.8 7.2 5 0 1.6-1.6 2.7-3.6 2.7-1.5 0-2.7-.7-3.4-1.8"/></svg>
+<div class="disclaimer" role="note"><b>Proof of concept · for developers</b><span>An evaluation mint for the <a href="https://github.com/lnurl/luds/pull/301" rel="noopener noreferrer">draft LNURLcash spec</a>. A note is real bearer value with no protection, no recovery and no guaranteed redemption - <strong>assume you can lose anything you put in.</strong>${config.tosUrl ? ` <a href="${escapeHtml(config.tosUrl)}" rel="noopener noreferrer">Terms</a>` : ''}</span></div>
 <h1>${escapeHtml(title)}<small>An LNURLcash mint. Pay the address below and the invoice's payment preimage <em>is</em> your bearer note - money as a secret you hold.</small></h1>
 ${config.motd ? `<div class="motd"><b>notice</b>${escapeHtml(config.motd)}</div>` : ''}
 <div class="addr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.5 13.5H11L9.5 22 18 10.5h-6.5L13 2z"/></svg>${escapeHtml(address)}</div>
