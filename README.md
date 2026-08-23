@@ -507,6 +507,37 @@ controlled, and that property is unchanged: the worst a forged Host can do
 is get back the onion URL instead of the clearnet one, and the operator
 configured both. Anything else falls through to `MONEYER_PUBLIC_ORIGIN`.
 
+### Serving both audiences at once
+
+Both doors serve the **same notes**. A note is keyed by `sha256(k1)` and
+not by host, so a k1 struck on the onion is valid at the clearnet host and
+the other way round. What is bound to a host is only the URL a note
+travels as - and an onion note handed to somebody without Tor is
+unspendable to them, while a clearnet note redeemed over Tor is private
+only if their wallet proxies.
+
+So when both are configured, `/w` and the mint address name the other one
+in `mirrors`:
+
+```json
+{"tag": "withdrawRequest", "callback": "http://<v3>.onion/w/cb",
+ "mirrors": ["https://mint.example"], "mintPubkey": "..."}
+```
+
+Absent when there is only one door, rather than an empty array - a wallet
+reading `[]` would think it had been told something. The hourly Nostr
+announcement carries it too, so a wallet that discovers this mint on a
+relay learns both doors before it holds anything.
+
+**A wallet must not fail over to a mirror on its own.** Every request that
+identifies a note carries the k1, so switching hosts discloses a bearer
+secret to the new one, and nothing in LUD-25 lets a host prove it is the
+same mint before receiving that secret - a hostile discovery document can
+name any host and claim any `mintPubkey`, because claiming is not proving.
+Show the holder the other door and let them choose it. Closing that
+properly needs a challenge the mint signs, which the spec does not have
+yet.
+
 Running the hidden service itself is not this mint's job. Point a Tor
 `HiddenServiceDir` (or a proxy that speaks onion) at whatever host and port
 it already listens on, the same way you would front it with Caddy for

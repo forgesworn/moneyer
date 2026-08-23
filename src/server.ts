@@ -265,7 +265,11 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   // LUD-25 discovery, built here rather than inline in its route because
   // the mint also announces itself with it, and there must be one
   // description of a mint rather than two that can drift apart.
-  const mintAddressDocument = (origin: string, user: string): Record<string, unknown> => ({
+  const mintAddressDocument = (
+    origin: string,
+    user: string,
+    mirrors: string[] = []
+  ): Record<string, unknown> => ({
     tag: 'withdrawRequest',
     callback: `${origin}/w`,
     minWithdrawable: config.minMintMsat,
@@ -274,6 +278,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       : config.maxSendableMsat,
     defaultDescription: config.description,
     payLink: `${origin}/.well-known/lnurlp/${user}`,
+    ...(mirrors.length ? {mirrors} : {}),
     ...(signer ? {mintPubkey: signer.pubkey} : {}),
     // The human layer: who runs this, how to reach them, the terms,
     // and today's message. Absent unless the operator set it.
@@ -355,7 +360,14 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         kind: ANNOUNCE_KIND,
         created_at: Math.floor(Date.now() / 1000),
         tags: [['d', ANNOUNCE_D_TAG]],
-        content: announcementContent(mintAddressDocument(config.publicOrigin, config.username), config.signingKey)
+        content: announcementContent(
+          mintAddressDocument(
+            config.publicOrigin,
+            config.username,
+            config.onionUrl ? [config.onionUrl] : []
+          ),
+          config.signingKey
+        )
       },
       hexToBytes(config.zap.nostrKey)
     )
@@ -376,6 +388,16 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       onionHost && askedFor === onionHost
         ? config.onionUrl!
         : (config.publicOrigin ?? `http://${req.headers.host ?? '127.0.0.1'}`)
+    // This mint's OTHER doors. A note is keyed by sha256(k1) and not by
+    // host, so every one of these serves the same notes - but a note
+    // travels as a URL, and a URL names one host. An onion note handed to
+    // somebody without Tor is unspendable to them, and a clearnet note
+    // redeemed over Tor is only private if their wallet proxies. Saying
+    // which other host answers is what lets a wallet move a note between
+    // them instead of the holder finding out it cannot.
+    const mirrors = [config.publicOrigin, config.onionUrl].filter(
+      (candidate): candidate is string => Boolean(candidate) && candidate !== origin
+    )
     const host = new URL(origin).host
 
     const send = (body: unknown, status = 200): void => {
@@ -618,7 +640,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     const lnurlwMatch = requestUrl.pathname.match(/^\/\.well-known\/lnurlw\/(.+)$/)
     if (lnurlwMatch) {
       if (!knownUser(lnurlwMatch[1]!)) return fail('Unknown user.', 404)
-      return send(mintAddressDocument(origin, lnurlwMatch[1]!))
+      return send(mintAddressDocument(origin, lnurlwMatch[1]!, mirrors))
     }
 
     // ---- LUD-06 pay callback: issue a mint invoice ----
@@ -783,6 +805,10 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // signing keys. Without it a wallet that only ever received notes
         // cannot tell an announced key rotation from a substituted key.
         payLink: `${origin}/.well-known/lnurlp/${config.username}`,
+        // Where else this same note can be redeemed. A holder with nothing
+        // but a note learns from the note itself that the other door
+        // exists.
+        ...(mirrors.length ? {mirrors} : {}),
         ...(signer ? {mintPubkey: signer.pubkey} : {})
       })
     }
