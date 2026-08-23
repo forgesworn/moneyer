@@ -25,6 +25,10 @@ export type MoneyerConfig = {
   // Unset means "derive from the request's Host header", which is fine on a
   // dev box and wrong behind a reverse proxy - production sets it.
   publicOrigin?: string
+  // The same mint as a Tor hidden service, e.g. http://<v3>.onion. When a
+  // request arrives on that host, every URL this mint hands back is built
+  // from it instead of publicOrigin.
+  onionUrl?: string
   username: string
   description: string
   // The human layer on the discovery endpoint: who this is, how to reach
@@ -271,6 +275,32 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     }
   }
 
+  // The same mint reached over Tor. A hidden service is a different
+  // origin, and a mint that answers a Tor visitor with its clearnet URL
+  // has told that visitor's wallet to leave Tor to finish the job - which
+  // is both broken and the exact thing they came here to avoid.
+  //
+  // Setting this does not weaken the reason publicOrigin exists. The Host
+  // header is spoofable, which is why it is not trusted to BUILD an
+  // origin; it is only used to CHOOSE between origins the operator
+  // configured. The worst a forged Host can do is get the onion URL back
+  // instead of the clearnet one, and the operator set both.
+  const onionUrl = env.MONEYER_ONION_URL
+  if (onionUrl) {
+    let parsed: URL
+    try {
+      parsed = new URL(onionUrl)
+    } catch {
+      throw new Error(`MONEYER_ONION_URL is not a URL: ${JSON.stringify(onionUrl)}.`)
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      throw new Error(`MONEYER_ONION_URL must be http or https, got ${JSON.stringify(onionUrl)}.`)
+    }
+    if (!parsed.hostname.endsWith('.onion')) {
+      throw new Error(`MONEYER_ONION_URL must be a .onion address, got ${JSON.stringify(parsed.hostname)}.`)
+    }
+  }
+
   const motd = text(env.MONEYER_MOTD)
   if (motd !== undefined && motd.length > MOTD_MAX) {
     throw new Error(`MONEYER_MOTD must be at most ${MOTD_MAX} characters - it is a banner, not a page.`)
@@ -308,6 +338,7 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     host: env.MONEYER_HOST ?? DEFAULTS.host,
     port: int(env.MONEYER_PORT, DEFAULTS.port),
     ...(publicOrigin ? {publicOrigin} : {}),
+    ...(onionUrl ? {onionUrl} : {}),
     username: env.MONEYER_USERNAME ?? DEFAULTS.username,
     description: env.MONEYER_DESCRIPTION ?? DEFAULTS.description,
     ...(name ? {name} : {}),

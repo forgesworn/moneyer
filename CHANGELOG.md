@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0] - 2026-08-23
+
+- **Reaching the mint over Tor.** `MONEYER_ONION_URL` names this mint's
+  hidden service, and a request arriving on that host gets every URL built
+  from it: the callback, the `withdrawLink`, the `payLink`, the lightning
+  address in the metadata. Without it a Tor visitor was answered with the
+  clearnet origin, so their wallet was told to leave Tor to finish the job
+  - the callback fetch going out over clearnet, from their address, naming
+  the mint they bank with. That is worse than not working, because it looks
+  like it worked.
+- The Host header **chooses** between origins here and never builds one.
+  `MONEYER_PUBLIC_ORIGIN` exists because that header is attacker
+  controlled, and the property is unchanged: the worst a forged Host can do
+  is get back the onion URL instead of the clearnet one, and the operator
+  configured both.
+
 ## [0.3.3] - 2026-08-22
 
 - **Refusals are logged, so an operator can see why a wallet is failing.**

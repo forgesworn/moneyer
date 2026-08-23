@@ -366,7 +366,16 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const requestUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`)
     const q = requestUrl.searchParams
-    const origin = config.publicOrigin ?? `http://${req.headers.host ?? '127.0.0.1'}`
+    // Which of this mint's own origins the caller reached it on. The Host
+    // header chooses between them and never builds one: it is attacker
+    // controlled, and the worst a forged value can do here is get back an
+    // origin the operator configured anyway.
+    const onionHost = config.onionUrl ? new URL(config.onionUrl).host.toLowerCase() : null
+    const askedFor = (req.headers.host ?? '').toLowerCase()
+    const origin =
+      onionHost && askedFor === onionHost
+        ? config.onionUrl!
+        : (config.publicOrigin ?? `http://${req.headers.host ?? '127.0.0.1'}`)
     const host = new URL(origin).host
 
     const send = (body: unknown, status = 200): void => {
