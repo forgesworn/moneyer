@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.5.0] - 2026-08-23
+
+- **Both doors, named.** With `MONEYER_ONION_URL` and
+  `MONEYER_PUBLIC_ORIGIN` both set, `/w` and the mint address now carry
+  `mirrors`: this mint's other origin. Both serve the same notes - a note
+  is keyed by `sha256(k1)` and not by host - but a note travels as a URL,
+  and a URL names one host, so an onion note handed to somebody without
+  Tor is unspendable to them. Naming the other door is what lets a wallet
+  offer the holder a way across.
+- Absent rather than empty when there is only one door, because a wallet
+  reading `[]` would think it had been told something. The hourly Nostr
+  announcement carries it too.
+- Documented, because it is a real limit rather than a missing feature: a
+  wallet must **not** fail over to a mirror on its own. Every request that
+  identifies a note carries the k1, and nothing in LUD-25 lets a host
+  prove it is the same mint before receiving that secret - a hostile
+  discovery document can name any host and claim any `mintPubkey`, since
+  claiming is not proving. Closing it needs a signed challenge the spec
+  does not have.
+
 ## [0.4.0] - 2026-08-23
 
 - **Reaching the mint over Tor.** `MONEYER_ONION_URL` names this mint's
