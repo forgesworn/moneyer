@@ -76,6 +76,7 @@ default, and a variable set to an empty string counts as unset.
 | `MONEYER_HOST` | `127.0.0.1` | listen address |
 | `MONEYER_PORT` | `3737` | listen port |
 | `MONEYER_PUBLIC_ORIGIN` | derived from `Host` | the origin wallets are told to call back on. Required behind a reverse proxy, and required for zap-to-note |
+| `MONEYER_ONION_URL` | | this mint as a Tor hidden service, e.g. `http://<v3>.onion`. A request arriving on that host gets its URLs built from it (see below) |
 | `MONEYER_USERNAME` | `mint` | the local part of the mint's own lightning address |
 | `MONEYER_DESCRIPTION` | `an LNURLcash note` | what a note is called on the wire (`defaultDescription`, and `description` on discovery) |
 | `MONEYER_DB` | `moneyer.sqlite` | SQLite path; `:memory:` allowed |
@@ -488,6 +489,28 @@ A registered name resolves on both rails at once:
 
 The discovery endpoint advertises `namePriceMsat` while registration is
 open, so a wallet can offer the flow without asking.
+
+## Reaching the mint over Tor
+
+Set `MONEYER_ONION_URL` to this mint's hidden service address and a request
+that arrives on that host gets every URL built from it: the callback, the
+`withdrawLink`, the `payLink`, the lightning address in the metadata.
+
+Without it a Tor visitor is answered with the clearnet origin, and their
+wallet is then told to leave Tor to finish the job - the callback fetch
+goes out over clearnet, from their address, naming the mint they bank
+with. That is worse than not working, because it looks like it worked.
+
+The Host header **chooses** between origins here; it never builds one.
+`MONEYER_PUBLIC_ORIGIN` exists precisely because the header is attacker
+controlled, and that property is unchanged: the worst a forged Host can do
+is get back the onion URL instead of the clearnet one, and the operator
+configured both. Anything else falls through to `MONEYER_PUBLIC_ORIGIN`.
+
+Running the hidden service itself is not this mint's job. Point a Tor
+`HiddenServiceDir` (or a proxy that speaks onion) at whatever host and port
+it already listens on, the same way you would front it with Caddy for
+clearnet.
 
 ## Endpoints
 
