@@ -44,7 +44,14 @@ afterEach(async () => {
   active = null
 })
 
-type CallbackReply = {status?: string; reason?: string; pr?: string; verify?: string; mintToHash?: boolean}
+type CallbackReply = {
+  status?: string
+  reason?: string
+  pr?: string
+  verify?: string
+  mintToHash?: boolean
+  mint?: {h: string; amount: number; sig?: string}
+}
 
 // The pay callback called directly. lnurlcash-kit can send `h` now, and
 // test/bound-mint-e2e.test.ts drives the whole purchase through it, but
@@ -77,6 +84,7 @@ describe('minting to a named note', () => {
     expect(reply.pr).toBeDefined()
     // The mint says it honoured the binding, before a sat is paid.
     expect(reply.mintToHash).toBe(true)
+    expect(reply.mint).toEqual({h: hashK1(secret), amount: 21_000})
 
     const paymentHash = decodeBolt11(reply.pr!).paymentHashHex
     mint.backend.control.settleInvoice(paymentHash)
@@ -91,6 +99,16 @@ describe('minting to a named note', () => {
     expect(verification.settled).toBe(true)
     expect(verification.preimage).not.toBeNull()
     expect(hashK1(verification.preimage!)).toBe(paymentHash)
+
+    const receipt = (await (await fetch(reply.verify!)).json()) as {
+      settled: boolean
+      mint: {h: string; amount: number; sig: string}
+    }
+    expect(receipt.mint.h).toBe(hashK1(secret))
+    expect(receipt.mint.amount).toBe(21_000)
+    expect(
+      verifyNoteSignature(secret, receipt.mint.amount, receipt.mint.sig, mint.moneyer.signer!.pubkey)
+    ).toBe(true)
 
     // It is not a note. Neither reading it nor spending it works.
     await expect(fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, verification.preimage!))).rejects.toThrow(
@@ -112,9 +130,26 @@ describe('minting to a named note', () => {
     const mint = await start({mintFee: fee})
     const secret = freshK1()
     const reply = await payCallback(mint, {amount: '50000', h: hashK1(secret)})
+    expect(reply.mint).toEqual({
+      h: hashK1(secret),
+      amount: mintFeeBand(50_000, fee).minNetMsat
+    })
     mint.backend.control.settleInvoice(decodeBolt11(reply.pr!).paymentHashHex)
     const note = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, secret))
     expect(note.maxWithdrawable).toBe(mintFeeBand(50_000, fee).minNetMsat)
+  })
+
+  it('never signs a bound receipt before its invoice settles', async () => {
+    const mint = await start()
+    const secret = freshK1()
+    const reply = await payCallback(mint, {amount: '21000', h: hashK1(secret)})
+    const pending = (await (await fetch(reply.verify!)).json()) as {
+      settled: boolean
+      mint: {h: string; amount: number; sig?: string}
+    }
+    expect(pending.settled).toBe(false)
+    expect(pending.mint).toEqual({h: hashK1(secret), amount: 21_000})
+    expect(pending.mint.sig).toBeUndefined()
   })
 
   it('leaves a wallet that sends no h exactly where it was', async () => {
@@ -206,6 +241,7 @@ describe('minting to a named note', () => {
     const mint = await start()
     const pay = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
     expect((pay as unknown as {mintToHash?: boolean}).mintToHash).toBe(true)
+    expect(pay.mintPubkey).toBe(mint.moneyer.signer!.pubkey)
     const info = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlw/mint`)).json()) as {mintToHash?: boolean}
     expect(info.mintToHash).toBe(true)
   })

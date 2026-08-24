@@ -92,6 +92,40 @@ let addr: MintInfo | null = null
 let fee: MintFee | null = null
 let stats: MintStats | null = null
 
+type BoundMintWire = {h: string; amount: number; sig?: string}
+type BoundInvoice = {
+  pr: string
+  verify?: string
+  mintToHash: boolean
+  mint?: BoundMintWire
+}
+type PendingBoundMint = {
+  secret: string
+  h: string
+  pr: string
+  verifyUrl: string
+  grossMsat: number
+  amountMsat: number
+}
+
+// Tab-scoped crash recovery. This page has no wallet database, but it must
+// still persist a chosen secret before showing an invoice: paying and then
+// losing k1 is the one catastrophic failure unique to mint-to-hash.
+const PENDING_BOUND_MINT = 'moneyer:pending-bound-mint:v1'
+const savePendingBoundMint = (pending: PendingBoundMint): void =>
+  sessionStorage.setItem(PENDING_BOUND_MINT, JSON.stringify(pending))
+const loadPendingBoundMint = (): PendingBoundMint | null => {
+  try {
+    const pending = JSON.parse(sessionStorage.getItem(PENDING_BOUND_MINT) ?? 'null') as PendingBoundMint | null
+    return pending && /^[0-9a-f]{64}$/.test(pending.secret) && hashK1(pending.secret) === pending.h
+      ? pending
+      : null
+  } catch {
+    return null
+  }
+}
+const clearPendingBoundMint = (): void => sessionStorage.removeItem(PENDING_BOUND_MINT)
+
 // ---------- tiny DOM + motion helpers ----------
 
 const el = (html: string): HTMLElement => {
@@ -522,7 +556,9 @@ const boot = async (): Promise<void> => {
       })
       return
     }
-    viewHome()
+    const pending = loadPendingBoundMint()
+    if (pending && addr?.mintPubkey) viewInvoice({...pending, bound: pending})
+    else viewHome()
   } catch (err) {
     show(() => {
       const view = el(`<div class="view center" style="justify-content:center">
@@ -800,6 +836,47 @@ const viewMint = (): void => {
         if (net < minNet) throw new Error(`The smallest note here holds ${sats(minNet)} sat.`)
         if (net > maxNet) throw new Error(`The largest note here holds ${sats(maxNet)} sat.`)
         const gross = Math.min(Math.max(grossFor(net), p.minSendable), p.maxSendable)
+        const expectedNet = netFor(gross)
+        const canUseReceipt = p.mintToHash === true && Boolean(addr?.mintPubkey)
+        if (canUseReceipt) {
+          const secret = Array.from(crypto.getRandomValues(new Uint8Array(32)), byte =>
+            byte.toString(16).padStart(2, '0')
+          ).join('')
+          const h = hashK1(secret)
+          // Persist before even requesting the quote. Once an invoice is
+          // visible it may be paid by another device immediately.
+          savePendingBoundMint({
+            secret,
+            h,
+            pr: '',
+            verifyUrl: '',
+            grossMsat: gross,
+            amountMsat: expectedNet
+          })
+          const invoice = (await requestInvoice(p.callback, gross, {h})) as BoundInvoice
+          const committed =
+            invoice.mintToHash === true &&
+            invoice.verify &&
+            invoice.mint?.h.toLowerCase() === h &&
+            invoice.mint.amount === expectedNet &&
+            invoice.mint.sig === undefined
+          if (committed) {
+            const pending: PendingBoundMint = {
+              secret,
+              h,
+              pr: invoice.pr,
+              verifyUrl: invoice.verify!,
+              grossMsat: gross,
+              amountMsat: invoice.mint!.amount
+            }
+            savePendingBoundMint(pending)
+            viewInvoice({pr: invoice.pr, verifyUrl: invoice.verify!, grossMsat: gross, bound: pending})
+            return
+          }
+          // The bound quote was never shown or paid. Forget its staged
+          // secret and ask again using the unchanged legacy flow.
+          clearPendingBoundMint()
+        }
         const invoice = await requestInvoice(p.callback, gross)
         if (!invoice.verify) {
           throw new Error('This mint offers no payment verification, so the page cannot claim the note for you.')
@@ -811,7 +888,12 @@ const viewMint = (): void => {
   })
 }
 
-const viewInvoice = (args: {pr: string; verifyUrl: string; grossMsat: number}): void => {
+const viewInvoice = (args: {
+  pr: string
+  verifyUrl: string
+  grossMsat: number
+  bound?: PendingBoundMint
+}): void => {
   const epoch = viewEpoch + 1
   show(() => {
     const view = el('<div class="view"></div>')
@@ -843,11 +925,42 @@ const viewInvoice = (args: {pr: string; verifyUrl: string; grossMsat: number}): 
       inFlightPoll = true
       checkButton.innerHTML = `${icons.refresh}<span>Checking…</span>`
       try {
-        const result = await fetchInvoiceVerification(args.verifyUrl)
+        const result = (await fetchInvoiceVerification(args.verifyUrl)) as Awaited<
+          ReturnType<typeof fetchInvoiceVerification>
+        > & {mint?: BoundMintWire}
         if (viewEpoch !== epoch) return
+        if (result.settled && args.bound) {
+          const receipt = result.mint
+          const mintPubkey = addr?.mintPubkey
+          const valid = Boolean(
+            receipt?.sig &&
+              mintPubkey &&
+              result.pr.trim().toLowerCase() === args.pr.trim().toLowerCase() &&
+              receipt.h.toLowerCase() === args.bound.h &&
+              receipt.amount === args.bound.amountMsat &&
+              verifyNoteSignature(args.bound.secret, receipt.amount, receipt.sig, mintPubkey)
+          )
+          if (!valid) throw new Error('The settled receipt does not match or authenticate this note.')
+          claimed = true
+          if (ticker) clearInterval(ticker)
+          const rawUrl = buildNoteUrl(
+            pay!.withdrawLink ?? `${API}/w`,
+            args.bound.secret,
+            args.bound.amountMsat
+          )
+          const signedUrl = withNewK1(
+            rawUrl,
+            args.bound.secret,
+            args.bound.amountMsat,
+            receipt!.sig
+          )
+          viewNote({url: signedUrl, amountMsat: args.bound.amountMsat, verified: true, secured: true})
+          return
+        }
         if (result.settled && result.preimage) {
           claimed = true
           if (ticker) clearInterval(ticker)
+          clearPendingBoundMint()
           await claimNote(result.preimage, args.grossMsat)
           return
         }
@@ -941,7 +1054,7 @@ const viewNote = (args: {url: string; amountMsat: number; verified: boolean; sec
     body.append(
       el(`<div class="badges">
         ${args.verified ? `<span class="badge good">${icons.shield}<span>signature verified</span></span>` : ''}
-        ${args.secured ? `<span class="badge good">${icons.check}<span>freshly rotated - only you hold it</span></span>` : `<span class="badge wait">${icons.hourglass}<span>not re-secured - receive it into a wallet soon</span></span>`}
+        ${args.secured ? `<span class="badge good">${icons.check}<span>wallet-chosen secret - only you hold it</span></span>` : `<span class="badge wait">${icons.hourglass}<span>not re-secured - receive it into a wallet soon</span></span>`}
       </div>`),
       el(`<p class="warn"><strong>This note is the money.</strong> Whoever sees it owns it - save it somewhere private, or open it in a wallet now.</p>`)
     )

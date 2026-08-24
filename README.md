@@ -340,7 +340,9 @@ is nearly holding the money.
 
 `h` is optional and additive. A wallet that sends none gets exactly the
 behaviour it always got, so upgrading this mint breaks nothing that works
-today, and the LUD-25 draft needs no change to allow it.
+today. The wire fields are an implementation proposal for eventual LUD-25
+adoption; current wallets and dni/reference mints keep using the original
+preimage-and-rotate flow unchanged.
 
 The rules:
 
@@ -361,6 +363,13 @@ The rules:
 - The payRequest and the discovery document both advertise `mintToHash:
   true`, so a wallet knows this mint takes the parameter before it asks
   rather than after it pays.
+- When signing and LUD-21 verification are enabled, the quote also carries
+  `mint: {h, amount}`. This is the exact output and net millisatoshi value
+  the invoice will mint; it never carries `sig` before settlement.
+- Once settled, `/verify` repeats the same `h` and `amount` and adds `sig`,
+  the ordinary LUD-25 signature over `LNURLcash:<amount>:<h>`. A sealed
+  signer can verify that receipt against the pre-payment commitment and
+  pinned `mintPubkey`, then confirm its staged note without exporting `k1`.
 - Claiming needs nothing else. `GET /w?k1=<the secret>` brings the note
   into existence as soon as the invoice has settled, with no `verify` poll
   and no preimage involved. The poll is still the way to claim from a mint
@@ -372,6 +381,10 @@ The rules:
 A named note is also derived-secret friendly: a wallet whose secrets come
 from its seed can restore a note it bought but never claimed, which a note
 whose secret was a preimage could never offer.
+
+The proposed normative wire text, invalid cases and compatibility matrix are
+kept executable in
+[`lnurlcash-conformance`](https://github.com/TheCryptoDonkey/lnurlcash-conformance/blob/main/docs/BOUND-MINT-RECEIPTS.md).
 
 ## A retried mutation is answered, not refused
 

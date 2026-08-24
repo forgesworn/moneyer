@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Bound mint settlement receipts.** A pay callback asked to mint at a
+  wallet-chosen `h` now commits the quote to `mint: {h, amount}` whenever
+  signing and LUD-21 verification are available. Before settlement the
+  response is unsigned; after settlement `/verify` repeats the commitment
+  and adds the ordinary LUD-25 note `sig`. This lets a sealed signer promote
+  a staged output without exporting its secret. No-`h`, unsigned and
+  verify-disabled deployments retain their previous response shapes.
+- The payRequest publishes `mintPubkey` when note signing is enabled, so a
+  receipt-aware wallet can establish the verification key before paying.
+- The bundled web client stages a wallet-chosen secret before requesting the
+  invoice, validates the quote and settled receipt, and falls back before
+  payment to the existing preimage-import-and-rotate flow when the optional
+  receipt is unavailable.
+
 - **A standing proof-of-concept disclaimer.** moneyer is an evaluation
   implementation of a draft spec, its funding backends are beta, and a
   note is bearer value with no recovery - so the site now says so at the

@@ -620,6 +620,9 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // LUD-17's lnurlw:// is the scheme a wallet puts on a QR, not a
         // field in a JSON body; every other URL here is directly fetchable.
         withdrawLink: `${origin}/w`,
+        // Receipt-aware wallets need the note-signing key before they pay,
+        // so they can authenticate the later LUD-21 mint receipt.
+        ...(signer ? {mintPubkey: signer.pubkey} : {}),
         // This mint takes `h` on the callback below, so a wallet can name
         // the note it is buying. Advertised here as well as on the
         // discovery document because a wallet handed nothing but a
@@ -727,6 +730,12 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // answer without it, and a wallet can tell the two apart before
         // paying rather than by looking for a note afterwards.
         ...(outputId !== null ? {mintToHash: true} : {}),
+        // Optional bound-receipt commitment: the exact output and net note
+        // value this invoice will mint. It is only offered when /verify can
+        // later authenticate settlement with this mint's signing key.
+        ...(outputId !== null && config.verify && signer
+          ? {mint: {h: outputId, amount: net}}
+          : {}),
         ...(config.verify ? {verify: `${origin}/verify/${paymentHash}`} : {})
       })
     }
@@ -741,11 +750,30 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         if (!invoice.settled && (await backend.isInvoiceSettled(paymentHash))) {
           store.settleMintInvoice(paymentHash)
         }
-        const settled = store.mintInvoiceByHash(paymentHash)!.settled
+        const currentInvoice = store.mintInvoiceByHash(paymentHash)!
+        const settled = currentInvoice.settled
         // The preimage IS the bearer secret. Served only once settled, and
         // fetched live from the funding source - it is never stored here.
         const preimageHex = settled ? await backend.invoicePreimage(paymentHash) : null
-        return send({status: 'OK', settled, preimage: preimageHex, pr: invoice.pr})
+        return send({
+          status: 'OK',
+          settled,
+          preimage: preimageHex,
+          pr: invoice.pr,
+          // Repeating h and amount binds this response to the quote. The
+          // ordinary note signature appears only once value exists at h.
+          ...(currentInvoice.outputId !== null && signer
+            ? {
+                mint: {
+                  h: currentInvoice.outputId,
+                  amount: currentInvoice.netMsat,
+                  ...(settled
+                    ? {sig: signer.sign(currentInvoice.outputId, currentInvoice.netMsat)}
+                    : {})
+                }
+              }
+            : {})
+        })
       }
       const melt = store.meltByHash(paymentHash)
       if (melt) {

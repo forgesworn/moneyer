@@ -11,8 +11,8 @@ installNodeFetch()
 
 // Boots the real mint website in a DOM against a real (fake-funded) mint
 // and walks the whole promise of the page: discovery renders the terms,
-// an invoice is created fee-grossed, settling it claims the note, the
-// claim rotates it, and the rotated note's signature verifies - all with
+// an invoice is created fee-grossed and bound to a staged browser secret;
+// settlement returns a receipt whose note signature verifies - all with
 // the same kit calls a wallet would make. Then the check flow classifies
 // an unknown note. Polls, never sleeps a fixed beat.
 
@@ -65,7 +65,7 @@ describe('the mint website', () => {
     expect(text()).toContain(mint.moneyer.signer!.pubkey)
   })
 
-  it('mints in the browser: invoice, settle, claim, rotate, verify', async () => {
+  it('mints in the browser: stage, quote, settle and verify the receipt', async () => {
     click('[data-go-mint]')
     await until(() => document.querySelector('[data-amount]') !== null, 'the mint form')
 
@@ -83,7 +83,11 @@ describe('the mint website', () => {
     const paymentHash = bolt11PaymentHash(pr)!
     mint.backend.control.settleInvoice(paymentHash)
 
-    await until(() => text().includes('freshly rotated') || document.querySelector('.toast.err') !== null, 'the claimed note or an error', 20_000)
+    await until(
+      () => text().includes('wallet-chosen secret') || document.querySelector('.toast.err') !== null,
+      'the claimed note or an error',
+      20_000
+    )
     const errToast = document.querySelector('.toast.err')
     if (errToast) throw new Error(`claim errored: ${errToast.textContent}`)
     expect(text()).toContain('signature verified')
