@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.6.0] - 2026-08-24
 
 - **Bound mint settlement receipts.** A pay callback asked to mint at a
   wallet-chosen `h` now commits the quote to `mint: {h, amount}` whenever
