@@ -38,7 +38,10 @@ const click = (selector: string): void => {
 const onHome = () => document.querySelectorAll('.tile').length === 2
 
 beforeAll(async () => {
-  mint = await startMint({mintFee: {baseFeeMsat: 1000, feePpm: 5000}})
+  mint = await startMint({
+    mintFee: {baseFeeMsat: 5000, feePpm: 1000},
+    roundFeeToSat: true
+  })
   ;(window as unknown as {__MINT__: unknown}).__MINT__ = {
     username: 'mint',
     origin: mint.moneyer.url,
@@ -61,7 +64,7 @@ describe('the mint website', () => {
 
   it('renders discovery: address, terms, fee line, signing key', () => {
     expect(text()).toContain(`mint@${new URL(mint.moneyer.url).host}`)
-    expect(text()).toContain('0.5%')
+    expect(text()).toContain('0.1%')
     expect(text()).toContain(mint.moneyer.signer!.pubkey)
   })
 
@@ -70,7 +73,7 @@ describe('the mint website', () => {
     await until(() => document.querySelector('[data-amount]') !== null, 'the mint form')
 
     const amount = document.querySelector<HTMLInputElement>('[data-amount]')!
-    amount.value = '21'
+    amount.value = '50'
     amount.dispatchEvent(new Event('input'))
     expect(text()).toContain('You pay')
 
@@ -80,6 +83,16 @@ describe('the mint website', () => {
     const pr = document.querySelector<HTMLAnchorElement>('a.qr')!.href.replace(/^lightning:/i, '')
     // grossed up: the invoice asks for more than the note will hold
     expect(text()).toContain('Copy invoice')
+    // Production's fee policy rounds the 5.056 sat exact fee to 6 sat:
+    // the quote commits 50,000 msat while the exact formula predicts
+    // 50,944 msat. Keeping this state proves the browser accepted that
+    // bound quote instead of silently clearing it and requesting a second,
+    // legacy invoice.
+    const pending = JSON.parse(sessionStorage.getItem('moneyer:pending-bound-mint:v1') ?? 'null') as {
+      pr?: string
+      amountMsat?: number
+    } | null
+    expect(pending).toMatchObject({pr, amountMsat: 50_000})
     const paymentHash = bolt11PaymentHash(pr)!
     mint.backend.control.settleInvoice(paymentHash)
 
@@ -92,7 +105,7 @@ describe('the mint website', () => {
     if (errToast) throw new Error(`claim errored: ${errToast.textContent}`)
     expect(text()).toContain('signature verified')
     // the value counts up from 0 - poll for the landing figure
-    await until(() => document.querySelector('[data-value]')?.textContent === '21', 'the counted value')
+    await until(() => document.querySelector('[data-value]')?.textContent === '50', 'the counted value')
     const walletLink = document.querySelector<HTMLAnchorElement>('a[href^="https://wallet.example/#/claim?u="]')
     expect(walletLink).not.toBeNull()
     // the code arrives under scratch silver, not in the open

@@ -27,6 +27,7 @@ import {
   rotateNote,
   toBech32Lnurl,
   verifyNoteSignature,
+  withinMintFeeBand,
   withNewK1,
   AmbiguousMutationError,
   NoteSpentError,
@@ -92,13 +93,6 @@ let addr: MintInfo | null = null
 let fee: MintFee | null = null
 let stats: MintStats | null = null
 
-type BoundMintWire = {h: string; amount: number; sig?: string}
-type BoundInvoice = {
-  pr: string
-  verify?: string
-  mintToHash: boolean
-  mint?: BoundMintWire
-}
 type PendingBoundMint = {
   secret: string
   h: string
@@ -853,21 +847,32 @@ const viewMint = (): void => {
             grossMsat: gross,
             amountMsat: expectedNet
           })
-          const invoice = (await requestInvoice(p.callback, gross, {h})) as BoundInvoice
-          const committed =
+          const invoice = await requestInvoice(p.callback, gross, {h})
+          const committedAmount = invoice.mint?.amountMsat
+          // LUD-25 does not specify whether a mint rounds its advertised
+          // millisatoshi fee up to a whole sat. Accept either reading of
+          // the advertised fee and then treat the quote's signed amount as
+          // authoritative for settlement and the resulting note.
+          const feeAccepted =
+            committedAmount !== undefined &&
+            Number.isSafeInteger(committedAmount) &&
+            committedAmount > 0 &&
+            (fee ? withinMintFeeBand(gross, committedAmount, fee) : committedAmount === gross)
+          const committed = Boolean(
             invoice.mintToHash === true &&
-            invoice.verify &&
+            invoice.verify !== undefined &&
             invoice.mint?.h.toLowerCase() === h &&
-            invoice.mint.amount === expectedNet &&
-            invoice.mint.sig === undefined
-          if (committed) {
+            feeAccepted &&
+            invoice.mint.signature === undefined
+          )
+          if (committed && committedAmount !== undefined) {
             const pending: PendingBoundMint = {
               secret,
               h,
               pr: invoice.pr,
               verifyUrl: invoice.verify!,
               grossMsat: gross,
-              amountMsat: invoice.mint!.amount
+              amountMsat: committedAmount
             }
             savePendingBoundMint(pending)
             viewInvoice({pr: invoice.pr, verifyUrl: invoice.verify!, grossMsat: gross, bound: pending})
@@ -925,20 +930,18 @@ const viewInvoice = (args: {
       inFlightPoll = true
       checkButton.innerHTML = `${icons.refresh}<span>Checking…</span>`
       try {
-        const result = (await fetchInvoiceVerification(args.verifyUrl)) as Awaited<
-          ReturnType<typeof fetchInvoiceVerification>
-        > & {mint?: BoundMintWire}
+        const result = await fetchInvoiceVerification(args.verifyUrl)
         if (viewEpoch !== epoch) return
         if (result.settled && args.bound) {
           const receipt = result.mint
           const mintPubkey = addr?.mintPubkey
           const valid = Boolean(
-            receipt?.sig &&
+            receipt?.signature &&
               mintPubkey &&
               result.pr.trim().toLowerCase() === args.pr.trim().toLowerCase() &&
               receipt.h.toLowerCase() === args.bound.h &&
-              receipt.amount === args.bound.amountMsat &&
-              verifyNoteSignature(args.bound.secret, receipt.amount, receipt.sig, mintPubkey)
+              receipt.amountMsat === args.bound.amountMsat &&
+              verifyNoteSignature(args.bound.secret, receipt.amountMsat, receipt.signature, mintPubkey)
           )
           if (!valid) throw new Error('The settled receipt does not match or authenticate this note.')
           claimed = true
@@ -952,7 +955,7 @@ const viewInvoice = (args: {
             rawUrl,
             args.bound.secret,
             args.bound.amountMsat,
-            receipt!.sig
+            receipt!.signature
           )
           viewNote({url: signedUrl, amountMsat: args.bound.amountMsat, verified: true, secured: true})
           return

@@ -1,7 +1,14 @@
 # Changelog
 
-## Unreleased
+## [0.6.1] - 2026-08-24
 
+- The bundled web wallet now accepts a bound mint quote anywhere inside
+  the mint's advertised fee band, then uses the committed amount for the
+  signed receipt and note. A mint that rounds its fee up to a whole sat -
+  including moneyer's production default - no longer makes the page
+  silently abandon the sealed-signer receipt path for a legacy invoice.
+  Browser coverage uses the production `5000 msat + 1000 ppm`, sat-rounded
+  policy and proves the staged quote survives through settlement.
 - A resumable real-node bound-mint release check persists its bearer secret
   with mode `0600` before requesting a quote, treats payer command output as
   opaque, validates the settlement preimage and signed receipt, then melts
