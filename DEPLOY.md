@@ -58,9 +58,64 @@ melt in fiat, or denominate a note in a national currency, and all of
 that closes at once - the last of those additionally lands you in the
 qualifying-stablecoin regime. Keep the msat boundary intact.
 
+**In the UK the operative registration is under the Money Laundering
+Regulations 2017, not the payments regimes.** A person carrying on
+business in the UK as a custodian wallet provider - safeguarding
+cryptoassets, or the keys to them, on behalf of customers - or as a
+cryptoasset exchange provider must be registered with the FCA; carrying
+on unregistered is a criminal offence. There is no de minimis: the gate
+is "by way of business", the same continuity-and-commercial-element
+analysis as PERG 2.3, and the evaluation posture above is the argument,
+not an exemption. The note itself is probably not an MLR cryptoasset -
+the definition asks for distributed ledger technology, and a note is a
+signature over a database row - which weakens the exchange limb. Custody
+is the live one: the mint holds bitcoin against bearer liabilities, a
+regulator reads substance, and substance says custodial wallet. A UK
+operator offering a mint to the public as a business should expect the
+question and have a better answer than "the IOU is mine". And know what
+registration would ask in return: the travel rule (MLR Part 7A) obliges a
+registered firm to pass originator and beneficiary information with a
+transfer, which an anonymous bearer instrument cannot carry. A public UK
+mint may be close to unregistrable as designed - a fact to weigh before
+building a business on one, not a loophole to lean on.
+
+**Marketing sits under its own regime, with a wider net.** Since October
+2023 an invitation or inducement to acquire a qualifying cryptoasset is a
+financial promotion: communicating one is a criminal offence for anyone
+neither authorised nor MLR-registered, and the net is territorial in the
+reader rather than the mint - a promotion capable of having an effect in
+the UK is caught wherever the server sits. The definition does not even
+require a blockchain: a transferable, fungible, cryptographically secured
+representation of value or rights qualifies, and a note is all three. Two
+consequences. Keep `MONEYER_ANNOUNCE` off unless the operator is
+registered - hourly self-announcements are inducements by design. And
+keep the site factual: no yields, no bonuses, no referral rewards,
+nothing that reads as encouragement rather than manual. The site this
+repo ships is written that way; keep it that way. (A registered firm may
+approve its own promotions, and then owes the prescribed risk warning,
+the 24-hour cooling-off and the incentives ban.)
+
+**Sanctions bind the operator however the mint is classified.** Making
+funds available to a designated person breaches the UK sanctions regime
+independent of any FCA perimeter, and an anonymous bearer service
+reachable over Tor has no screening capability at all. That cannot be
+engineered away while the instrument is bearer; it can only be bounded -
+small caps, a prohibited-use clause in the terms (TERMS-TEMPLATE.md
+carries one), and no pretence, to yourself or to holders, that the risk
+is closed.
+
+**The perimeter is moving towards the mint.** The Financial Services and
+Markets Act 2023 brings cryptoassets into the fold, and the draft
+secondary legislation published under it in 2025 makes safeguarding
+qualifying cryptoassets a regulated activity in its own right - the limb
+aimed squarely at a custodial mint. Nothing to build against today except
+the habit of reading it; the public `/stats` coverage figure is
+incidentally the shape of the disclosure such a regime will expect.
+
 **None of the above is legal advice.** If a mint you run holds value that
 would matter to the person who lost it, get advice from someone qualified
-in your jurisdiction before it does.
+in your jurisdiction before it does. In the UK the FCA's Innovation Hub
+will give an informal steer on where its perimeter sits, for free.
 
 ## The node
 

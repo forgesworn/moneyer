@@ -35,6 +35,18 @@
 - `TERMS-TEMPLATE.md`, a starting point for `MONEYER_TOS_URL`. It defers
   to the mint's own "what the mint knows" statement rather than restating
   it, for the same no-drift reason.
+- **The regulatory guidance grows its missing teeth.** `DEPLOY.md`'s
+  "Before you run this" covered the payments perimeter and stopped there;
+  it now walks the UK regimes that actually bear on a custodial mint:
+  FCA registration under the Money Laundering Regulations 2017 (custody
+  is the live limb, and the travel rule the structural one - an anonymous
+  bearer instrument cannot carry originator and beneficiary information),
+  the financial promotion rules that gate marketing for an unregistered
+  operator (`MONEYER_ANNOUNCE` and the site copy both), sanctions, which
+  bind regardless of classification, and the cryptoasset custody regime
+  the 2025 draft legislation is bringing. `TERMS-TEMPLATE.md` gains the
+  liability floor consumer law insists on, a sanctions prohibited-use
+  clause, and a privacy notice in outline.
 
 ## [0.5.0] - 2026-08-23
 

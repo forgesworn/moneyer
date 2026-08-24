@@ -54,7 +54,11 @@ note out today.
 
 The service is provided as is, without warranty of any kind. To the
 fullest extent the law allows, the operator accepts no liability for any
-loss arising from its use.
+loss arising from its use. That sentence has a floor: nothing in these
+terms limits a liability the law does not allow to be limited, and if you
+use this mint as a consumer, the statutory rights your law does not let
+you sign away - in the UK, those the Consumer Rights Act 2015 implies -
+are unaffected.
 
 ### Wind-down
 
@@ -87,6 +91,14 @@ between operations.
 
 Do not use this mint for anything where that matters to you.
 
+That statement is also the privacy notice in outline. The personal data
+are the network addresses requests arrive from and any zap names bound to
+pubkeys; the operator holds them to run the mint and for nothing else,
+keeps them for <retention period>, and does not sell or share them except
+under compulsion of law. Where your law gives you rights over your data -
+in the UK, the UK GDPR rights of access, correction and deletion -
+contact <contact> to exercise them.
+
 ### What this mint is not
 
 - **Not a bank, and not a deposit-taker.** A note is not a deposit. There
@@ -99,8 +111,12 @@ Do not use this mint for anything where that matters to you.
 
 ### Use
 
-Use this mint lawfully. The operator may refuse or reverse service, and
-may cooperate with lawful requests from authorities in <jurisdiction>.
+Use this mint lawfully. Do not use it if you are designated under UK, UN,
+EU or US sanctions lists (or those of <jurisdiction>), and do not use it
+to move value to or for anyone who is: a bearer mint cannot screen its
+holders, so that duty sits with you. The operator may refuse or reverse
+service, and may cooperate with lawful requests from authorities in
+<jurisdiction>.
 
 ### Operator and contact
 
