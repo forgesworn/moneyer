@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- A resumable real-node bound-mint release check persists its bearer secret
+  with mode `0600` before requesting a quote, treats payer command output as
+  opaque, validates the settlement preimage and signed receipt, then melts
+  the whole test note to a fresh amountless refund invoice. Interrupted runs
+  resume from the same state file; successful runs scrub the secret and leave
+  no test-note liability behind.
+
 ## [0.6.0] - 2026-08-24
 
 - **Bound mint settlement receipts.** A pay callback asked to mint at a

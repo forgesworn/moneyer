@@ -251,3 +251,25 @@ The grader exits non-zero on any failure, and its spending run includes
 the adversarial shapes (duplicated k1, output-id collision, h equal to
 h2) a mint must refuse atomically. Raise MONEYER_MAX_SENDABLE_MSAT only
 after that passes and a few real mint/melt round trips settle cleanly.
+
+For the receipt path itself, run the repository's resumable real-node check
+from a built checkout. It needs a second Lightning node: the payer command
+receives the mint invoice as its final argument, and the refund command must
+print a fresh **amountless** invoice so moneyer can melt the whole test note
+back to the payer.
+
+```bash
+npm run live:bound-mint -- \
+  --pay-url https://mint.example/.well-known/lnurlp/mint \
+  --amount-sat 56 \
+  --state /var/lib/moneyer-checks/bound-mint.json \
+  --payer ssh payer.example lncli payinvoice --force \
+  --refund ssh payer.example lncli addinvoice
+```
+
+This spends real sats. The state file is created with mode `0600` and contains
+the staged bearer secret before any quote or payment exists. Payer stdout may
+be JSON, a table, or empty: the check ignores it and proves settlement from
+LUD-21 instead. If either command or the network is interrupted, keep the
+state file and rerun the exact command. On success the refund has settled,
+the test note is burned, and the state file retains only public audit fields.

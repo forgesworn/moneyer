@@ -32,6 +32,7 @@
   "files": [
     "dist",
     "web/dist",
+    "scripts/live-bound-mint-check.mjs",
     "LICENSE",
     "README.md",
     "CHANGELOG.md",
@@ -51,7 +52,8 @@
     "web:dev": "vite web",
     "web:build": "vite build web",
     "web:preview": "vite preview web",
-    "typecheck:web": "tsc -p web"
+    "typecheck:web": "tsc -p web",
+    "live:bound-mint": "npm run build && node scripts/live-bound-mint-check.mjs"
   },
   "dependencies": {
     "@noble/curves": "^2.3.0",
