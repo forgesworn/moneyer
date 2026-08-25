@@ -88,7 +88,10 @@ const app = document.getElementById('app')!
 let viewEpoch = 0
 
 // discovery, loaded once at boot
-let pay: PayRequestInfo | null = null
+// The kit does not model LUD-12 yet, so commentAllowed rides alongside the
+// fields it does know about.
+type PayRequest = PayRequestInfo & {commentAllowed?: number}
+let pay: PayRequest | null = null
 let addr: MintInfo | null = null
 let fee: MintFee | null = null
 let stats: MintStats | null = null
