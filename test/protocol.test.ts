@@ -289,23 +289,23 @@ describe('minting', () => {
     const pay = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
     const invoice = await requestInvoice(pay.callback, 21_000)
     expect(invoice.disposable).toBe(false)
-    expect(invoice.verify).toBeDefined()
+    // No verify on this path, and that is the spec: the note's k1 IS the
+    // preimage here, so a verify URL - which anyone who has seen the
+    // invoice can build from its payment hash - would publish the note.
+    expect(invoice.verify).toBeUndefined()
     const paymentHash = decodeBolt11(invoice.pr).paymentHashHex
 
-    const before = await fetchInvoiceVerification(invoice.verify!)
-    expect(before.settled).toBe(false)
-    expect(before.preimage).toBeNull()
-
+    // The payer learns the preimage by paying, the way every Lightning
+    // wallet already keeps it. Nobody else has a route to it.
     mint.backend.control.settleInvoice(paymentHash)
-    const after = await fetchInvoiceVerification(invoice.verify!)
-    expect(after.settled).toBe(true)
-    expect(after.preimage).not.toBeNull()
+    const preimage = await mint.backend.invoicePreimage(paymentHash)
+    expect(preimage).not.toBeNull()
 
     // The preimage IS the k1. Claim it, learn its authoritative value, and
     // rotate immediately per the spec's security considerations.
-    const settled = await settleNote(`${mint.moneyer.url}/w`, after.preimage!, 21_000, undefined)
+    const settled = await settleNote(`${mint.moneyer.url}/w`, preimage!, 21_000, undefined)
     expect(settled.amountMsat).toBe(21_000)
-    expect(settled.k1).not.toBe(after.preimage)
+    expect(settled.k1).not.toBe(preimage)
     expect(verifyNoteSignature(settled.k1, 21_000, settled.signature!, mint.moneyer.signer!.pubkey)).toBe(true)
   })
 
@@ -316,8 +316,8 @@ describe('minting', () => {
     const invoice = await requestInvoice(pay.callback, 50_000)
     const paymentHash = decodeBolt11(invoice.pr).paymentHashHex
     mint.backend.control.settleInvoice(paymentHash)
-    const verification = await fetchInvoiceVerification(invoice.verify!)
-    const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, verification.preimage!))
+    const preimage = (await mint.backend.invoicePreimage(paymentHash))!
+    const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, preimage))
     expect(info.maxWithdrawable).toBe(mintFeeBand(50_000, fee).minNetMsat)
   })
 

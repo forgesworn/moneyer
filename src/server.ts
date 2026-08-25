@@ -766,7 +766,15 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         ...(outputId !== null && config.verify && signer
           ? {mint: {h: outputId, amount: net}}
           : {}),
-        ...(config.verify ? {verify: `${origin}/verify/${paymentHash}`} : {})
+        // LUD-25: a SERVICE MUST NOT offer verify on a mint payment that
+        // named no output. There the note's k1 IS the preimage, and verify
+        // hands it to whoever holds the URL - which anyone who has seen the
+        // invoice can build from its payment hash. A wallet on this path
+        // learns the preimage from paying the invoice, the way any Lightning
+        // wallet already keeps it.
+        ...(config.verify && outputId !== null
+          ? {verify: `${origin}/verify/${paymentHash}`}
+          : {})
       })
     }
 
@@ -777,6 +785,14 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       const paymentHash = verifyMatch[1]!.toLowerCase()
       const invoice = store.mintInvoiceByHash(paymentHash)
       if (invoice) {
+        // The other half of the rule above, and the half that matters: not
+        // advertising the URL does not stop anyone building it. Refused for
+        // an unnamed invoice quoted since this mint adopted the rule, and
+        // still honoured for one quoted before it, whose payer has no other
+        // way to reach a note they already own.
+        if (invoice.outputId === null && invoice.createdAt >= store.unnamedVerifyCutover()) {
+          return fail('Not found.', 404)
+        }
         if (!invoice.settled && (await backend.isInvoiceSettled(paymentHash))) {
           store.settleMintInvoice(paymentHash)
         }

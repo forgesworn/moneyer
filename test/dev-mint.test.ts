@@ -76,7 +76,9 @@ describe('a fake mint a wallet can use', () => {
   it('does not call an invoice paid in the same breath it issued it', async () => {
     const mint = await startDevMint(true, 60_000)
     const pay = await fetchPayRequest(`${mint.url}/.well-known/lnurlp/mint`)
-    const quote = await requestInvoice(pay.callback, 21_000, {})
+    // Named, because only a named quote gets a verify URL at all now - an
+    // unnamed note IS its preimage, and publishing that publishes the note.
+    const quote = await requestInvoice(pay.callback, 21_000, {h: hashK1('ab'.repeat(32))})
     const verify = (await (await fetch(quote.verify!)).json()) as {settled?: boolean; preimage?: string | null}
     expect(verify.settled).toBe(false)
     expect(verify.preimage).toBeNull()
@@ -95,7 +97,7 @@ describe('a fake mint a wallet can use', () => {
   it('settles the invoice itself rather than pretending the note exists', async () => {
     const mint = await startDevMint(true)
     const pay = await fetchPayRequest(`${mint.url}/.well-known/lnurlp/mint`)
-    const quote = await requestInvoice(pay.callback, 21_000, {})
+    const quote = await requestInvoice(pay.callback, 21_000, {h: hashK1('cd'.repeat(32))})
     const paymentHash = decodeBolt11(quote.pr).paymentHashHex
     // The LUD-21 path has to agree with the note path, or a wallet that
     // polls verify and a wallet that claims directly see different mints.

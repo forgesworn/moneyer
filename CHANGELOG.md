@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+- **No LUD-21 `verify` on a mint payment that named no output.** LUD-25
+  forbids it, and the reason is concrete: on that path the note's `k1` IS the
+  payment preimage, and `verify` publishes the preimage at a URL anyone who
+  has seen the invoice can build from its payment hash. The note was only as
+  private as the QR it was paid from.
+
+  Both halves are needed. New unnamed invoices get no `verify` field, and
+  `/verify/<hash>` refuses them outright - not advertising a URL does not
+  stop anyone constructing it. A payer on this path still learns the preimage
+  the way any Lightning wallet does, by paying.
+
+  **Invoices quoted before this mint adopted the rule keep their `verify`.**
+  A wallet polling one of those did not pay the invoice itself - that is why
+  it is polling - so the preimage this mint holds is its only route to a note
+  it already owns. Refusing them would not close a hole, it would burn
+  somebody's money. The cutover is written to a new `meta` table the first
+  time a build carrying this code opens the database, and never moves after;
+  persisted rather than taken from process start, or a restart would walk the
+  line forward and strand a quote made minutes earlier under the same build.
+  Old rows drain and the hole closes for everything new.
+
 - The mint accepts a LUD-12 `comment` carrying `hex(h)` as the name of the
   note being bought, and advertises `commentAllowed: 64` on the payRequest.
   This is how LUD-25 specifies it; `h` was this mint's own earlier spelling

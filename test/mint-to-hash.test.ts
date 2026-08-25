@@ -159,10 +159,15 @@ describe('minting to a named note', () => {
     // Absent, not false: a wallet reads this as "no binding was made".
     expect(reply.mintToHash).toBeUndefined()
 
+    // And no verify either: the note here IS the preimage, so publishing it
+    // at a URL built from the payment hash would publish the note.
+    expect(reply.verify).toBeUndefined()
+
     const paymentHash = decodeBolt11(reply.pr!).paymentHashHex
     mint.backend.control.settleInvoice(paymentHash)
-    const verification = await fetchInvoiceVerification(reply.verify!)
-    const note = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, verification.preimage!))
+    // The payer has the preimage from paying; nobody else has a route to it.
+    const preimage = (await mint.backend.invoicePreimage(paymentHash))!
+    const note = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, preimage))
     expect(note.maxWithdrawable).toBe(21_000)
   })
 
@@ -301,7 +306,10 @@ describe('an existing database', () => {
 describe('naming the note with a LUD-12 comment', () => {
   it('advertises the capability in both spellings', async () => {
     const mint = await start()
-    const pay = await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/mint`)).json()
+    const pay = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/mint`)).json()) as {
+      mintToHash?: boolean
+      commentAllowed?: number
+    }
     expect(pay.mintToHash).toBe(true)
     // 64 characters: exactly a hex-encoded 32-byte hash, nothing spare
     expect(pay.commentAllowed).toBe(64)
@@ -357,8 +365,11 @@ describe('naming the note with a LUD-12 comment', () => {
     const {paymentHashHex} = decodeBolt11(reply.pr!)
     mint.backend.control.settleInvoice(paymentHashHex)
 
-    // the note is the preimage, exactly as it was before comments existed
-    const preimage = (await fetchInvoiceVerification(reply.verify!)).preimage!
+    // the note is the preimage, exactly as it was before comments existed -
+    // and so, exactly as on any unnamed mint, there is no verify to read it
+    // from
+    expect(reply.verify).toBeUndefined()
+    const preimage = (await mint.backend.invoicePreimage(paymentHashHex))!
     const note = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, preimage))
     expect(note.maxWithdrawable).toBe(21_000)
   })
@@ -372,5 +383,40 @@ describe('naming the note with a LUD-12 comment', () => {
     const reply = await payCallback(mint, {amount: '21000', h: 'not-a-hash'})
     expect(reply.status).toBe('ERROR')
     expect(created()).toBe(0)
+  })
+})
+
+// Not advertising a URL does not stop anyone building it. The payment hash
+// is in the invoice, so `/verify/<hash>` is guessable by anyone who has seen
+// it - which for a QR on a screen is anyone who was looking.
+describe('verify on a note nobody named', () => {
+  it('is neither offered nor answered', async () => {
+    const mint = await start()
+    const reply = await payCallback(mint, {amount: '21000'})
+    expect(reply.verify).toBeUndefined()
+
+    const paymentHash = decodeBolt11(reply.pr!).paymentHashHex
+    mint.backend.control.settleInvoice(paymentHash)
+
+    // built by hand, exactly as an onlooker would
+    const res = await fetch(`${mint.moneyer.url}/verify/${paymentHash}`)
+    expect(res.status).toBe(404)
+  })
+
+  it('is still both for a note that was named', async () => {
+    const mint = await start()
+    const secret = freshK1()
+    const reply = await payCallback(mint, {amount: '21000', comment: hashK1(secret)})
+    expect(reply.verify).toBeDefined()
+
+    mint.backend.control.settleInvoice(decodeBolt11(reply.pr!).paymentHashHex)
+    const verification = await fetchInvoiceVerification(reply.verify!)
+    expect(verification.settled).toBe(true)
+    // The preimage is published here, and that is now harmless: it is not
+    // the note, and buys nothing.
+    expect(verification.preimage).toMatch(/^[0-9a-f]{64}$/)
+    await expect(
+      fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, verification.preimage!))
+    ).rejects.toBeTruthy()
   })
 })

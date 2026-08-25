@@ -24,6 +24,7 @@ export type MintInvoiceRow = {
   // credited at the invoice's own payment hash, so the payment preimage is
   // the spend secret.
   outputId: string | null
+  createdAt: number
 }
 export type MeltRow = {
   paymentHash: string
@@ -212,6 +213,31 @@ export class NoteStore {
     // Two invoices may not name the same note. SQLite counts NULLs as
     // distinct, so every unbound invoice still fits.
     this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS mint_invoices_output_id ON mint_invoices (output_id)')
+
+    this.db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);')
+    // The moment this mint stopped publishing preimages for notes nobody
+    // named. Written once, the first time a build carrying this code opens
+    // the database, and never moved after.
+    //
+    // It has to be persisted rather than taken from process start, or a
+    // restart would walk the line forward and strand a quote made minutes
+    // earlier under the same build. Invoices older than it keep their
+    // verify: a wallet polling one of those did not pay the invoice itself
+    // - that is why it is polling - so the preimage this mint holds is its
+    // only route to a note it already owns. Refusing those retroactively
+    // would not close a hole, it would burn somebody's money. They drain.
+    this.db
+      .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('unnamed_verify_cutover', ?)")
+      .run(String(Date.now()))
+  }
+
+  // Invoices quoted at or after this instant get no verify if they named no
+  // output. See the migration above for why it is not simply "now".
+  unnamedVerifyCutover(): number {
+    const row = this.db
+      .prepare("SELECT value FROM meta WHERE key = 'unnamed_verify_cutover'")
+      .get() as {value: string} | undefined
+    return row ? Number(row.value) : 0
   }
 
   private tx<T>(fn: () => T): T {
@@ -402,9 +428,19 @@ export class NoteStore {
 
   mintInvoiceByHash(paymentHash: string): MintInvoiceRow | null {
     const row = this.db
-      .prepare('SELECT payment_hash, pr, gross_msat, net_msat, settled, output_id FROM mint_invoices WHERE payment_hash = ?')
+      .prepare(
+        'SELECT payment_hash, pr, gross_msat, net_msat, settled, output_id, created_at FROM mint_invoices WHERE payment_hash = ?'
+      )
       .get(paymentHash) as
-      | {payment_hash: string; pr: string; gross_msat: number; net_msat: number; settled: number; output_id: string | null}
+      | {
+          payment_hash: string
+          pr: string
+          gross_msat: number
+          net_msat: number
+          settled: number
+          output_id: string | null
+          created_at: number
+        }
       | undefined
     if (!row) return null
     return {
@@ -413,7 +449,8 @@ export class NoteStore {
       grossMsat: row.gross_msat,
       netMsat: row.net_msat,
       settled: row.settled === 1,
-      outputId: row.output_id
+      outputId: row.output_id,
+      createdAt: row.created_at
     }
   }
 
@@ -433,7 +470,9 @@ export class NoteStore {
   // expired invoices - so it is dead weight, and every /p/cb call adds one.
   unsettledMintInvoices(): MintInvoiceRow[] {
     const rows = this.db
-      .prepare('SELECT payment_hash, pr, gross_msat, net_msat, settled, output_id FROM mint_invoices WHERE settled = 0')
+      .prepare(
+        'SELECT payment_hash, pr, gross_msat, net_msat, settled, output_id, created_at FROM mint_invoices WHERE settled = 0'
+      )
       .all() as Array<{
       payment_hash: string
       pr: string
@@ -441,6 +480,7 @@ export class NoteStore {
       net_msat: number
       settled: number
       output_id: string | null
+      created_at: number
     }>
     return rows.map(row => ({
       paymentHash: row.payment_hash,
@@ -448,7 +488,8 @@ export class NoteStore {
       grossMsat: row.gross_msat,
       netMsat: row.net_msat,
       settled: false,
-      outputId: row.output_id
+      outputId: row.output_id,
+      createdAt: row.created_at
     }))
   }
 
