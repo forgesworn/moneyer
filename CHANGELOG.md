@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- The bundled web wallet names its note on the plain path too, not only when
+  a signed receipt is on offer. It previously fell back to an unnamed mint
+  and then required `verify` to read the preimage - which, with the rule
+  above, a signer-less mint no longer answers. Naming needs no receipt, and
+  the page then claims the secret it chose rather than one the mint
+  publishes.
+
 - **No LUD-21 `verify` on a mint payment that named no output.** LUD-25
   forbids it, and the reason is concrete: on that path the note's `k1` IS the
   payment preimage, and `verify` publishes the preimage at a URL anyone who

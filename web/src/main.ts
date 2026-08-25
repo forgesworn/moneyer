@@ -882,11 +882,32 @@ const viewMint = (): void => {
           // secret and ask again using the unchanged legacy flow.
           clearPendingBoundMint()
         }
-        const invoice = await requestInvoice(p.callback, gross)
+        // No signed receipt available - either this mint publishes no note
+        // key, or the quote came back without a commitment. The note can
+        // still be NAMED, which is the part that matters: unnamed, its k1
+        // is the payment preimage, and a mint that offers verify on that
+        // path publishes the note to anyone who has seen the invoice.
+        // Naming it costs nothing here and needs no receipt.
+        const named = p.mintToHash === true || (p.commentAllowed ?? 0) >= 64
+        const secret = named
+          ? Array.from(crypto.getRandomValues(new Uint8Array(32)), byte =>
+              byte.toString(16).padStart(2, '0')
+            ).join('')
+          : undefined
+        const invoice = await requestInvoice(
+          p.callback,
+          gross,
+          secret ? {h: hashK1(secret)} : {}
+        )
         if (!invoice.verify) {
           throw new Error('This mint offers no payment verification, so the page cannot claim the note for you.')
         }
-        viewInvoice({pr: invoice.pr, verifyUrl: invoice.verify, grossMsat: gross})
+        viewInvoice({
+          pr: invoice.pr,
+          verifyUrl: invoice.verify,
+          grossMsat: gross,
+          ...(secret && invoice.mintToHash === true ? {namedSecret: secret} : {})
+        })
       })
     )
     return view
@@ -898,6 +919,10 @@ const viewInvoice = (args: {
   verifyUrl: string
   grossMsat: number
   bound?: PendingBoundMint
+  // A note named without a signed receipt: the mint credits this secret
+  // rather than the payment preimage, so verify is only being watched for
+  // settlement here, never for the secret itself.
+  namedSecret?: string
 }): void => {
   const epoch = viewEpoch + 1
   show(() => {
@@ -958,6 +983,15 @@ const viewInvoice = (args: {
             receipt!.signature
           )
           viewNote({url: signedUrl, amountMsat: args.bound.amountMsat, verified: true, secured: true})
+          return
+        }
+        if (result.settled && args.namedSecret) {
+          claimed = true
+          if (ticker) clearInterval(ticker)
+          clearPendingBoundMint()
+          // The mint credited the secret this page chose. Whatever verify
+          // says about the preimage is somebody else's payment proof.
+          await claimNote(args.namedSecret, args.grossMsat)
           return
         }
         if (result.settled && result.preimage) {
