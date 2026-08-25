@@ -1,5 +1,28 @@
 # Changelog
 
+## [Unreleased]
+
+- The mint accepts a LUD-12 `comment` carrying `hex(h)` as the name of the
+  note being bought, and advertises `commentAllowed: 64` on the payRequest.
+  This is how LUD-25 specifies it; `h` was this mint's own earlier spelling
+  and both are now honoured, so wallets on either keep working. A wallet
+  sending both must agree with itself - minting under one when the other is
+  being watched for would lose the note.
+
+  The two are deliberately not validated alike. Per LUD-25, a `comment` that
+  is not a bare 32-byte hex hash falls back to keying the note by the payment
+  preimage, exactly as no comment does, because a comment is free text in
+  LUD-12 and failing on every stray one would break ordinary payers. A
+  malformed `h` still fails loudly: that is a wallet that meant to name an
+  output and got it wrong.
+
+  This matters beyond conformance. A note minted with no named output has the
+  payment preimage as its spend secret, and this mint serves that preimage on
+  its LUD-21 `verify` URL, which anyone holding the invoice can construct. So
+  every wallet still on the unnamed path is one scraped invoice away from
+  losing the note. Naming the output is what makes `verify` safe to offer,
+  and gating `verify` on it is the next step, once wallets are off that path.
+
 ## [0.6.1] - 2026-08-24
 
 - The bundled web wallet now accepts a bound mint quote anywhere inside

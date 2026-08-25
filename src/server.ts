@@ -629,6 +629,12 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // lightning address never reads that document, and this has to be
         // known BEFORE paying, not after.
         mintToHash: true,
+        // The same capability in the spelling LUD-25 specifies: the output
+        // hash rides in a LUD-12 comment, so 64 characters is exactly what
+        // a hex-encoded 32-byte hash needs. Advertised alongside
+        // `mintToHash` rather than instead of it, so wallets on either
+        // spelling can name a note.
+        commentAllowed: 64,
         disposable: false
       })
     }
@@ -673,11 +679,35 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       // collision gets the same reason a colliding output gets on the
       // withdraw callback: which table an id already sits in is an oracle
       // nobody is owed.
-      const askedOutputId = q.get('h')
-      const outputId = askedOutputId === null ? null : askedOutputId.toLowerCase()
-      if (outputId !== null) {
-        if (!HEX32.test(outputId)) return fail('missing h')
-        if (store.outputIdInUse(outputId)) return fail('Invalid or already spent k1.')
+      // Two spellings of one thing. LUD-25 puts the output hash in a LUD-12
+      // `comment`; `h` is this mint's own earlier name for it, kept so the
+      // wallets that adopted it keep working.
+      //
+      // They are NOT validated the same way, and that asymmetry is the
+      // spec's. A malformed `comment` MUST fall back to keying the note by
+      // the preimage, exactly as no comment at all does - a comment is a
+      // free-text field in LUD-12 and a mint cannot treat every stray one
+      // as a failed mint. A malformed `h` is a wallet that meant to name an
+      // output and got it wrong, so it still fails loudly rather than
+      // quietly minting a note the wallet is not expecting.
+      const askedComment = q.get('comment')?.trim().toLowerCase() ?? null
+      const commentOutputId =
+        askedComment !== null && HEX32.test(askedComment) ? askedComment : null
+      const askedOutputId = q.get('h')?.trim().toLowerCase() ?? null
+      if (askedOutputId !== null && !HEX32.test(askedOutputId)) return fail('missing h')
+      // A wallet sending both should send the same hash in both; ours does.
+      // Disagreement is a bug in the caller, and picking a winner would
+      // mint a note under a hash one half of it is not watching for.
+      if (
+        commentOutputId !== null &&
+        askedOutputId !== null &&
+        commentOutputId !== askedOutputId
+      ) {
+        return fail('comment and h name different outputs')
+      }
+      const outputId = commentOutputId ?? askedOutputId
+      if (outputId !== null && store.outputIdInUse(outputId)) {
+        return fail('Invalid or already spent k1.')
       }
 
       // The preimage is the future note's spend secret unless `h` named

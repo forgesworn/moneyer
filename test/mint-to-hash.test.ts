@@ -292,3 +292,85 @@ describe('an existing database', () => {
     }
   })
 })
+
+// LUD-25 does not name the output with a bare `h`. It carries the hash in a
+// LUD-12 `comment`, which is the spelling a conforming wallet sends and the
+// only one dni's mint reads. `h` predates that text here, so both are
+// honoured - but they are not validated alike, and the difference is the
+// spec's own.
+describe('naming the note with a LUD-12 comment', () => {
+  it('advertises the capability in both spellings', async () => {
+    const mint = await start()
+    const pay = await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/mint`)).json()
+    expect(pay.mintToHash).toBe(true)
+    // 64 characters: exactly a hex-encoded 32-byte hash, nothing spare
+    expect(pay.commentAllowed).toBe(64)
+  })
+
+  it('mints to the id a comment named, with no h at all', async () => {
+    const mint = await start()
+    const secret = freshK1()
+    const reply = await payCallback(mint, {amount: '21000', comment: hashK1(secret)})
+    expect(reply.mintToHash).toBe(true)
+
+    mint.backend.control.settleInvoice(decodeBolt11(reply.pr!).paymentHashHex)
+
+    const note = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, secret))
+    expect(note.maxWithdrawable).toBe(21_000)
+  })
+
+  // What our own kit now sends: both spellings, one hash.
+  it('accepts both together when they agree', async () => {
+    const mint = await start()
+    const secret = freshK1()
+    const h = hashK1(secret)
+    const reply = await payCallback(mint, {amount: '21000', comment: h, h})
+    expect(reply.mintToHash).toBe(true)
+
+    mint.backend.control.settleInvoice(decodeBolt11(reply.pr!).paymentHashHex)
+    const note = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, secret))
+    expect(note.maxWithdrawable).toBe(21_000)
+  })
+
+  it('refuses to guess when they disagree', async () => {
+    const mint = await start()
+    const created = countInvoices(mint)
+    const reply = await payCallback(mint, {
+      amount: '21000',
+      comment: hashK1(freshK1()),
+      h: hashK1(freshK1())
+    })
+    expect(reply.status).toBe('ERROR')
+    // minting under one of them would leave the wallet watching the other
+    expect(created()).toBe(0)
+  })
+
+  // LUD-25: a comment that is not a bare 32-byte hex hash MUST fall back to
+  // keying the note by the preimage. A comment is free text in LUD-12, so a
+  // mint that failed on every stray one would break ordinary payers.
+  it('falls back to the preimage on a comment that is not a hash', async () => {
+    const mint = await start()
+    const reply = await payCallback(mint, {amount: '21000', comment: 'thanks for the sats'})
+    expect(reply.pr).toBeDefined()
+    expect(reply.mintToHash).toBeUndefined()
+
+    const {paymentHashHex} = decodeBolt11(reply.pr!)
+    mint.backend.control.settleInvoice(paymentHashHex)
+
+    // the note is the preimage, exactly as it was before comments existed
+    const preimage = (await fetchInvoiceVerification(reply.verify!)).preimage!
+    const note = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, preimage))
+    expect(note.maxWithdrawable).toBe(21_000)
+  })
+
+  // A malformed `h`, by contrast, is a wallet that meant to name an output
+  // and got it wrong. Failing loudly beats minting a note it is not
+  // watching for.
+  it('still fails loudly on a malformed h', async () => {
+    const mint = await start()
+    const created = countInvoices(mint)
+    const reply = await payCallback(mint, {amount: '21000', h: 'not-a-hash'})
+    expect(reply.status).toBe('ERROR')
+    expect(created()).toBe(0)
+  })
+})
