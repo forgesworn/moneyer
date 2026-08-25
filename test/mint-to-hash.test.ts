@@ -420,3 +420,92 @@ describe('verify on a note nobody named', () => {
     ).rejects.toBeTruthy()
   })
 })
+
+// The cutover is the whole reason this mint can adopt the rule without
+// taking anyone's money with it. An invoice quoted before it keeps its
+// verify, because the wallet polling one of those did not pay the invoice
+// itself - that is why it is polling - so this mint's copy of the preimage
+// is its only route to a note it already owns.
+describe('the verify cutover across an upgrade', () => {
+  it('reads an invoice quoted before the upgrade as older than the cutover', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'moneyer-cutover-'))
+    const path = join(dir, 'mint.db')
+    try {
+      const old = new DatabaseSync(path)
+      old.exec(`
+        CREATE TABLE mint_invoices (
+          payment_hash TEXT PRIMARY KEY,
+          pr TEXT NOT NULL,
+          gross_msat INTEGER NOT NULL,
+          net_msat INTEGER NOT NULL,
+          settled INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL
+        );
+      `)
+      old
+        .prepare('INSERT INTO mint_invoices (payment_hash, pr, gross_msat, net_msat, settled, created_at) VALUES (?, ?, ?, ?, 1, ?)')
+        .run('a1'.repeat(32), 'lnbc-before', 22_000, 22_000, Date.now() - 60_000)
+      old.close()
+
+      const store = new NoteStore(path)
+      const cutover = store.unnamedVerifyCutover()
+      expect(cutover).toBeGreaterThan(0)
+
+      // Sold under the old rule, so it is honoured.
+      const before = store.mintInvoiceByHash('a1'.repeat(32))!
+      expect(before.outputId).toBeNull()
+      expect(before.createdAt).toBeLessThan(cutover)
+
+      // Quoted under the new one, so it is not.
+      store.recordMintInvoice('a2'.repeat(32), 'lnbc-after', 30_000, 30_000, null)
+      const after = store.mintInvoiceByHash('a2'.repeat(32))!
+      expect(after.outputId).toBeNull()
+      expect(after.createdAt).toBeGreaterThanOrEqual(cutover)
+
+      // And it does not move on the next open, or a restart would strand a
+      // quote made minutes earlier under the same build.
+      store.close()
+      const reopened = new NoteStore(path)
+      expect(reopened.unnamedVerifyCutover()).toBe(cutover)
+      reopened.close()
+    } finally {
+      rmSync(dir, {recursive: true, force: true})
+    }
+  })
+
+  it('still answers verify for an unnamed invoice sold before the rule', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'moneyer-cutover-http-'))
+    const path = join(dir, 'mint.db')
+    try {
+      const old = new DatabaseSync(path)
+      old.exec(`
+        CREATE TABLE mint_invoices (
+          payment_hash TEXT PRIMARY KEY,
+          pr TEXT NOT NULL,
+          gross_msat INTEGER NOT NULL,
+          net_msat INTEGER NOT NULL,
+          settled INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL
+        );
+      `)
+      old
+        .prepare('INSERT INTO mint_invoices (payment_hash, pr, gross_msat, net_msat, settled, created_at) VALUES (?, ?, ?, ?, 1, ?)')
+        .run('b1'.repeat(32), 'lnbc-before', 22_000, 22_000, Date.now() - 60_000)
+      old.close()
+
+      const mint = await start({dbPath: path})
+      const res = await fetch(`${mint.moneyer.url}/verify/${'b1'.repeat(32)}`)
+      // Answered, not refused. This mint has no preimage for an invoice its
+      // fake funding source never issued, but the request is honoured, and
+      // that is the branch under test.
+      expect(res.status).toBe(200)
+
+      // A fresh unnamed one on the same database is refused.
+      const reply = await payCallback(mint, {amount: '21000'})
+      const fresh = decodeBolt11(reply.pr!).paymentHashHex
+      expect((await fetch(`${mint.moneyer.url}/verify/${fresh}`)).status).toBe(404)
+    } finally {
+      rmSync(dir, {recursive: true, force: true})
+    }
+  })
+})
