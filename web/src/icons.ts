@@ -23,6 +23,7 @@ export const icons = {
   wallet: svg('<rect x="2.5" y="6" width="19" height="13" rx="3.5"/><path d="M2.5 10h12"/><rect x="15" y="11.5" width="4.5" height="3.5" rx="1.75" fill="currentColor" stroke="none"/>'),
   globe: svg('<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.6 2.5 4 5.6 4 9s-1.4 6.5-4 9c-2.6-2.5-4-5.6-4-9s1.4-6.5 4-9z"/>'),
   external: svg('<path d="M14 4h6v6"/><path d="m20 4-9 9"/><path d="M19 13.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4.5"/>'),
+  image: svg('<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.6" cy="9.6" r="1.5"/><path d="m3.6 17.5 4.9-4.4 3.3 2.9 3.2-2.6 4.4 4.1"/>'),
   scale: svg('<path d="M12 4v16"/><path d="M7 20h10"/><path d="M4 7l16 0"/><path d="m6.5 7-2.5 5.5a2.6 2.6 0 0 0 5 0L6.5 7z"/><path d="m17.5 7-2.5 5.5a2.6 2.6 0 0 0 5 0L17.5 7z"/>')
 } as const
 

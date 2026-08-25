@@ -31,7 +31,7 @@ const seal = (): string => {
 
 // Corner numerals compact past a million - fifteen digits in a forty-pixel
 // medallion is nobody's denomination.
-const cornerText = (sats: number): string => {
+export const cornerText = (sats: number): string => {
   const compact = (value: number, suffix: string): string => {
     const short = value >= 100 ? String(Math.round(value)) : String(Math.round(value * 10) / 10)
     return `${short}${suffix}`

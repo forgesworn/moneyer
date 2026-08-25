@@ -41,6 +41,7 @@ import {MINT_KNOWS, MINT_KNOWS_HEADING} from '../../src/privacy.ts'
 import {icons} from './icons.ts'
 import {rosette} from './guilloche.ts'
 import {banknote} from './banknote.ts'
+import {noteImage} from './note-image.ts'
 
 // The mint's own website: mint a note right here, check one, read the
 // terms. Every protocol step goes through lnurlcash-kit against the same
@@ -1082,11 +1083,14 @@ const viewNote = (args: {url: string; amountMsat: number; verified: boolean; sec
     view.append(topBar('Your note', viewHome))
     const body = el('<div class="stack center"></div>')
 
+    const sats = Math.round(args.amountMsat / 1000)
+    const serialHex = k1 ? hashK1(k1) : '0000000000000000'
+    const qrText = claimHref ?? lnurl.toUpperCase()
     const note = banknote({
-      sats: Math.round(args.amountMsat / 1000),
-      serialHex: k1 ? hashK1(k1) : '0000000000000000',
+      sats,
+      serialHex,
       host: HOST.toUpperCase(),
-      variant: {kind: 'live', qrText: claimHref ?? lnurl.toUpperCase()}
+      variant: {kind: 'live', qrText}
     })
     wireCover(note)
     body.append(note)
@@ -1108,6 +1112,57 @@ const viewNote = (args: {url: string; amountMsat: number; verified: boolean; sec
     const copyLnurl = el(`<button class="btn btn-ghost">${icons.copy}<span>Copy LNURL</span></button>`)
     copyLnurl.addEventListener('click', () => void copyText(lnurl, 'LNURL'))
     body.append(copyUrl, copyLnurl)
+
+    // The note as a file, for handing to someone who is not standing here.
+    // Struck as the view opens, not on the click: a share sheet only comes
+    // up while the tap that asked for it is still warm, and drawing the
+    // plate first would spend that.
+    //
+    // The plate that travels carries the bech32 LNURL, not the claim link
+    // the on-screen one shows. A note that leaves in a message is scanned
+    // by whatever the recipient already has, and that is usually a
+    // Lightning wallet: Wallet of Satoshi answers an https claim link with
+    // "that isn't an ln invoice", and follows LNURL1… all the way to the
+    // mint. The link is the right code to hold up to your own camera; it
+    // is the wrong one to post.
+    const printed = noteImage({
+      sats,
+      serialHex,
+      host: HOST.toUpperCase(),
+      qrText: lnurl.toUpperCase()
+    })
+    printed.catch(() => undefined)
+    const filename = `bearer-note-${sats}-sats.png`
+    const sendImage = el(
+      `<button class="btn">${icons.image}<span>Send as an image</span></button>`
+    ) as HTMLButtonElement
+    sendImage.addEventListener('click', () => {
+      void busy(sendImage, async () => {
+        const file = new File([await printed], filename, {type: 'image/png'})
+        if (navigator.canShare?.({files: [file]})) {
+          try {
+            await navigator.share({files: [file], title: 'A bearer note'})
+            return
+          } catch (err) {
+            // the share sheet was dismissed - that is an answer, not a fault
+            if ((err as Error).name === 'AbortError') return
+          }
+        }
+        const href = URL.createObjectURL(file)
+        const link = document.createElement('a')
+        link.href = href
+        link.download = filename
+        link.click()
+        setTimeout(() => URL.revokeObjectURL(href), 30_000)
+        toast('Note image saved.', 'ok')
+      })
+    })
+    body.append(
+      sendImage,
+      el(
+        `<p class="warn">The image carries the note in the open - there is no scratch panel on it, or nobody could scan it. Whoever sees the picture can spend it, so send it the way you would hand over cash.</p>`
+      )
+    )
     if (args.alsoUrl) {
       body.append(
         el(`<p class="warn"><strong>Keep both of these.</strong> A network hiccup hid which secret ended up holding the money - one of the two below is your note. A wallet's reconcile sorts it out.</p>`),

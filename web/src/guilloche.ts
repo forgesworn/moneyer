@@ -3,22 +3,25 @@
 // texture or an image - every line is computed, which is rather the point
 // of putting one on a mint.
 
-type Ring = {radius: number; amplitude: number; lobes: number; phase: number; opacity: number}
+export type Ring = {radius: number; amplitude: number; lobes: number; phase: number; opacity: number}
 
-const ringPath = (ring: Ring, steps = 360): string => {
-  const points: string[] = []
+// The side of the square the rosette is turned in, centred on the origin.
+export const ROSETTE_VIEWBOX = 184
+export const ROSETTE_STROKE = 0.55
+
+export const ringPoints = (ring: Ring, steps = 360): Array<[number, number]> => {
+  const points: Array<[number, number]> = []
   for (let i = 0; i <= steps; i++) {
     const theta = (i / steps) * Math.PI * 2
     const r = ring.radius + ring.amplitude * Math.sin(ring.lobes * theta + ring.phase)
-    const x = (r * Math.cos(theta)).toFixed(2)
-    const y = (r * Math.sin(theta)).toFixed(2)
-    points.push(`${i === 0 ? 'M' : 'L'}${x} ${y}`)
+    points.push([r * Math.cos(theta), r * Math.sin(theta)])
   }
-  return points.join('') + 'Z'
+  return points
 }
 
-// A rosette: the medallion form. Deterministic, so the mark is the mark.
-export const rosette = (size: number, className = ''): string => {
+// The rings of the medallion, deterministic, so the mark is the mark -
+// and shared, so the note's canvas print turns the same lathe as the page.
+export const rosetteRings = (): Ring[] => {
   const rings: Ring[] = []
   const count = 9
   for (let i = 0; i < count; i++) {
@@ -30,10 +33,21 @@ export const rosette = (size: number, className = ''): string => {
       opacity: 0.5 - i * 0.035
     })
   }
-  const paths = rings
+  return rings
+}
+
+const ringPath = (ring: Ring, steps = 360): string =>
+  ringPoints(ring, steps)
+    .map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(2)} ${y.toFixed(2)}`)
+    .join('') + 'Z'
+
+// A rosette: the medallion form.
+export const rosette = (size: number, className = ''): string => {
+  const half = ROSETTE_VIEWBOX / 2
+  const paths = rosetteRings()
     .map(ring => `<path d="${ringPath(ring)}" opacity="${ring.opacity.toFixed(3)}"/>`)
     .join('')
-  return `<svg class="${className}" width="${size}" height="${size}" viewBox="-92 -92 184 184" fill="none" stroke="currentColor" stroke-width="0.55" aria-hidden="true">${paths}</svg>`
+  return `<svg class="${className}" width="${size}" height="${size}" viewBox="-${half} -${half} ${ROSETTE_VIEWBOX} ${ROSETTE_VIEWBOX}" fill="none" stroke="currentColor" stroke-width="${ROSETTE_STROKE}" aria-hidden="true">${paths}</svg>`
 }
 
 // A low band of interleaved waves, for the foot of a note: the lathe run
