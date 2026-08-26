@@ -7,8 +7,11 @@ import {PaymentAlreadyKnownError, PaymentFailedError, PaymentPendingError, type 
 // one (r_preimage), which is what lets it back a mint. Payment send/track
 // are chunked NDJSON streams read line by line to a terminal status.
 //
-// Not yet exercised against a live node - the semantics are a direct port
-// of the reference mint's lnd backend, which is.
+// This is what backs the public mint, so the invoice and payment paths run
+// against a live node continuously; the semantics started as a direct port
+// of the reference mint's lnd backend. The exception is nodeInfo's graph
+// self-lookup, which is newer than the running deployment - it is covered
+// by test/lnd-node-info.test.ts and by nothing else yet.
 //
 // TLS: for lnd's self-signed cert, point NODE_EXTRA_CA_CERTS at it.
 
