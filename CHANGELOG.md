@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+- **The published node capacity is the announced one.** `nodeCapacity` in
+  the discovery document was summed from lnd's `/v1/channels`, which is an
+  authenticated view of the node and counts private channels. That figure is
+  served to every visitor and goes out in the mint's announcement, so a
+  channel the operator chose not to announce was being sized in public
+  anyway. It now comes from this node's own entry in the public graph -
+  `total_capacity`, the same number any stranger on the network already
+  reads, converted from sats. A node with nothing announced reports zero
+  rather than omitting the field, because zero is the true answer there;
+  only a node that cannot be asked leaves it off. cln never reported
+  capacity and is unaffected.
+
+  Operators should expect the number to fall, and to fall to zero on a mint
+  running entirely on private channels. It was never the figure it claimed
+  to be.
+
 - The bundled web wallet names its note on the plain path too, not only when
   a signed receipt is on offer. It previously fell back to an unnamed mint
   and then required `verify` to read the preimage - which, with the rule

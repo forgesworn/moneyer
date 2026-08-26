@@ -197,15 +197,25 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
       const color = typeof res.json?.color === 'string' ? `#${res.json.color.replace(/^#/, '')}` : undefined
       const numChannels = Number(res.json?.num_active_channels)
       const numPeers = Number(res.json?.num_peers)
-      // Total public capacity, best-effort: the macaroon may not carry
-      // offchain:read, and the discovery endpoint works fine without it.
+      // Announced capacity, read from this node's own entry in the public
+      // graph rather than from its channel list. `/v1/channels` is an
+      // authenticated view and counts private channels too; this figure is
+      // published in the discovery document, so summing that would tell the
+      // world what only the operator can see. The graph self-lookup returns
+      // the same `total_capacity` any stranger on the network already
+      // reads, in sats, so it is converted here to keep NodeInfo msat.
+      //
+      // Best-effort, in two flavours: a 404 is a node with nothing
+      // announced, which is a public capacity of zero rather than an
+      // unknown one, while any other failure leaves the field off - the
+      // macaroon may not carry info:read, and the discovery endpoint works
+      // fine without it.
       let capacityMsat: number | undefined
-      const channels = await json('/v1/channels')
-      if (channels.ok && Array.isArray(channels.json?.channels)) {
-        capacityMsat = channels.json.channels.reduce(
-          (sum: number, channel: {capacity?: string}) => sum + Number(channel.capacity ?? 0) * 1000,
-          0
-        )
+      const pubkey = res.json?.identity_pubkey
+      if (typeof pubkey === 'string' && pubkey) {
+        const node = await json(`/v1/graph/node/${pubkey}`)
+        if (node.ok) capacityMsat = Number(node.json?.total_capacity ?? 0) * 1000
+        else if (node.status === 404) capacityMsat = 0
       }
       // Outbound liquidity, best-effort for the same reason as capacity:
       // the macaroon may not carry offchain:read.

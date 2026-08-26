@@ -12,6 +12,11 @@ export type NodeInfo = {
   color?: string
   // Best-effort node statistics for the discovery endpoint; a backend that
   // cannot answer cheaply just leaves these out.
+  //
+  // capacityMsat is *publicly announced* capacity only. It goes out in the
+  // discovery document, so it must never carry what an authenticated view
+  // of the node can see and the rest of the network cannot - a private
+  // channel's size is the operator's business.
   capacityMsat?: number
   numChannels?: number
   numPeers?: number
