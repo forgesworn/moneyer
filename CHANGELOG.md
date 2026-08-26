@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.7.0] - 2026-08-26
 
 - **The published node capacity is the announced one.** `nodeCapacity` in
   the discovery document was summed from lnd's `/v1/channels`, which is an
@@ -17,6 +17,14 @@
   Operators should expect the number to fall, and to fall to zero on a mint
   running entirely on private channels. It was never the figure it claimed
   to be.
+
+- The web wallet prints a note to a PNG you can send. The plate existed only
+  as HTML over the artwork, which is no use in a message; the same portrait
+  plate composites onto a canvas and comes back as a file - the share sheet
+  where the browser offers one, a download everywhere else. The travelling
+  plate carries the bech32 LNURL rather than the claim link, because a note
+  that leaves in a message is scanned by whatever the recipient already has,
+  and that is usually a Lightning wallet.
 
 - The bundled web wallet names its note on the plain path too, not only when
   a signed receipt is on offer. It previously fell back to an unnamed mint
@@ -61,11 +69,10 @@
   output and got it wrong.
 
   This matters beyond conformance. A note minted with no named output has the
-  payment preimage as its spend secret, and this mint serves that preimage on
-  its LUD-21 `verify` URL, which anyone holding the invoice can construct. So
-  every wallet still on the unnamed path is one scraped invoice away from
-  losing the note. Naming the output is what makes `verify` safe to offer,
-  and gating `verify` on it is the next step, once wallets are off that path.
+  payment preimage as its spend secret, and until this release the mint
+  served that preimage on its LUD-21 `verify` URL, which anyone holding the
+  invoice can construct. Naming the output is what makes `verify` safe to
+  offer, and the entry above now gates it on exactly that.
 
 ## [0.6.1] - 2026-08-24
 
