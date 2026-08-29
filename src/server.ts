@@ -706,6 +706,16 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         return fail('comment and h name different outputs')
       }
       const outputId = commentOutputId ?? askedOutputId
+      // MONEYER_REQUIRE_COMMENT: refuse a quote that names no output at all,
+      // rather than minting a note keyed by the payment preimage. Off by
+      // default - LUD-25 line 80 still asks for that fallback - but the
+      // fallback note is only as safe as every routing hop's discretion, and
+      // a funding source that settles without a preimage has nothing to key
+      // one by. Refused here, before any invoice exists, so a wallet never
+      // pays for a quote this mint was always going to reject.
+      if (config.requireComment && outputId === null) {
+        return fail('a mint quote must name its output with a LUD-12 comment carrying hex(sha256(secret))')
+      }
       if (outputId !== null && store.outputIdInUse(outputId)) {
         return fail('Invalid or already spent k1.')
       }

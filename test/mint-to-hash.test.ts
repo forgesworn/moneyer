@@ -13,6 +13,8 @@ import {
   verifyNoteSignature
 } from 'lnurlcash-kit'
 import {decodeBolt11} from 'farrier-kit/bolt11'
+import {sha256} from '@noble/hashes/sha2.js'
+import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {DatabaseSync} from 'node:sqlite'
 import {mkdtempSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
@@ -75,6 +77,39 @@ const countInvoices = (mint: TestMint): (() => number) => {
   }
   return () => created
 }
+
+describe('requiring comment protection', () => {
+  // Off by default: LUD-25 line 80 still asks for the preimage-keyed
+  // fallback. On, the mint refuses an unnamed quote outright - and must do
+  // it before any invoice exists, or a wallet pays for a quote that was
+  // always going to be refused.
+  it('falls back to a preimage-keyed note by default', async () => {
+    const mint = await start()
+    const reply = await payCallback(mint, {amount: '21000'})
+    expect(reply.status).not.toBe('ERROR')
+    expect(reply.pr).toBeTypeOf('string')
+  })
+
+  it('refuses an unnamed quote when required, before issuing an invoice', async () => {
+    const mint = await start({requireComment: true})
+    const invoices = countInvoices(mint)
+    const reply = await payCallback(mint, {amount: '21000'})
+    expect(reply.status).toBe('ERROR')
+    expect(reply.pr).toBeUndefined()
+    expect(invoices()).toBe(0)
+  })
+
+  it('still mints a quote that names its output', async () => {
+    const mint = await start({requireComment: true})
+    const secret = freshK1()
+    const reply = await payCallback(mint, {
+      amount: '21000',
+      comment: bytesToHex(sha256(hexToBytes(secret)))
+    })
+    expect(reply.status).not.toBe('ERROR')
+    expect(reply.pr).toBeTypeOf('string')
+  })
+})
 
 describe('minting to a named note', () => {
   it('mints the note at the id the wallet named, so the payment preimage buys nothing', async () => {

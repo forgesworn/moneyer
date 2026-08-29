@@ -105,6 +105,7 @@ default, and a variable set to an empty string counts as unset.
 | `MONEYER_MIN_SENDABLE_MSAT` | `1000` | smallest payment the mint advertises |
 | `MONEYER_MAX_SENDABLE_MSAT` | `100000000` | largest payment the mint advertises |
 | `MONEYER_MIN_MINT_MSAT` | `1000` | dust floor: the smallest note the mint will strike |
+| `MONEYER_REQUIRE_COMMENT` | `false` | refuse a mint quote that names no output, instead of falling back to a note keyed by the payment preimage. See [comment protection](#comment-protection) |
 | `MONEYER_MAX_K1S` | `21` | most notes one callback may name |
 | `MONEYER_VERIFY` | `true` | the LUD-21 `verify` endpoint. Off means 404 |
 | `MONEYER_WALLET_URL` | | a companion web wallet the mint's site links notes into |
@@ -667,3 +668,34 @@ in [awesome-lnurlcash](https://github.com/TheCryptoDonkey/awesome-lnurlcash).
 ## Licence
 
 MIT.
+
+
+## Comment protection
+
+A LUD-25 mint quote may carry a LUD-12 `comment` holding
+`hex(sha256(secret))`, naming the note the payment will mint. The note is
+then keyed by the wallet's own `secret`, and the payment preimage redeems
+nothing.
+
+With no such comment, LUD-25 line 80 says the mint MUST fall back to keying
+the note by the payment preimage itself. That fallback is the default here,
+and it is what the draft currently requires.
+
+`MONEYER_REQUIRE_COMMENT=true` refuses an unnamed quote instead, before any
+invoice is issued. Two reasons to want it:
+
+- A preimage-keyed note is only as safe as the discretion of every routing
+  hop on the payment. Each one learns the preimage as it settles its own
+  HTLC, often before the payer has finished processing the payment.
+- A funding source that settles without producing a preimage - a Spark
+  backend, say - has nothing to key a fallback note by at all.
+
+The cost is backward compatibility: a wallet that has never heard of
+LNURLcash sends a bare LUD-06 request and gets an error rather than an
+invoice. `dni/lnurl-mint` made this behaviour unconditional in `b257d58`;
+the draft has not yet followed, which is why it is opt-in here. See
+`lnurlcash-conformance/docs/COMMENT-IS-MANDATORY.md`.
+
+Note that `lnurlcash-conformance` now grades the mandate as required, so
+this mint **fails that suite in its default configuration** and passes with
+`MONEYER_REQUIRE_COMMENT=true`.

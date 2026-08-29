@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+**`MONEYER_REQUIRE_COMMENT` (default off).** Refuses a mint quote that names
+no output, rather than falling back to a note keyed by the payment preimage.
+Off by default because LUD-25 line 80 still asks for that fallback; on, the
+refusal happens before any invoice is issued, so a wallet never pays for a
+quote the mint was always going to reject. A quote naming its output by
+either spelling (`comment` or `h`) is unaffected.
+
+Worth knowing: `lnurlcash-conformance` now grades the mandate as required, so
+moneyer fails that suite in its default configuration and passes with the
+flag on. See that repo's `docs/COMMENT-IS-MANDATORY.md`.
+
 ## [0.7.0] - 2026-08-26
 
 - **The published node capacity is the announced one.** `nodeCapacity` in
