@@ -227,7 +227,7 @@ const contactFromEnv = (env: NodeJS.ProcessEnv): MintContact | undefined => {
 // that starts with a half-understood configuration is holding other
 // people's money on a misunderstanding.
 export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConfig => {
-  const requireComment = env.MONEYER_REQUIRE_COMMENT === 'true'
+  const requireComment = flag(env.MONEYER_REQUIRE_COMMENT, false)
   const baseFeeMsat = int(env.MONEYER_BASE_FEE_MSAT, 0)
   const feePpm = int(env.MONEYER_FEE_PPM, 0)
   if (feePpm >= 1_000_000) {
