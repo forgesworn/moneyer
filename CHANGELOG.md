@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.1 - 2026-08-30
+
+**Fix: `requireComment` is optional on `MoneyerConfig`.** 0.8.0 added it as a
+required field, which is a breaking change for any consumer constructing a
+config by hand - their `tsc` fails on a flag they never asked for. Absent now
+means off, which is also what LUD-25 still asks for. Caught by notecase's
+typecheck; moneyer's own tests could not see it, since nothing here omits the
+field.
+
 ## 0.8.0 - 2026-08-30
 
 **`MONEYER_REQUIRE_COMMENT` (default off).** Refuses a mint quote that names

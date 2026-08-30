@@ -53,7 +53,10 @@ export type MoneyerConfig = {
   // outright, and a funding source that settles without a preimage (Spark)
   // has nothing to key a fallback note by. See lnurlcash-conformance
   // docs/COMMENT-IS-MANDATORY.md.
-  requireComment: boolean
+  // Optional: a consumer constructing a MoneyerConfig by hand must not have
+  // to learn about a flag it does not use. Absent means off, which is also
+  // what the draft still asks for.
+  requireComment?: boolean
   // Ceiling the mint fee to a whole sat, as dni's lnurl-mint does on
   // purpose so it is "never short a sat". LUD-25 says nothing either way
   // and lnurlcash-kit's mintFeeBand accepts both, so this is a posture
