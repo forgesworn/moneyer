@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 - 2026-08-30
 
 **`MONEYER_REQUIRE_COMMENT` (default off).** Refuses a mint quote that names
 no output, rather than falling back to a note keyed by the payment preimage.
