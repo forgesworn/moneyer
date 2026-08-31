@@ -294,10 +294,9 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     // present, empty included: "never rotated" and "does not
     // implement the field" are different answers.
     previousPubkeys: config.previousSigningPubkeys ?? [],
-    // This mint accepts `h` on the pay callback: the payer's wallet may
-    // name the note it is buying, and then the payment preimage is not
-    // a spend secret for it. A wallet learns this before it asks for an
-    // invoice rather than after it has paid one.
+    // Additive compatibility signal: this mint accepts `h` alongside the
+    // identical mandatory LUD-12 comment, including the receipt vocabulary
+    // used by sealed signers. The comment remains the baseline commitment.
     mintToHash: true,
     ...(nodeInfo.alias ? {nodeAlias: nodeInfo.alias} : {}),
     ...(nodeInfo.uri ? {nodeUri: nodeInfo.uri} : {}),
@@ -683,46 +682,35 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       // `comment`; `h` is this mint's own earlier name for it, kept so the
       // wallets that adopted it keep working.
       //
-      // They are NOT validated the same way, and that asymmetry is the
-      // spec's. A malformed `comment` MUST fall back to keying the note by
-      // the preimage, exactly as no comment at all does - a comment is a
-      // free-text field in LUD-12 and a mint cannot treat every stray one
-      // as a failed mint. A malformed `h` is a wallet that meant to name an
-      // output and got it wrong, so it still fails loudly rather than
-      // quietly minting a note the wallet is not expecting.
+      // Current LUD-25 makes the LUD-12 comment the mandatory mint output
+      // commitment. Missing or malformed input is refused before asking the
+      // funding source for an invoice. `h` remains an additive compatibility
+      // field, but it never substitutes for comment.
       const askedComment = q.get('comment')?.trim().toLowerCase() ?? null
-      const commentOutputId =
-        askedComment !== null && HEX32.test(askedComment) ? askedComment : null
+      if (askedComment === null || !HEX32.test(askedComment)) {
+        return fail(
+          'a mint quote must name its output with a LUD-12 comment carrying hex(sha256(secret))'
+        )
+      }
+      const commentOutputId = askedComment
       const askedOutputId = q.get('h')?.trim().toLowerCase() ?? null
       if (askedOutputId !== null && !HEX32.test(askedOutputId)) return fail('missing h')
       // A wallet sending both should send the same hash in both; ours does.
       // Disagreement is a bug in the caller, and picking a winner would
       // mint a note under a hash one half of it is not watching for.
       if (
-        commentOutputId !== null &&
         askedOutputId !== null &&
         commentOutputId !== askedOutputId
       ) {
         return fail('comment and h name different outputs')
       }
-      const outputId = commentOutputId ?? askedOutputId
-      // MONEYER_REQUIRE_COMMENT: refuse a quote that names no output at all,
-      // rather than minting a note keyed by the payment preimage. Off by
-      // default - LUD-25 line 80 still asks for that fallback - but the
-      // fallback note is only as safe as every routing hop's discretion, and
-      // a funding source that settles without a preimage has nothing to key
-      // one by. Refused here, before any invoice exists, so a wallet never
-      // pays for a quote this mint was always going to reject.
-      if (config.requireComment && outputId === null) {
-        return fail('a mint quote must name its output with a LUD-12 comment carrying hex(sha256(secret))')
-      }
-      if (outputId !== null && store.outputIdInUse(outputId)) {
+      const outputId = commentOutputId
+      if (store.outputIdInUse(outputId)) {
         return fail('Invalid or already spent k1.')
       }
 
-      // The preimage is the future note's spend secret unless `h` named
-      // one; its hash is the invoice's payment hash either way. Generated
-      // here, handed to the funding source, never persisted - the store
+      // The preimage is payment proof only; comment names the future note.
+      // Generated here, handed to the funding source, never persisted - the store
       // keeps hashes only.
       let preimage = bytesToHex(randomBytes(32))
       let paymentHash = hashK1(preimage)
@@ -769,22 +757,17 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // wallet named. A mint that ignored an unknown parameter would
         // answer without it, and a wallet can tell the two apart before
         // paying rather than by looking for a note afterwards.
-        ...(outputId !== null ? {mintToHash: true} : {}),
+        mintToHash: true,
         // Optional bound-receipt commitment: the exact output and net note
         // value this invoice will mint. It is only offered when /verify can
         // later authenticate settlement with this mint's signing key.
-        ...(outputId !== null && config.verify && signer
+        ...(config.verify && signer
           ? {mint: {h: outputId, amount: net}}
           : {}),
-        // LUD-25: a SERVICE MUST NOT offer verify on a mint payment that
-        // named no output. There the note's k1 IS the preimage, and verify
-        // hands it to whoever holds the URL - which anyone who has seen the
-        // invoice can build from its payment hash. A wallet on this path
-        // learns the preimage from paying the invoice, the way any Lightning
-        // wallet already keeps it.
-        ...(config.verify && outputId !== null
-          ? {verify: `${origin}/verify/${paymentHash}`}
-          : {})
+        // Every current-draft mint quote is comment-bound, so the LUD-21
+        // preimage is ordinary settlement proof and safe to disclose after
+        // settlement.
+        ...(config.verify ? {verify: `${origin}/verify/${paymentHash}`} : {})
       })
     }
 
@@ -808,8 +791,10 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         }
         const currentInvoice = store.mintInvoiceByHash(paymentHash)!
         const settled = currentInvoice.settled
-        // The preimage IS the bearer secret. Served only once settled, and
-        // fetched live from the funding source - it is never stored here.
+        // For current comment-bound quotes this is settlement proof only.
+        // Historical pre-cutover unnamed rows used it as the note secret;
+        // those already-issued invoices remain redeemable after upgrade.
+        // It is fetched live from the funding source and never stored here.
         const preimageHex = settled ? await backend.invoicePreimage(paymentHash) : null
         return send({
           status: 'OK',

@@ -13,19 +13,17 @@ import type {LightningBackend} from './backends/types.ts'
 // Zap-to-note: a lightning address on this host that pays out as an
 // LNURLcash note delivered over Nostr.
 //
-// A NIP-57 zap is an ordinary LNURL-pay. Paying the mint's own address
-// would mint a note, but to the PAYER: LUD-25 makes the invoice preimage
-// the secret, and on Lightning the payer always learns the preimage. So a
-// zap name works the other way round. The invoice gets a throwaway
-// preimage; on settlement the mint creates a note with a fresh secret of
-// its own, gift-wraps it (NIP-59, kind 2525 rumor) to the name's pubkey,
-// leaves it on their NIP-17 inbox relays, and publishes the kind 9735
-// receipt that makes the zap show up in clients.
+// A NIP-57 zap is an ordinary LNURL-pay. Unlike current LUD-25 minting it
+// carries no wallet-chosen output commitment, so a zap name works in the
+// recipient direction instead: its invoice gets a throwaway preimage; on
+// settlement the mint creates a note with a fresh secret of its own,
+// gift-wraps it (NIP-59, kind 2525 rumor) to the name's pubkey, leaves it on
+// their NIP-17 inbox relays, and publishes the kind 9735 receipt that makes
+// the zap show up in clients.
 //
 // Until the recipient rotates the note, the mint knows its secret. That is
-// exactly the position a freshly minted note is in anyway, and it is why
-// wallets rotate on receipt. What is new is that the mint learns who was
-// paid, which a lightning address always did.
+// why wallets rotate on receipt. The mint also learns who was paid, which a
+// lightning address always did.
 
 export const NOTE_KIND = 2525
 export const INBOX_RELAYS_KIND = 10050

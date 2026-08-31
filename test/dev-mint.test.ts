@@ -76,8 +76,8 @@ describe('a fake mint a wallet can use', () => {
   it('does not call an invoice paid in the same breath it issued it', async () => {
     const mint = await startDevMint(true, 60_000)
     const pay = await fetchPayRequest(`${mint.url}/.well-known/lnurlp/mint`)
-    // Named, because only a named quote gets a verify URL at all now - an
-    // unnamed note IS its preimage, and publishing that publishes the note.
+    // Current mint quotes are always named. Their verify preimage is payment
+    // proof rather than the bearer note, but it still must not appear early.
     const quote = await requestInvoice(pay.callback, 21_000, {h: hashK1('ab'.repeat(32))})
     const verify = (await (await fetch(quote.verify!)).json()) as {settled?: boolean; preimage?: string | null}
     expect(verify.settled).toBe(false)

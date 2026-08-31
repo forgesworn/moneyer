@@ -8,23 +8,6 @@ import {configFromEnv} from '../src/config.ts'
 // half-understood configuration.
 
 describe('configFromEnv', () => {
-  // LUD-25's line 80 still asks for a preimage-keyed fallback when a quote
-  // names no output; dni/lnurl-mint b257d58 rejects instead, and a Spark
-  // funding source has no preimage to key a fallback note by. Off by
-  // default: the fallback is what the draft currently says.
-  it('requires comment protection only when asked, and never by default', () => {
-    expect(configFromEnv({}).requireComment).toBe(false)
-    expect(configFromEnv({MONEYER_REQUIRE_COMMENT: 'true'}).requireComment).toBe(true)
-    expect(configFromEnv({MONEYER_REQUIRE_COMMENT: 'false'}).requireComment).toBe(false)
-    // Read the way every other boolean here is read. An operator who types
-    // TRUE or 1, expecting the protection this flag exists to give, must not
-    // silently get none.
-    expect(configFromEnv({MONEYER_REQUIRE_COMMENT: '1'}).requireComment).toBe(true)
-    expect(configFromEnv({MONEYER_REQUIRE_COMMENT: 'TRUE'}).requireComment).toBe(true)
-    expect(configFromEnv({MONEYER_REQUIRE_COMMENT: '0'}).requireComment).toBe(false)
-    expect(configFromEnv({MONEYER_REQUIRE_COMMENT: 'FALSE'}).requireComment).toBe(false)
-  })
-
   it('accepts an http or https public origin', () => {
     expect(
       configFromEnv({MONEYER_PUBLIC_ORIGIN: 'https://mint.example'}).publicOrigin

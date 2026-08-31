@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+**LUD-25 comment-bound minting is now unconditional.** Every mint quote must
+carry `comment=hex(sha256(secret))`; missing or malformed comments are
+rejected before invoice creation. The additive `h` field is accepted only
+alongside an identical comment. `MONEYER_REQUIRE_COMMENT` and the
+preimage-backed creation fallback have been removed. Existing notes and
+pre-upgrade database rows remain redeemable.
+
 ## 0.8.1 - 2026-08-30
 
 **Fix: `requireComment` is optional on `MoneyerConfig`.** 0.8.0 added it as a

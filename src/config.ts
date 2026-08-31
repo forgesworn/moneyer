@@ -47,16 +47,6 @@ export type MoneyerConfig = {
   // Advertised in the payRequest metadata and withheld on minting. Null
   // means fee-free.
   mintFee: MintFee | null
-  // Refuse a mint quote that names no output, rather than falling back to a
-  // note keyed by the payment preimage. LUD-25 line 80 still asks for the
-  // fallback, so this is off by default; dni/lnurl-mint b257d58 rejects
-  // outright, and a funding source that settles without a preimage (Spark)
-  // has nothing to key a fallback note by. See lnurlcash-conformance
-  // docs/COMMENT-IS-MANDATORY.md.
-  // Optional: a consumer constructing a MoneyerConfig by hand must not have
-  // to learn about a flag it does not use. Absent means off, which is also
-  // what the draft still asks for.
-  requireComment?: boolean
   // Ceiling the mint fee to a whole sat, as dni's lnurl-mint does on
   // purpose so it is "never short a sat". LUD-25 says nothing either way
   // and lnurlcash-kit's mintFeeBand accepts both, so this is a posture
@@ -230,7 +220,6 @@ const contactFromEnv = (env: NodeJS.ProcessEnv): MintContact | undefined => {
 // that starts with a half-understood configuration is holding other
 // people's money on a misunderstanding.
 export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConfig => {
-  const requireComment = flag(env.MONEYER_REQUIRE_COMMENT, false)
   const baseFeeMsat = int(env.MONEYER_BASE_FEE_MSAT, 0)
   const feePpm = int(env.MONEYER_FEE_PPM, 0)
   if (feePpm >= 1_000_000) {
@@ -360,7 +349,6 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     maxSendableMsat,
     minMintMsat: int(env.MONEYER_MIN_MINT_MSAT, DEFAULTS.minMintMsat),
     mintFee: baseFeeMsat === 0 && feePpm === 0 ? null : {baseFeeMsat, feePpm},
-    requireComment,
     roundFeeToSat: flag(env.MONEYER_ROUND_FEE_TO_SAT, DEFAULTS.roundFeeToSat),
     ...(signingKey ? {signingKey: signingKey.toLowerCase()} : {}),
     ...(previousSigningPubkeys.length ? {previousSigningPubkeys} : {}),

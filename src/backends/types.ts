@@ -1,10 +1,9 @@
 // The funding source. Every amount is integer milli-satoshis.
 //
-// The one non-negotiable capability is createInvoice with a CALLER-SUPPLIED
-// preimage: a LUD-25 mint invoice's preimage IS the bearer note's spend
-// secret, so the mint must know it for certain before the invoice exists.
-// lnd (r_preimage) and cln (invoice preimage=) support this; phoenixd and
-// NIP-47 make_invoice do not, which is why neither can back a mint.
+// createInvoice currently takes a caller-supplied preimage so Moneyer can
+// verify that the returned BOLT-11 commits to the invoice it records and can
+// later provide ordinary LUD-21 settlement proof. The bearer note itself is
+// always keyed by the wallet's mandatory comment commitment.
 
 export type NodeInfo = {
   alias?: string
@@ -69,8 +68,9 @@ export interface LightningBackend {
   // PaymentPendingError while the outcome is still open.
   isPaymentComplete(paymentHashHex: string): Promise<boolean>
   isInvoiceSettled(paymentHashHex: string): Promise<boolean>
-  // Fetched live from the funding source, never cached here: for a mint
-  // invoice this preimage is the bearer secret itself.
+  // Fetched live from the funding source, never cached here. Current mint
+  // invoices use it as settlement proof; only historical unnamed invoices
+  // also used it as the bearer secret.
   invoicePreimage(paymentHashHex: string): Promise<string | null>
   paymentPreimage(paymentHashHex: string): Promise<string | null>
   nodeInfo?(): Promise<NodeInfo>

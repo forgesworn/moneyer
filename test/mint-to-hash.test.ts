@@ -66,6 +66,12 @@ const payCallback = async (mint: TestMint, params: Record<string, string>): Prom
   return (await (await fetch(url)).json()) as CallbackReply
 }
 
+const namedQuote = (amount: string, h: string): Record<string, string> => ({
+  amount,
+  comment: h,
+  h
+})
+
 // Counts what the mint asks of its funding source, so "refused before any
 // invoice is issued" can be checked rather than assumed.
 const countInvoices = (mint: TestMint): (() => number) => {
@@ -79,19 +85,8 @@ const countInvoices = (mint: TestMint): (() => number) => {
 }
 
 describe('requiring comment protection', () => {
-  // Off by default: LUD-25 line 80 still asks for the preimage-keyed
-  // fallback. On, the mint refuses an unnamed quote outright - and must do
-  // it before any invoice exists, or a wallet pays for a quote that was
-  // always going to be refused.
-  it('falls back to a preimage-keyed note by default', async () => {
+  it('refuses an unnamed quote before issuing an invoice', async () => {
     const mint = await start()
-    const reply = await payCallback(mint, {amount: '21000'})
-    expect(reply.status).not.toBe('ERROR')
-    expect(reply.pr).toBeTypeOf('string')
-  })
-
-  it('refuses an unnamed quote when required, before issuing an invoice', async () => {
-    const mint = await start({requireComment: true})
     const invoices = countInvoices(mint)
     const reply = await payCallback(mint, {amount: '21000'})
     expect(reply.status).toBe('ERROR')
@@ -99,8 +94,17 @@ describe('requiring comment protection', () => {
     expect(invoices()).toBe(0)
   })
 
-  it('still mints a quote that names its output', async () => {
-    const mint = await start({requireComment: true})
+  it('refuses a valid h when the mandatory comment is absent', async () => {
+    const mint = await start()
+    const invoices = countInvoices(mint)
+    const reply = await payCallback(mint, {amount: '21000', h: hashK1(freshK1())})
+    expect(reply.status).toBe('ERROR')
+    expect(reply.pr).toBeUndefined()
+    expect(invoices()).toBe(0)
+  })
+
+  it('mints a quote named by a valid comment', async () => {
+    const mint = await start()
     const secret = freshK1()
     const reply = await payCallback(mint, {
       amount: '21000',
@@ -115,7 +119,7 @@ describe('minting to a named note', () => {
   it('mints the note at the id the wallet named, so the payment preimage buys nothing', async () => {
     const mint = await start()
     const secret = freshK1()
-    const reply = await payCallback(mint, {amount: '21000', h: hashK1(secret)})
+    const reply = await payCallback(mint, namedQuote('21000', hashK1(secret)))
     expect(reply.pr).toBeDefined()
     // The mint says it honoured the binding, before a sat is paid.
     expect(reply.mintToHash).toBe(true)
@@ -164,7 +168,7 @@ describe('minting to a named note', () => {
     const fee = {baseFeeMsat: 1000, feePpm: 5000}
     const mint = await start({mintFee: fee})
     const secret = freshK1()
-    const reply = await payCallback(mint, {amount: '50000', h: hashK1(secret)})
+    const reply = await payCallback(mint, namedQuote('50000', hashK1(secret)))
     expect(reply.mint).toEqual({
       h: hashK1(secret),
       amount: mintFeeBand(50_000, fee).minNetMsat
@@ -177,7 +181,7 @@ describe('minting to a named note', () => {
   it('never signs a bound receipt before its invoice settles', async () => {
     const mint = await start()
     const secret = freshK1()
-    const reply = await payCallback(mint, {amount: '21000', h: hashK1(secret)})
+    const reply = await payCallback(mint, namedQuote('21000', hashK1(secret)))
     const pending = (await (await fetch(reply.verify!)).json()) as {
       settled: boolean
       mint: {h: string; amount: number; sig?: string}
@@ -187,29 +191,34 @@ describe('minting to a named note', () => {
     expect(pending.mint.sig).toBeUndefined()
   })
 
-  it('leaves a wallet that sends no h exactly where it was', async () => {
+  it('mints from the mandatory comment without the extension h', async () => {
     const mint = await start()
-    const reply = await payCallback(mint, {amount: '21000'})
+    const secret = freshK1()
+    const reply = await payCallback(mint, {
+      amount: '21000',
+      comment: hashK1(secret)
+    })
     expect(reply.pr).toBeDefined()
-    // Absent, not false: a wallet reads this as "no binding was made".
-    expect(reply.mintToHash).toBeUndefined()
-
-    // And no verify either: the note here IS the preimage, so publishing it
-    // at a URL built from the payment hash would publish the note.
-    expect(reply.verify).toBeUndefined()
+    expect(reply.mintToHash).toBe(true)
+    expect(reply.verify).toBeDefined()
 
     const paymentHash = decodeBolt11(reply.pr!).paymentHashHex
     mint.backend.control.settleInvoice(paymentHash)
-    // The payer has the preimage from paying; nobody else has a route to it.
-    const preimage = (await mint.backend.invoicePreimage(paymentHash))!
-    const note = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, preimage))
+    const note = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, secret))
     expect(note.maxWithdrawable).toBe(21_000)
+    const preimage = (await mint.backend.invoicePreimage(paymentHash))!
+    await expect(
+      fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, preimage))
+    ).rejects.toThrow(NoteUnknownError)
   })
 
   it('takes an uppercase h as the same name, as the withdraw callback does', async () => {
     const mint = await start()
     const secret = freshK1()
-    const reply = await payCallback(mint, {amount: '21000', h: hashK1(secret).toUpperCase()})
+    const reply = await payCallback(
+      mint,
+      namedQuote('21000', hashK1(secret).toUpperCase())
+    )
     expect(reply.mintToHash).toBe(true)
     mint.backend.control.settleInvoice(decodeBolt11(reply.pr!).paymentHashHex)
     expect((await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, secret))).maxWithdrawable).toBe(21_000)
@@ -219,7 +228,11 @@ describe('minting to a named note', () => {
     const mint = await start()
     const invoicesCreated = countInvoices(mint)
     for (const h of ['', 'not hex at all', 'ab'.repeat(31), `${'ab'.repeat(32)}cd`, 'z'.repeat(64)]) {
-      const reply = await payCallback(mint, {amount: '21000', h})
+      const reply = await payCallback(mint, {
+        amount: '21000',
+        comment: hashK1(freshK1()),
+        h
+      })
       expect(reply.status).toBe('ERROR')
       expect(reply.pr).toBeUndefined()
     }
@@ -234,23 +247,26 @@ describe('minting to a named note', () => {
     // An outstanding note.
     const existing = freshK1()
     mint.moneyer.store.creditNote(hashK1(existing), 5_000)
-    const overNote = await payCallback(mint, {amount: '21000', h: hashK1(existing)})
+    const overNote = await payCallback(mint, namedQuote('21000', hashK1(existing)))
     expect(overNote.status).toBe('ERROR')
     expect(overNote.reason).toBe('Invalid or already spent k1.')
     expect(overNote.pr).toBeUndefined()
 
-    // An unsettled invoice's own payment hash, which is a note id in
-    // waiting whenever the payer named nothing.
-    const unbound = await payCallback(mint, {amount: '21000'})
-    const unboundHash = decodeBolt11(unbound.pr!).paymentHashHex
-    const overInvoice = await payCallback(mint, {amount: '21000', h: unboundHash})
+    // An unsettled invoice's own payment hash must not be sold as an output.
+    const waiting = freshK1()
+    const firstInvoice = await payCallback(
+      mint,
+      namedQuote('21000', hashK1(waiting))
+    )
+    const invoiceHash = decodeBolt11(firstInvoice.pr!).paymentHashHex
+    const overInvoice = await payCallback(mint, namedQuote('21000', invoiceHash))
     expect(overInvoice.reason).toBe('Invalid or already spent k1.')
 
     // A note somebody else has already bought but not yet claimed.
     const theirs = freshK1()
-    const first = await payCallback(mint, {amount: '21000', h: hashK1(theirs)})
+    const first = await payCallback(mint, namedQuote('21000', hashK1(theirs)))
     expect(first.mintToHash).toBe(true)
-    const second = await payCallback(mint, {amount: '21000', h: hashK1(theirs)})
+    const second = await payCallback(mint, namedQuote('21000', hashK1(theirs)))
     expect(second.reason).toBe('Invalid or already spent k1.')
     expect(second.pr).toBeUndefined()
 
@@ -262,7 +278,7 @@ describe('minting to a named note', () => {
   it('will not let a rotation mint over a note somebody has already bought', async () => {
     const mint = await start()
     const bought = freshK1()
-    const reply = await payCallback(mint, {amount: '21000', h: hashK1(bought)})
+    const reply = await payCallback(mint, namedQuote('21000', hashK1(bought)))
     expect(reply.mintToHash).toBe(true)
 
     const mine = freshK1()
@@ -333,11 +349,9 @@ describe('an existing database', () => {
   })
 })
 
-// LUD-25 does not name the output with a bare `h`. It carries the hash in a
-// LUD-12 `comment`, which is the spelling a conforming wallet sends and the
-// only one dni's mint reads. `h` predates that text here, so both are
-// honoured - but they are not validated alike, and the difference is the
-// spec's own.
+// LUD-25 names every minted output with a LUD-12 `comment`. `h` predates
+// that text here and remains an additive alias, but never substitutes for
+// the mandatory comment.
 describe('naming the note with a LUD-12 comment', () => {
   it('advertises the capability in both spellings', async () => {
     const mint = await start()
@@ -388,25 +402,13 @@ describe('naming the note with a LUD-12 comment', () => {
     expect(created()).toBe(0)
   })
 
-  // LUD-25: a comment that is not a bare 32-byte hex hash MUST fall back to
-  // keying the note by the preimage. A comment is free text in LUD-12, so a
-  // mint that failed on every stray one would break ordinary payers.
-  it('falls back to the preimage on a comment that is not a hash', async () => {
+  it('refuses a malformed comment before invoice creation', async () => {
     const mint = await start()
+    const created = countInvoices(mint)
     const reply = await payCallback(mint, {amount: '21000', comment: 'thanks for the sats'})
-    expect(reply.pr).toBeDefined()
-    expect(reply.mintToHash).toBeUndefined()
-
-    const {paymentHashHex} = decodeBolt11(reply.pr!)
-    mint.backend.control.settleInvoice(paymentHashHex)
-
-    // the note is the preimage, exactly as it was before comments existed -
-    // and so, exactly as on any unnamed mint, there is no verify to read it
-    // from
-    expect(reply.verify).toBeUndefined()
-    const preimage = (await mint.backend.invoicePreimage(paymentHashHex))!
-    const note = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, preimage))
-    expect(note.maxWithdrawable).toBe(21_000)
+    expect(reply.status).toBe('ERROR')
+    expect(reply.pr).toBeUndefined()
+    expect(created()).toBe(0)
   })
 
   // A malformed `h`, by contrast, is a wallet that meant to name an output
@@ -415,27 +417,23 @@ describe('naming the note with a LUD-12 comment', () => {
   it('still fails loudly on a malformed h', async () => {
     const mint = await start()
     const created = countInvoices(mint)
-    const reply = await payCallback(mint, {amount: '21000', h: 'not-a-hash'})
+    const reply = await payCallback(mint, {
+      amount: '21000',
+      comment: hashK1(freshK1()),
+      h: 'not-a-hash'
+    })
     expect(reply.status).toBe('ERROR')
     expect(created()).toBe(0)
   })
 })
 
-// Not advertising a URL does not stop anyone building it. The payment hash
-// is in the invoice, so `/verify/<hash>` is guessable by anyone who has seen
-// it - which for a QR on a screen is anyone who was looking.
-describe('verify on a note nobody named', () => {
-  it('is neither offered nor answered', async () => {
+describe('verify on mint quotes', () => {
+  it('never creates a verify URL for an unnamed request because it creates no invoice', async () => {
     const mint = await start()
     const reply = await payCallback(mint, {amount: '21000'})
+    expect(reply.status).toBe('ERROR')
     expect(reply.verify).toBeUndefined()
-
-    const paymentHash = decodeBolt11(reply.pr!).paymentHashHex
-    mint.backend.control.settleInvoice(paymentHash)
-
-    // built by hand, exactly as an onlooker would
-    const res = await fetch(`${mint.moneyer.url}/verify/${paymentHash}`)
-    expect(res.status).toBe(404)
+    expect(reply.pr).toBeUndefined()
   })
 
   it('is still both for a note that was named', async () => {
@@ -535,10 +533,12 @@ describe('the verify cutover across an upgrade', () => {
       // that is the branch under test.
       expect(res.status).toBe(200)
 
-      // A fresh unnamed one on the same database is refused.
+      // A fresh unnamed quote on the same database is refused before it can
+      // create either an invoice or verify URL.
       const reply = await payCallback(mint, {amount: '21000'})
-      const fresh = decodeBolt11(reply.pr!).paymentHashHex
-      expect((await fetch(`${mint.moneyer.url}/verify/${fresh}`)).status).toBe(404)
+      expect(reply.status).toBe('ERROR')
+      expect(reply.pr).toBeUndefined()
+      expect(reply.verify).toBeUndefined()
     } finally {
       rmSync(dir, {recursive: true, force: true})
     }

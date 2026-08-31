@@ -1,11 +1,12 @@
 import {afterEach, describe, expect, it} from 'vitest'
 import {bytesToHex, randomBytes} from '@noble/hashes/utils.js'
-import {buildNoteUrl, claimMintedNote, fetchPayRequest, hashK1, mintFeeBand, requestInvoice} from 'lnurlcash-kit'
+import {buildNoteUrl, claimMintedNote, fetchMintAddress, fetchPayRequest, hashK1, mintFeeBand, requestInvoice} from 'lnurlcash-kit'
 // The grader shares no code with the kit or with this mint, which is what
 // makes agreement between the three mean something.
 import {createReport, gradeBoundMint, gradeMint} from 'lnurlcash-conformance'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {startMint, type TestMint} from './helpers.ts'
+import {expectNoUnexpectedFailures, failures} from './conformance-compat.ts'
 
 // Buying a note end to end, with three separate implementations in the
 // loop and none of them hand-rolled for the occasion.
@@ -29,9 +30,6 @@ afterEach(async () => {
   await active?.moneyer.close()
   active = null
 })
-
-const failures = (report: {results: Array<{status: string; name: string; detail?: string}>}) =>
-  report.results.filter(result => result.status === 'fail')
 
 // The whole purchase, as a wallet performs it: read the mint, name the
 // output, get a quote, pay it, claim with the secret you already had.
@@ -110,13 +108,21 @@ describe('buying a bound note, kit to mint to grader', () => {
 
   it('advertises the capability everywhere the grader looks', async () => {
     const mint = await start()
+    const {pay} = await buyNote(mint, 21_000)
+    const address = await fetchMintAddress(
+      `${mint.moneyer.url}/.well-known/lnurlw/mint`
+    )
+    expect(pay.commentAllowed).toBeGreaterThanOrEqual(64)
+    expect(pay.mintToHash).toBe(true)
+    expect(address.mintToHash).toBe(true)
+
     const report = createReport()
     await gradeMint(`${mint.moneyer.url}/.well-known/lnurlp/mint`, report)
-    expect(failures(report)).toEqual([])
-    // The grader warns rather than fails where the three claims disagree,
-    // so a clean failure count is not enough: this mint should be making
-    // the claim, not staying silent about it.
+    expectNoUnexpectedFailures(report)
+    // Insist the published grader actually exercised its capability probe.
+    // Its h-only request is accepted as a known-stale refusal above until
+    // the refreshed mandatory-comment conformance package is published.
     const claimCheck = report.results.find(result => result.name.toLowerCase().includes('minttohash'))
-    expect(claimCheck?.status).toBe('pass')
+    expect(claimCheck).toBeDefined()
   })
 })

@@ -105,7 +105,6 @@ default, and a variable set to an empty string counts as unset.
 | `MONEYER_MIN_SENDABLE_MSAT` | `1000` | smallest payment the mint advertises |
 | `MONEYER_MAX_SENDABLE_MSAT` | `100000000` | largest payment the mint advertises |
 | `MONEYER_MIN_MINT_MSAT` | `1000` | dust floor: the smallest note the mint will strike |
-| `MONEYER_REQUIRE_COMMENT` | `false` | refuse a mint quote that names no output, instead of falling back to a note keyed by the payment preimage. See [comment protection](#comment-protection) |
 | `MONEYER_MAX_K1S` | `21` | most notes one callback may name |
 | `MONEYER_VERIFY` | `true` | the LUD-21 `verify` endpoint. Off means 404 |
 | `MONEYER_WALLET_URL` | | a companion web wallet the mint's site links notes into |
@@ -318,38 +317,37 @@ non-payment, and the routing budget is still sized against the note.
 
 ## Name the note you are buying
 
-Paying a mint invoice mints a note, and by default that note's spend
-secret is the invoice's payment preimage. A payment preimage is not a
-private thing. The funding source has it, every node that forwarded the
-payment has it, and LUD-21 `verify` hands it to whoever asks with the
-payment hash, which is written inside the invoice on the payer's screen.
-The draft's answer is for the wallet to claim and rotate the instant the
-invoice settles, which is a foot race the wallet has to keep winning.
-
-So a wallet may name the note instead. It chooses the secret first, writes
-it down, and sends `h`, the sha256 of that secret, on the pay callback:
+Paying a mint invoice always mints to a wallet-generated secret. The wallet
+chooses and persists that secret first, then sends its SHA-256 commitment in
+the mandatory LUD-12 comment:
 
 ```
-GET /p/cb?amount=21000&h=<64 hex>
+GET /p/cb?amount=21000&comment=<64 hex>
 ```
 
-The mint credits the note at `h` when the invoice settles. The payment
+The mint credits the note at that commitment when the invoice settles. The payment
 preimage then buys nothing: it is an ordinary payment proof, which is why
 `verify` goes on serving it. Nobody but the buyer ever knew the secret, so
 there is no race left to run, and no window in which holding the invoice
 is nearly holding the money.
 
-`h` is optional and additive. A wallet that sends none gets exactly the
-behaviour it always got, so upgrading this mint breaks nothing that works
-today. The wire fields are an implementation proposal for eventual LUD-25
-adoption; current wallets and dni/reference mints keep using the original
-preimage-and-rotate flow unchanged.
+Moneyer's earlier `mintToHash` extension remains additive. A compatible
+wallet repeats the same commitment as `h`; it does not replace `comment`:
+
+```
+GET /p/cb?amount=21000&comment=<64 hex>&h=<same 64 hex>
+```
 
 The rules:
 
-- `h` is 64 hex characters, the sha256 of a 32-byte secret: the same
+- `comment` is mandatory and is exactly 64 hex characters, the SHA-256 of
+  a 32-byte secret. Missing or malformed comments are refused before an
+  invoice exists.
+- When supplied, `h` has the same
   meaning `h` carries on the withdraw callback. Upper case is accepted and
   read as lower case, there too.
+- `comment` and `h` must match. A disagreement is refused rather than
+  guessing which output the wallet is watching.
 - A malformed `h` is refused before the mint asks its funding source for
   anything, so a wallet is never left holding a quote the mint was always
   going to reject.
@@ -373,13 +371,12 @@ The rules:
   pinned `mintPubkey`, then confirm its staged note without exporting `k1`.
 - Claiming needs nothing else. `GET /w?k1=<the secret>` brings the note
   into existence as soon as the invoice has settled, with no `verify` poll
-  and no preimage involved. The poll is still the way to claim from a mint
-  that does not advertise `mintToHash`.
+  and no preimage involved. LUD-21 remains useful settlement evidence.
 - **Persist the secret before asking for the invoice.** Paying and then
   losing the secret is the one way this is worse than the old arrangement,
   and writing it down first removes it entirely.
 
-A named note is also derived-secret friendly: a wallet whose secrets come
+A comment-bound note is also derived-secret friendly: a wallet whose secrets come
 from its seed can restore a note it bought but never claimed, which a note
 whose secret was a preimage could never offer.
 
@@ -443,16 +440,15 @@ that is worth saying plainly.
 
 ## Zap-to-note: a lightning address that pays out as a note
 
-A Nostr zap is an ordinary LNURL-pay. Paid to the mint's own address it
-would mint a note, but to the payer: the invoice preimage is the secret
-and on Lightning the payer always learns it. So moneyer can also serve
-names that work the other way round. A zap to `alice@<host>` gets an
-invoice with a throwaway preimage; when it settles, the mint creates a
-note with a fresh secret, seals it in a NIP-59 gift wrap (a kind 2525
-rumor, the shape heartwood-esp32 and notecase read) to alice's pubkey,
-leaves it on her NIP-17 inbox relays, and publishes the kind 9735 receipt
-so the zap shows up in her client like any other. A hardware wallet that
-catches up on its inbox when it powers on will find the note waiting.
+A Nostr zap is an ordinary LNURL-pay and carries no current-LUD-25 output
+commitment. Moneyer therefore serves zap names in the recipient direction.
+A zap to `alice@<host>` gets an invoice with a throwaway preimage; when it
+settles, the mint creates a note with a fresh secret, seals it in a NIP-59
+gift wrap (a kind 2525 rumor, the shape heartwood-esp32 and notecase read)
+to alice's pubkey, leaves it on her NIP-17 inbox relays, and publishes the
+kind 9735 receipt so the zap shows up in her client like any other. A
+hardware wallet that catches up on its inbox when it powers on will find
+the note waiting.
 
 Until alice rotates the note, the mint knows its secret. That is the
 position every freshly minted note is in, and it is why wallets rotate on
@@ -672,30 +668,21 @@ MIT.
 
 ## Comment protection
 
-A LUD-25 mint quote may carry a LUD-12 `comment` holding
+A current LUD-25 mint quote must carry a LUD-12 `comment` holding
 `hex(sha256(secret))`, naming the note the payment will mint. The note is
 then keyed by the wallet's own `secret`, and the payment preimage redeems
 nothing.
 
-With no such comment, LUD-25 line 80 says the mint MUST fall back to keying
-the note by the payment preimage itself. That fallback is the default here,
-and it is what the draft currently requires.
+Moneyer unconditionally refuses a missing or malformed comment before any
+invoice is issued. The former `MONEYER_REQUIRE_COMMENT` switch has been
+removed: allowing the preimage-backed fallback would now violate the draft
+and expose a bearer secret to every routing hop.
 
-`MONEYER_REQUIRE_COMMENT=true` refuses an unnamed quote instead, before any
-invoice is issued. Two reasons to want it:
+The rule also supports funding sources that settle without returning a
+preimage. There is no bearer credential to recover from the payment path;
+the wallet already persisted it before asking for the invoice.
 
-- A preimage-keyed note is only as safe as the discretion of every routing
-  hop on the payment. Each one learns the preimage as it settles its own
-  HTLC, often before the payer has finished processing the payment.
-- A funding source that settles without producing a preimage - a Spark
-  backend, say - has nothing to key a fallback note by at all.
-
-The cost is backward compatibility: a wallet that has never heard of
+The compatibility boundary is explicit: a wallet that has never heard of
 LNURLcash sends a bare LUD-06 request and gets an error rather than an
-invoice. `dni/lnurl-mint` made this behaviour unconditional in `b257d58`;
-the draft has not yet followed, which is why it is opt-in here. See
-`lnurlcash-conformance/docs/COMMENT-IS-MANDATORY.md`.
-
-Note that `lnurlcash-conformance` now grades the mandate as required, so
-this mint **fails that suite in its default configuration** and passes with
-`MONEYER_REQUIRE_COMMENT=true`.
+invoice. Existing notes remain ordinary LUD-03 withdraw links and continue
+to redeem normally.

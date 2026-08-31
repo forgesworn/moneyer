@@ -43,6 +43,12 @@ afterEach(async () => {
   active = null
 })
 
+const requestMintInvoice = async (callback: string, amountMsat: number) => {
+  const secret = freshK1()
+  const invoice = await requestInvoice(callback, amountMsat, {h: hashK1(secret)})
+  return {invoice, secret}
+}
+
 // The discovery endpoint carries more than lnurlcash-kit's type names
 // today; the kit passes unknown fields through, so read the JSON directly.
 type Discovery = Record<string, unknown> & {previousPubkeys?: string[]}
@@ -284,28 +290,24 @@ describe('metrics', () => {
 })
 
 describe('minting', () => {
-  it('mints a claimable note whose invoice preimage is the spend secret', async () => {
+  it('mints a claimable note at the wallet-generated secret', async () => {
     const mint = await start()
     const pay = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
-    const invoice = await requestInvoice(pay.callback, 21_000)
+    const {invoice, secret} = await requestMintInvoice(pay.callback, 21_000)
     expect(invoice.disposable).toBe(false)
-    // No verify on this path, and that is the spec: the note's k1 IS the
-    // preimage here, so a verify URL - which anyone who has seen the
-    // invoice can build from its payment hash - would publish the note.
-    expect(invoice.verify).toBeUndefined()
+    expect(invoice.verify).toBeDefined()
     const paymentHash = decodeBolt11(invoice.pr).paymentHashHex
 
-    // The payer learns the preimage by paying, the way every Lightning
-    // wallet already keeps it. Nobody else has a route to it.
     mint.backend.control.settleInvoice(paymentHash)
     const preimage = await mint.backend.invoicePreimage(paymentHash)
     expect(preimage).not.toBeNull()
 
-    // The preimage IS the k1. Claim it, learn its authoritative value, and
-    // rotate immediately per the spec's security considerations.
-    const settled = await settleNote(`${mint.moneyer.url}/w`, preimage!, 21_000, undefined)
+    // The wallet's secret opens the note; the payment preimage does not.
+    const settled = await settleNote(`${mint.moneyer.url}/w`, secret, 21_000, undefined)
     expect(settled.amountMsat).toBe(21_000)
-    expect(settled.k1).not.toBe(preimage)
+    await expect(
+      fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, preimage!))
+    ).rejects.toThrow(NoteUnknownError)
     expect(verifyNoteSignature(settled.k1, 21_000, settled.signature!, mint.moneyer.signer!.pubkey)).toBe(true)
   })
 
@@ -313,11 +315,10 @@ describe('minting', () => {
     const fee = {baseFeeMsat: 1000, feePpm: 5000}
     const mint = await start({mintFee: fee})
     const pay = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
-    const invoice = await requestInvoice(pay.callback, 50_000)
+    const {invoice, secret} = await requestMintInvoice(pay.callback, 50_000)
     const paymentHash = decodeBolt11(invoice.pr).paymentHashHex
     mint.backend.control.settleInvoice(paymentHash)
-    const preimage = (await mint.backend.invoicePreimage(paymentHash))!
-    const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, preimage))
+    const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, secret))
     expect(info.maxWithdrawable).toBe(mintFeeBand(50_000, fee).minNetMsat)
   })
 
@@ -577,7 +578,7 @@ describe('melting', () => {
 
     // an invoice this mint itself issued
     const pay = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
-    const own = await requestInvoice(pay.callback, 21_000)
+    const {invoice: own} = await requestMintInvoice(pay.callback, 21_000)
     await expect(meltNote(info.callback, note.k1, own.pr)).rejects.toThrow(ServiceRejectedError)
 
     // an invoice an earlier melt already used
@@ -593,7 +594,7 @@ describe('verify switch', () => {
   it('serves 404 for verify when disabled, and omits verify URLs', async () => {
     const mint = await start({verify: false})
     const pay = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
-    const invoice = await requestInvoice(pay.callback, 21_000)
+    const {invoice} = await requestMintInvoice(pay.callback, 21_000)
     expect(invoice.verify).toBeUndefined()
     const paymentHash = decodeBolt11(invoice.pr).paymentHashHex
     const res = await fetch(`${mint.moneyer.url}/verify/${paymentHash}`)
@@ -611,11 +612,10 @@ describe('a sat-ceilinged mint fee', () => {
 
   const mintedValue = async (mint: TestMint): Promise<number> => {
     const pay = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
-    const invoice = await requestInvoice(pay.callback, 40_000)
+    const {invoice, secret} = await requestMintInvoice(pay.callback, 40_000)
     const {paymentHashHex} = decodeBolt11(invoice.pr)!
     mint.backend.control.settleInvoice(paymentHashHex)
-    const preimage = mint.backend.control.invoiceByHash(paymentHashHex)!.preimageHex
-    const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, preimage))
+    const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, secret))
     return info.maxWithdrawable
   }
 
@@ -629,12 +629,11 @@ describe('a sat-ceilinged mint fee', () => {
     // floor, so paying the minimum the mint itself advertised was refused.
     const mint = await start({mintFee: {baseFeeMsat: 5000, feePpm: 1000}, roundFeeToSat: true, minMintMsat: 50_000})
     const pay = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
-    const invoice = await requestInvoice(pay.callback, pay.minSendable)
+    const {invoice, secret} = await requestMintInvoice(pay.callback, pay.minSendable)
     expect(invoice.pr).toBeTypeOf('string')
     const {paymentHashHex} = decodeBolt11(invoice.pr)!
     mint.backend.control.settleInvoice(paymentHashHex)
-    const preimage = mint.backend.control.invoiceByHash(paymentHashHex)!.preimageHex
-    const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, preimage))
+    const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, secret))
     expect(info.maxWithdrawable).toBeGreaterThanOrEqual(50_000)
   })
 

@@ -4,6 +4,7 @@ import {buildNoteUrl, hashK1} from 'lnurlcash-kit'
 // is exactly why passing it means something.
 import {createReport, gradeMint, gradeNote} from 'lnurlcash-conformance'
 import {freshK1, startMint, type TestMint} from './helpers.ts'
+import {expectNoUnexpectedFailures, failures} from './conformance-compat.ts'
 
 let active: TestMint | null = null
 afterEach(async () => {
@@ -11,22 +12,19 @@ afterEach(async () => {
   active = null
 })
 
-const failures = (report: {results: Array<{status: string; name: string; detail?: string}>}) =>
-  report.results.filter(result => result.status === 'fail')
-
 describe('lnurlcash-conformance', () => {
   it('passes the read-only mint checks', async () => {
     const mint = (active = await startMint())
     const report = createReport()
     await gradeMint(`${mint.moneyer.url}/.well-known/lnurlp/mint`, report)
-    expect(failures(report)).toEqual([])
+    expectNoUnexpectedFailures(report)
   })
 
   it('passes the read-only checks with a mint fee advertised', async () => {
     const mint = (active = await startMint({mintFee: {baseFeeMsat: 1000, feePpm: 5000}}))
     const report = createReport()
     await gradeMint(`${mint.moneyer.url}/.well-known/lnurlp/mint`, report)
-    expect(failures(report)).toEqual([])
+    expectNoUnexpectedFailures(report)
   })
 
   it('passes the spending checks against a funded note', async () => {
