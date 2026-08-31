@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-08-31
+
 **LUD-25 comment-bound minting is now unconditional.** Every mint quote must
 carry `comment=hex(sha256(secret))`; missing or malformed comments are
 rejected before invoice creation. The additive `h` field is accepted only
