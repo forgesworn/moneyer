@@ -82,5 +82,5 @@ NoteStore - SQLite store; notes by sha256(k1), never secrets
 /.well-known/lnurlw/{user}  LUD-25 mint address (experimental)
 /p/cb                       LUD-06 pay callback (optional h names the note)
 /verify/{payment_hash}      LUD-21 verify (mint invoices AND melt payments)
-/w                          LUD-03 informational GET
+/w                          LUD-03 informational GET by k1 or hash-only h
 /w/cb                       melt / rotate / split / merge
