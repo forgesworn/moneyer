@@ -201,8 +201,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   // A note whose id we do not know yet may be a settled mint invoice whose
   // claim simply has not been observed: settle it lazily against the
   // funding source, which is what makes paying an invoice mint the note.
-  const resolveNote = async (k1: string): Promise<NoteRow | null> => {
-    const id = hashK1(k1)
+  const resolveNoteId = async (id: string): Promise<NoteRow | null> => {
     const note = store.noteById(id)
     if (note) return note
     // Either the invoice whose payment hash is this id - the older
@@ -221,6 +220,8 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     }
     return null
   }
+
+  const resolveNote = async (k1: string): Promise<NoteRow | null> => resolveNoteId(hashK1(k1))
 
   // ---- transparency: what the mint owes, and what the node holds ----
   //
@@ -836,9 +837,23 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
 
     // ---- LUD-03 informational GET ----
     if (requestUrl.pathname === '/w') {
+      const hasK1 = q.has('k1')
+      const hasH = q.has('h')
       const k1 = q.get('k1')?.toLowerCase()
-      if (!k1 || !HEX32.test(k1)) return fail('Unknown note.')
-      const note = await resolveNote(k1)
+      const h = q.get('h')?.toLowerCase()
+      if (
+        (!hasK1 && !hasH) ||
+        (hasK1 && (!k1 || !HEX32.test(k1))) ||
+        (hasH && (!h || !HEX32.test(h)))
+      ) {
+        return fail('Unknown note.')
+      }
+      // LUD-25's hash-only check lets a wallet prove that the note it just
+      // bought exists without sending the bearer secret to the service a
+      // second time. If both spellings are present, they must name the same
+      // note; choosing one would make a malformed URL an ownership oracle.
+      if (k1 && h && hashK1(k1) !== h) return fail('Unknown note.')
+      const note = h ? await resolveNoteId(h) : await resolveNote(k1!)
       if (!note) return fail('Unknown note.')
       if (note.state === 'burned') return fail('Note already spent.')
       // A note reserved by an in-flight melt is not withdrawable, and must
@@ -858,7 +873,10 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       return send({
         tag: 'withdrawRequest',
         callback: `${origin}/w/cb`,
-        k1,
+        // A hash-only query deliberately does not echo or invent k1. The
+        // wallet already has the secret; this endpoint only confirms the
+        // mint's record at sha256(k1).
+        ...(k1 ? {k1} : {}),
         minWithdrawable: wholeSatFloor(note.amountMsat),
         maxWithdrawable: note.amountMsat,
         defaultDescription: config.description,

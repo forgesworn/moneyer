@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-09-01
+
+**Fix: the LUD-25 informational GET now accepts `h=sha256(k1)`.** A
+receipt-aware wallet can verify that a bound mint payment created its note
+without disclosing the bearer secret. The hash-only reply deliberately omits
+`k1`; lazy settlement works on this path as it does on the secret-bearing
+path, and conflicting `k1` and `h` parameters are refused.
+
 ## 0.9.0 - 2026-08-31
 
 **LUD-25 comment-bound minting is now unconditional.** Every mint quote must

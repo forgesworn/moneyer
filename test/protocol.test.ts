@@ -8,6 +8,7 @@ import {
   fetchInvoiceVerification,
   fetchMintAddress,
   fetchNoteInfo,
+  fetchNoteInfoByHash,
   fetchPayRequest,
   hashK1,
   mergeNotes,
@@ -311,6 +312,19 @@ describe('minting', () => {
     expect(verifyNoteSignature(settled.k1, 21_000, settled.signature!, mint.moneyer.signer!.pubkey)).toBe(true)
   })
 
+  it('settles and inspects a bound note by hash before its secret is disclosed', async () => {
+    const mint = await start()
+    const pay = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
+    const {invoice, secret} = await requestMintInvoice(pay.callback, 21_000)
+    const paymentHash = decodeBolt11(invoice.pr).paymentHashHex
+    mint.backend.control.settleInvoice(paymentHash)
+
+    const info = await fetchNoteInfoByHash(pay.withdrawLink!, hashK1(secret))
+    expect(info.maxWithdrawable).toBe(21_000)
+    expect(info.k1).toBeUndefined()
+    expect(mint.moneyer.store.noteById(hashK1(secret))?.state).toBe('outstanding')
+  })
+
   it('withholds the advertised fee and reports the net value as authoritative', async () => {
     const fee = {baseFeeMsat: 1000, feePpm: 5000}
     const mint = await start({mintFee: fee})
@@ -366,6 +380,22 @@ describe('the informational GET', () => {
     await rotateNote(info.callback, note.k1)
     await expect(fetchNoteInfo(note.url)).rejects.toThrow(NoteSpentError)
     expect(await probeBurnedNote(note.url)).toBe('gone')
+  })
+
+  it('checks a note by hash without receiving or echoing the bearer secret', async () => {
+    const mint = await start()
+    const note = creditNote(mint, 42_000)
+    const info = await fetchNoteInfoByHash(`${mint.moneyer.url}/w`, hashK1(note.k1))
+    expect(info.maxWithdrawable).toBe(42_000)
+    expect(info.k1).toBeUndefined()
+    expect(info.mintPubkey).toBe(mint.moneyer.signer!.pubkey)
+
+    await expect(fetchNoteInfoByHash(`${mint.moneyer.url}/w`, hashK1(freshK1()))).rejects.toThrow(
+      NoteUnknownError
+    )
+    const live = await fetchNoteInfo(note.url)
+    await rotateNote(live.callback, note.k1)
+    await expect(fetchNoteInfoByHash(`${mint.moneyer.url}/w`, hashK1(note.k1))).rejects.toThrow(NoteSpentError)
   })
 })
 

@@ -576,7 +576,7 @@ clearnet.
 | `/p/cb` | LUD-06 pay callback; issues the mint invoice, and takes an optional `h` naming the note |
 | `/z/cb/<zap name>` | the zap callback; validates the kind 9734 and issues the invoice |
 | `/verify/<hash>` | LUD-21 verify, for mint invoices and melt payments |
-| `/w` | LUD-03 informational GET; a live note also carries `payLink`, the route back to this mint's discovery document |
+| `/w` | LUD-03 informational GET; accepts `k1` or the non-disclosing LUD-25 `h=sha256(k1)` check; a live note also carries `payLink` |
 | `/w/cb` | the mutating callback: melt, rotate, split, merge |
 | `POST /names` | claim a lightning address, authenticated by NIP-98 |
 | `/.well-known/nostr.json` | NIP-05 for the names this mint serves |
