@@ -15,13 +15,17 @@ Client library to build against a mint: lnurlcash-kit
 
 ## Rules this SERVICE follows (and any mint MUST)
 
-1. A mint invoice's preimage is the note secret - the funding source must
-   accept a caller-supplied preimage (cln and lnd do; phoenixd and NIP-47
-   make_invoice do not, and cannot back a mint). UNLESS the payer sent
-   `h` on the pay callback: then the note is credited at `h`, the payer's
-   own secret, and the preimage is only a payment proof. Prefer that: a
-   preimage is known to the funding source, to every node on the route,
-   and to anyone who polls verify with the payment hash in the invoice.
+1. A mint quote MUST be named. The payer sends `comment=hex(sha256(secret))`
+   on the pay callback (LUD-12, and the payRequest advertises
+   `commentAllowed: 64`); a missing or malformed comment is refused before
+   any invoice is issued. The note is credited at that hash, so the secret
+   is the payer's alone. The payment preimage is settlement proof and never
+   a bearer credential - it is known to the funding source, to every node on
+   the route, and to anyone who polls verify with the payment hash written
+   inside the invoice. `h` is an additive alias for the same commitment and
+   never replaces the comment. Because the note is not keyed by the
+   preimage, a funding source whose node chooses its own preimages
+   (phoenixd, NIP-47 make_invoice) can back a mint.
 2. Mutations are atomic: all named k1 burn and all outputs mint, or
    nothing happens. Duplicate k1 in one request is refused.
 3. h/h2 are WALLET-supplied hashes; the mint never generates a

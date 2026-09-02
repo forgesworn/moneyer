@@ -1,4 +1,4 @@
-import {bytesToHex} from '@noble/hashes/utils.js'
+import {bytesToHex, randomBytes} from '@noble/hashes/utils.js'
 import {sha256} from '@noble/hashes/sha2.js'
 import {hexToBytes} from '@noble/hashes/utils.js'
 import {bolt11PaymentHash} from 'farrier-kit/bolt11'
@@ -69,6 +69,15 @@ export type FakeBackendOptions = {
   // needs one - splitting, merging, melting, sending. Off by default so
   // the tests that drive settlement by hand keep their exact timing.
   autoSettle?: boolean
+  // Behave like a node that mints its own invoice preimages - phoenixd, or
+  // NIP-47 `make_invoice`. The caller's preimage, if any, is ignored, and
+  // the payment hash only arrives with the invoice.
+  //
+  // This used to be an impossible funding source for a mint, back when a
+  // bearer note was keyed by the payment preimage. It is not any more, and
+  // the mint's checks on a node-chosen invoice are a different set from the
+  // ones it makes on an invoice it named itself, so they need exercising.
+  nodeChoosesPreimage?: boolean
   // How long after issuing an invoice `autoSettle` treats it as paid.
   //
   // Not zero, and the difference matters. Settling at the instant of
@@ -95,6 +104,11 @@ export type FakeBackend = LightningBackend & {
     // Plants a payment somebody ELSE made through this node - the
     // shared-funding-source shape the melt pre-check exists for.
     seedForeignPayment(paymentHashHex: string, status?: 'complete' | 'pending'): void
+    // Makes the NEXT createInvoice hand back an invoice committing to this
+    // payment hash instead of a fresh one - a funding source returning
+    // something the mint has seen before, or has already been paid. One
+    // shot, and only reachable when a test asks for it.
+    reuseNextInvoiceHash(paymentHashHex: string): void
     invoiceByHash(paymentHashHex: string): {preimageHex: string; amountMsat: number; settled: boolean} | undefined
     // What was sent for a payment, when the invoice named no amount and
     // the mint chose. Null when the invoice named one.
@@ -111,6 +125,8 @@ export const FAKE_LOCAL_BALANCE_MSAT = 100_000_000_000
 
 export const createFakeBackend = (options: FakeBackendOptions = {}): FakeBackend => {
   const autoSettle = options.autoSettle === true
+  const nodeChoosesPreimage = options.nodeChoosesPreimage === true
+  let reusedInvoiceHash: string | null = null
   const autoSettleAfterMs = options.autoSettleAfterMs ?? DEFAULT_AUTO_SETTLE_AFTER_MS
   // `settleAt` is when autoSettle starts calling this invoice paid; null
   // for an invoice only control.settleInvoice can settle, which is every
@@ -123,12 +139,26 @@ export const createFakeBackend = (options: FakeBackendOptions = {}): FakeBackend
 
   return {
     name: 'fake',
+    acceptsInvoicePreimage: !nodeChoosesPreimage,
 
     async createInvoice({amountMsat, preimageHex, memo}) {
-      const paymentHashHex = bytesToHex(sha256(hexToBytes(preimageHex)))
+      // A node that mints its own preimages never sees the caller's.
+      const chosen = nodeChoosesPreimage ? bytesToHex(randomBytes(32)) : preimageHex
+      if (chosen === undefined) {
+        throw new Error('the fake backend accepts a caller-supplied invoice preimage and was given none.')
+      }
+      // A funding source handing back an invoice that is not the fresh one
+      // it was asked for. Nothing is recorded under the reused hash: the
+      // point is precisely that this invoice is somebody else's.
+      if (reusedInvoiceHash !== null) {
+        const paymentHashHex = reusedInvoiceHash
+        reusedInvoiceHash = null
+        return {pr: fakeBolt11({amountMsat, paymentHashHex, memo})}
+      }
+      const paymentHashHex = bytesToHex(sha256(hexToBytes(chosen)))
       const pr = fakeBolt11({amountMsat, paymentHashHex, memo})
       invoices.set(paymentHashHex, {
-        preimageHex,
+        preimageHex: chosen,
         amountMsat,
         settled: false,
         settleAt: autoSettle ? Date.now() + autoSettleAfterMs : null
@@ -220,6 +250,9 @@ export const createFakeBackend = (options: FakeBackendOptions = {}): FakeBackend
       },
       seedForeignPayment(paymentHashHex, status = 'complete') {
         payments.set(paymentHashHex, {status, preimageHex: null, amountMsat: null})
+      },
+      reuseNextInvoiceHash(paymentHashHex) {
+        reusedInvoiceHash = paymentHashHex
       },
       sentAmountMsat(paymentHashHex) {
         const payment = payments.get(paymentHashHex)

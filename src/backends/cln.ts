@@ -41,8 +41,12 @@ export const createClnBackend = (config: {url: string; rune: string}): Lightning
 
   return {
     name: 'cln',
+    acceptsInvoicePreimage: true,
 
     async createInvoice({amountMsat, preimageHex, memo, descriptionForHash}) {
+      if (preimageHex === undefined) {
+        throw new Error('cln accepts a caller-supplied invoice preimage and was given none.')
+      }
       const result = await mustCall('/v1/invoice', {
         amount_msat: amountMsat,
         label: bytesToHex(randomBytes(16)),

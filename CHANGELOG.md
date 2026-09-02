@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+**A caller-supplied invoice preimage is no longer required of a funding
+source.** It was, and the README said so: "the capability a LUD-25 mint
+cannot exist without". That was true of the draft that keyed a bearer note by
+the payment preimage, and stopped being true in 0.9.0, when comment-bound
+minting became unconditional. A note is bound to the buyer's commitment,
+which the funding source never sees, so a node that mints its own preimages
+can back a mint.
+
+`LightningBackend` gains `acceptsInvoicePreimage`, and `createInvoice`'s
+`preimageHex` is optional. cln, lnd and fake declare `true` and are unchanged:
+knowing the payment hash before the invoice exists lets the mint refuse an
+invoice that does not commit to it, which is still the stronger position. A
+backend declaring `false` gets the hash off the returned invoice and the same
+collision checks after the fact, plus two the pre-chosen path never needed - a
+payment hash this mint has already issued or melted, and an invoice the node
+had already settled, are both refused rather than quoted.
+
+No phoenixd or NIP-47 backend ships yet; what changed is that one is now
+possible. An operator writing one should know that phoenixd invoices are
+denominated in whole sats and that `payinvoice` takes no fee limit, so a mint
+on it cannot cap the routing cost of a melt the way cln and lnd can.
+
 ## 0.9.1 - 2026-09-01
 
 **Fix: the LUD-25 informational GET now accepts `h=sha256(k1)`.** A

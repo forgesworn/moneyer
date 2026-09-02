@@ -29,9 +29,12 @@ export type TestMint = {moneyer: Moneyer; backend: FakeBackend}
 
 export const startMint = async (
   overrides: Partial<MoneyerConfig> = {},
-  deps: Omit<MoneyerDeps, 'backend'> = {}
+  // `backend` is accepted here so a test can hand in a fake configured
+  // differently - a node that mints its own invoice preimages, say - without
+  // rebuilding the whole start path.
+  deps: Omit<MoneyerDeps, 'backend'> & {backend?: FakeBackend} = {}
 ): Promise<TestMint> => {
-  const backend = createFakeBackend()
+  const backend = deps.backend ?? createFakeBackend()
   const moneyer = await createMoneyer(testConfig(overrides), {
     backend,
     confirmDelaysMs: [0, 10, 20],

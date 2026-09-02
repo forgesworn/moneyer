@@ -6,8 +6,9 @@
 moneyer is an independent implementation of the LUD-25 draft: paying an
 invoice it issues mints a bearer note, and a note's holder can rotate,
 split, merge and melt it against the withdraw callback. The note's spend
-secret is the invoice's payment preimage, or, better, a secret the buyer
-chose and named on the way in. It passes the full
+secret is chosen by the buyer, before the invoice exists, and named to the
+mint only as a hash - so the mint never holds it, and neither does any node
+that forwards the payment. It passes the full
 [lnurlcash-conformance](https://github.com/TheCryptoDonkey/lnurlcash-conformance)
 grader, including the spending checks, and the grader runs in this repo's
 own test suite.
@@ -21,14 +22,18 @@ lesson, that behaviour is kept deliberately and tested.
 
 - TypeScript, ESM, Node 24+. `node:http` and `node:sqlite`; no web
   framework, no ORM.
-- Funding sources: **cln** (clnrest) and **lnd** (REST), both of which
-  accept a caller-supplied invoice preimage - the capability a LUD-25 mint
-  cannot exist without. phoenixd and NIP-47 `make_invoice` do not offer it,
-  which is why neither can back a mint. A **fake** backend exists for
+- Funding sources: **cln** (clnrest) and **lnd** (REST). Both accept a
+  caller-supplied invoice preimage, so the mint knows the payment hash
+  before the invoice exists and can refuse an invoice that does not commit
+  to it. That is a nicety, not a requirement: a note is keyed by the buyer's
+  comment commitment, which the funding source never sees, so a node that
+  mints its own preimages (phoenixd, NIP-47 `make_invoice`) can back a mint
+  too - it just gets the after-the-fact checks instead. A backend declares
+  which it is with `acceptsInvoicePreimage`. A **fake** backend exists for
   development and tests and refuses to run outside `--dev`.
 - Notes are stored by id, `sha256(k1)` - the store never holds a spend
-  secret. A buyer may name the note they are buying, in which case the
-  secret is theirs alone from the start.
+  secret. The buyer names the note they are buying with a mandatory LUD-12
+  comment, so the secret is theirs alone from the start.
 - Signs every note it mints with its own mint key (secp256k1, the standard
   `Lightning Signed Message` construction) for LUD-25 offline verification.
 - The melt discipline: reply OK when the note is reserved, pay in the

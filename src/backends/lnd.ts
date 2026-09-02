@@ -90,8 +90,12 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
 
   return {
     name: 'lnd',
+    acceptsInvoicePreimage: true,
 
     async createInvoice({amountMsat, preimageHex, memo, descriptionForHash}) {
+      if (preimageHex === undefined) {
+        throw new Error('lnd accepts a caller-supplied invoice preimage and was given none.')
+      }
       const res = await json('/v1/invoices', {
         method: 'POST',
         body: {

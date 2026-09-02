@@ -1,9 +1,12 @@
 // The funding source. Every amount is integer milli-satoshis.
 //
-// createInvoice currently takes a caller-supplied preimage so Moneyer can
-// verify that the returned BOLT-11 commits to the invoice it records and can
-// later provide ordinary LUD-21 settlement proof. The bearer note itself is
-// always keyed by the wallet's mandatory comment commitment.
+// A backend MAY accept a caller-supplied invoice preimage, and Moneyer uses
+// one where it can: knowing the payment hash before the invoice exists lets it
+// prove the BOLT-11 it got back is the one it asked for. That is a nicety, not
+// a requirement. The bearer note is keyed by the wallet's mandatory comment
+// commitment, never by the payment preimage, so a funding source whose node
+// chooses its own preimages can back a mint perfectly well - see
+// `acceptsInvoicePreimage`.
 
 export type NodeInfo = {
   alias?: string
@@ -53,10 +56,31 @@ export class PaymentAlreadyKnownError extends Error {}
 
 export interface LightningBackend {
   readonly name: string
+  // Whether createInvoice honours `preimageHex`.
+  //
+  // True for backends that let the caller pick (cln, lnd), and Moneyer then
+  // knows the payment hash before the invoice exists and refuses any invoice
+  // that does not commit to it. False for a node that mints its own preimages
+  // (phoenixd, NIP-47 `make_invoice`); Moneyer reads the hash back off the
+  // returned invoice and checks what it can after the fact instead.
+  //
+  // This used to be the capability a mint could not exist without, because an
+  // earlier LUD-25 draft keyed the bearer note by the payment preimage. That
+  // draft is gone: a preimage reaches every node that forwarded the payment,
+  // so keying money by one was always the wrong shape, and the current draft
+  // binds the note to a secret only the wallet ever sees.
+  readonly acceptsInvoicePreimage: boolean
   // `descriptionForHash`, when given, is what the invoice commits to via
   // its description hash (LUD-06 metadata, or a NIP-57 zap request) in
   // place of the plain memo.
-  createInvoice(args: {amountMsat: number; preimageHex: string; memo: string; descriptionForHash?: string}): Promise<{pr: string}>
+  // `preimageHex` is supplied only when `acceptsInvoicePreimage` is true, and
+  // a backend that declares false MUST ignore it rather than fail.
+  createInvoice(args: {
+    amountMsat: number
+    preimageHex?: string
+    memo: string
+    descriptionForHash?: string
+  }): Promise<{pr: string}>
   // Throws PaymentFailedError on a clean terminal failure, anything else on
   // an ambiguous one.
   //

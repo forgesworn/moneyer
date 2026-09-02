@@ -711,13 +711,24 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       }
 
       // The preimage is payment proof only; comment names the future note.
-      // Generated here, handed to the funding source, never persisted - the store
-      // keeps hashes only.
-      let preimage = bytesToHex(randomBytes(32))
-      let paymentHash = hashK1(preimage)
-      while (store.outputIdInUse(paymentHash) || paymentHash === outputId) {
-        preimage = bytesToHex(randomBytes(32))
-        paymentHash = hashK1(preimage)
+      //
+      // Where the funding source lets Moneyer choose it, choosing means the
+      // payment hash is known before the invoice exists, and the invoice that
+      // comes back can be held to it. Where the node mints its own preimages,
+      // the hash arrives with the invoice and the same collisions are checked
+      // after the fact instead. Either way the preimage is never persisted -
+      // the store keeps hashes only - and either way the bearer note is keyed
+      // by the wallet's comment commitment, which is why a node that will not
+      // take a preimage can still back a mint.
+      let chosen: {preimageHex: string; paymentHash: string} | null = null
+      if (backend.acceptsInvoicePreimage) {
+        let preimageHex = bytesToHex(randomBytes(32))
+        let paymentHash = hashK1(preimageHex)
+        while (store.outputIdInUse(paymentHash) || paymentHash === outputId) {
+          preimageHex = bytesToHex(randomBytes(32))
+          paymentHash = hashK1(preimageHex)
+        }
+        chosen = {preimageHex, paymentHash}
       }
 
       let pr: string
@@ -725,7 +736,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         pr = (
           await backend.createInvoice({
             amountMsat: amount,
-            preimageHex: preimage,
+            ...(chosen === null ? {} : {preimageHex: chosen.preimageHex}),
             memo: `LNURLcash mint at ${host}`
           })
         ).pr
@@ -733,13 +744,49 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         log(`create invoice failed: ${(err as Error).message}`)
         return fail('Temporarily unable to issue an invoice.')
       }
-      // Trust but verify: an invoice that does not commit to OUR payment
-      // hash would take the payer's money and mint a note they can never
-      // claim. Refuse to hand it out.
+      // Trust but verify: an invoice for the wrong amount would take the
+      // payer's money and mint a note worth something else.
       const decoded = tryDecodeBolt11(pr)
-      if (!decoded || decoded.paymentHashHex !== paymentHash || decoded.amountMsats !== BigInt(amount)) {
-        log('funding source returned an invoice that does not match the requested preimage/amount')
+      if (!decoded || decoded.amountMsats !== BigInt(amount)) {
+        log('funding source returned an invoice that does not match the requested amount')
         return fail('Temporarily unable to issue an invoice.')
+      }
+      const paymentHash = decoded.paymentHashHex
+      if (chosen !== null) {
+        // An invoice that does not commit to OUR payment hash is not the one
+        // that was asked for, and paying it would mint nothing claimable.
+        if (paymentHash !== chosen.paymentHash) {
+          log('funding source returned an invoice that does not match the requested preimage')
+          return fail('Temporarily unable to issue an invoice.')
+        }
+      } else {
+        // The node chose the preimage, so every check the pre-chosen path got
+        // for free has to be made now - plus one it never needed. A hash this
+        // mint has already seen, or an invoice the node settled before handing
+        // it over, would credit a note against money that never moved on this
+        // quote's behalf.
+        if (
+          paymentHash === outputId ||
+          store.outputIdInUse(paymentHash) ||
+          store.mintInvoiceByHash(paymentHash) ||
+          store.meltByHash(paymentHash)
+        ) {
+          log('funding source returned an invoice whose payment hash is already in use')
+          return fail('Temporarily unable to issue an invoice.')
+        }
+        let alreadySettled: boolean
+        try {
+          alreadySettled = await backend.isInvoiceSettled(paymentHash)
+        } catch (err) {
+          // Unconfirmable is not "fresh". Handing out an invoice that might
+          // already be paid is the whole risk this check exists to close.
+          log(`could not confirm a fresh invoice is unsettled: ${(err as Error).message}`)
+          return fail('Temporarily unable to issue an invoice.')
+        }
+        if (alreadySettled) {
+          log('funding source returned an invoice that was already settled')
+          return fail('Temporarily unable to issue an invoice.')
+        }
       }
       try {
         store.recordMintInvoice(paymentHash, pr, amount, net, outputId)
