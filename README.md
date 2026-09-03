@@ -102,7 +102,7 @@ default, and a variable set to an empty string counts as unset.
 | `MONEYER_BACKEND_URL` | | the funding source's REST endpoint |
 | `MONEYER_BACKEND_RUNE` | | cln authentication |
 | `MONEYER_BACKEND_MACAROON` | | lnd authentication, hex |
-| `MONEYER_SIGNING_KEY` | | 32 bytes of hex. Unset means notes go out unsigned, which holders will notice |
+| `MONEYER_SIGNING_KEY` | required | Persistent 32-byte hex note-signing key. The service refuses to start without it; use `moneyer admin keys rotate` to generate one |
 | `MONEYER_PREVIOUS_SIGNING_PUBKEYS` | | compressed pubkeys this mint signed under before, comma separated (see below) |
 | `MONEYER_BASE_FEE_MSAT` | `0` | flat mint fee |
 | `MONEYER_FEE_PPM` | `0` | proportional mint fee, parts per million |

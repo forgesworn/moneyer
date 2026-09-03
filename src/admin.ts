@@ -206,7 +206,7 @@ export const runAdmin = async (argv: string[], deps: AdminDeps = {}): Promise<nu
         out(`  node balance       ${localBalanceMsat === undefined ? 'not reported' : sats(localBalanceMsat)}`)
         out(`  coverage           ${stats.coverage === undefined ? (liabilities.outstandingMsat === 0 ? 'nothing outstanding' : 'unknown') : stats.coverage}`)
         out(`  lifetime           ${totals.mints} mints, ${totals.melts.paid} melts paid, ${totals.melts.restored} restored, ${totals.zaps} zaps`)
-        out(`  signing key        ${signingPubkey(config) ?? 'none - notes go out unsigned'}`)
+        out(`  signing key        ${signingPubkey(config) ?? 'none - service will refuse to start'}`)
         out(`  previous keys      ${previous.length ? previous.join(', ') : 'none'}`)
         out(`  funding source     ${config.backend.kind}`)
         return 0

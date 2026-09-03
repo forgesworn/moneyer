@@ -77,7 +77,7 @@ const moneyer = await createMoneyer(config, {log})
 
 console.log(`moneyer listening on ${moneyer.url}`)
 console.log(`  lightning address: ${config.username}@${new URL(config.publicOrigin ?? moneyer.url).host}`)
-if (moneyer.signer) console.log(`  mint pubkey:       ${moneyer.signer.pubkey}`)
+console.log(`  mint pubkey:       ${moneyer.signer.pubkey}`)
 console.log(`  funding source:    ${moneyer.backend.name}`)
 
 if (values.dev) {

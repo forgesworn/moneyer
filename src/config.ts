@@ -70,8 +70,9 @@ export type MoneyerConfig = {
   // read from the environment: only an explicit `false` opts out. The
   // library and the binary have to be the same mint.
   roundFeeToSat?: boolean
-  // 32-byte hex. Unset means notes are issued unsigned, which the spec
-  // allows but holders will notice.
+  // Persistent 32-byte hex note-signing key. createMoneyer refuses to start
+  // without one: LUD-25 requires every SERVICE to issue verifiable notes.
+  // The CLI's --dev mode generates an ephemeral key for its valueless mint.
   signingKey?: string
   // Compressed pubkeys this mint has signed notes under before, published
   // as `previousPubkeys` so a wallet can tell a legitimate rotation from

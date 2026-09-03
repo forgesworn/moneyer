@@ -35,7 +35,7 @@ export type Moneyer = {
   config: MoneyerConfig
   store: NoteStore
   backend: LightningBackend
-  signer: NoteSigner | null
+  signer: NoteSigner
   // Null unless zap-to-note is configured.
   zap: ZapBridge | null
   reconcile: () => Promise<void>
@@ -107,10 +107,15 @@ const backendFor = (config: MoneyerConfig): LightningBackend => {
 }
 
 export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {}): Promise<Moneyer> => {
+  if (!config.signingKey) {
+    throw new Error(
+      'MONEYER_SIGNING_KEY is required: LUD-25 requires every SERVICE to sign its notes. Run `moneyer admin keys rotate` to generate one.'
+    )
+  }
   const log = deps.log ?? (() => {})
   const store = deps.store ?? new NoteStore(config.dbPath)
   const backend = deps.backend ?? backendFor(config)
-  const signer = config.signingKey ? createNoteSigner(config.signingKey) : null
+  const signer = createNoteSigner(config.signingKey)
   const webAssets = deps.webAssets === undefined ? loadWebAssets() : deps.webAssets
 
   // Node identity for the discovery endpoint, fetched once, best-effort: a
@@ -889,7 +894,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       const k1 = q.get('k1')?.toLowerCase()
       const h = q.get('h')?.toLowerCase()
       if (
-        (!hasK1 && !hasH) ||
+        hasK1 === hasH ||
         (hasK1 && (!k1 || !HEX32.test(k1))) ||
         (hasH && (!h || !HEX32.test(h)))
       ) {
@@ -897,12 +902,14 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       }
       // LUD-25's hash-only check lets a wallet prove that the note it just
       // bought exists without sending the bearer secret to the service a
-      // second time. If both spellings are present, they must name the same
-      // note; choosing one would make a malformed URL an ownership oracle.
-      if (k1 && h && hashK1(k1) !== h) return fail('Unknown note.')
+      // second time. `h` is accepted in place of `k1`, never alongside it.
       const note = h ? await resolveNoteId(h) : await resolveNote(k1!)
       if (!note) return fail('Unknown note.')
-      if (note.state === 'burned') return fail('Note already spent.')
+      // A hash-only lookup must not disclose whether a note id once existed:
+      // LUD-25 gives a never-registered and an already-spent h the same
+      // response as an unknown k1. A caller presenting the bearer k1 still
+      // receives the useful already-spent distinction.
+      if (note.state === 'burned') return fail(h ? 'Unknown note.' : 'Note already spent.')
       // A note reserved by an in-flight melt is not withdrawable, and must
       // not be advertised as though it were. LUD-25 makes this GET the way
       // anyone checks what a note is worth, so answering "live, worth all

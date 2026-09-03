@@ -24,6 +24,16 @@ possible. An operator writing one should know that phoenixd invoices are
 denominated in whole sats and that `payinvoice` takes no fee limit, so a mint
 on it cannot cap the routing cost of a melt the way cln and lnd can.
 
+- Moneyer now refuses to start without `MONEYER_SIGNING_KEY`. LUD-25 makes
+  offline-verifiable note signatures mandatory for a SERVICE; silently
+  issuing unsigned notes is no longer an allowed operating mode. `--dev`
+  still creates an ephemeral key, and `moneyer admin keys rotate` can
+  bootstrap a persistent one.
+- A hash-only informational lookup now treats a burned note id exactly like
+  an unknown one and refuses requests carrying both `k1` and `h`, matching
+  LUD-25's non-disclosing `h` lookup. Secret-bearing `k1` lookups retain the
+  useful `already spent` answer.
+
 ## 0.9.1 - 2026-09-01
 
 **Fix: the LUD-25 informational GET now accepts `h=sha256(k1)`.** A

@@ -66,6 +66,19 @@ const creditNote = (mint: TestMint, amountMsat: number): {k1: string; url: strin
   return {k1, url: buildNoteUrl(`${mint.moneyer.url}/w`, k1, amountMsat)}
 }
 
+describe('service startup', () => {
+  it('refuses to issue unsigned notes', async () => {
+    const config = testConfig()
+    delete config.signingKey
+    await expect(
+      createMoneyer(config, {
+        backend: createFakeBackend(),
+        webAssets: null
+      })
+    ).rejects.toThrow(/MONEYER_SIGNING_KEY is required/)
+  })
+})
+
 describe('discovery', () => {
   it('serves a payRequest with a withdrawLink and no fee line when fee-free', async () => {
     const mint = await start()
@@ -395,7 +408,12 @@ describe('the informational GET', () => {
     )
     const live = await fetchNoteInfo(note.url)
     await rotateNote(live.callback, note.k1)
-    await expect(fetchNoteInfoByHash(`${mint.moneyer.url}/w`, hashK1(note.k1))).rejects.toThrow(NoteSpentError)
+    await expect(fetchNoteInfoByHash(`${mint.moneyer.url}/w`, hashK1(note.k1))).rejects.toThrow(NoteUnknownError)
+
+    const both = new URL(`${mint.moneyer.url}/w`)
+    both.searchParams.set('k1', note.k1)
+    both.searchParams.set('h', hashK1(note.k1))
+    await expect(fetchNoteInfo(both.toString())).rejects.toThrow(NoteUnknownError)
   })
 })
 
