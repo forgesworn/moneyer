@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Graded against `lnurlcash-conformance` 0.7.0. Its one addition is
+  `cash-derivation.json`, LUD-25's own seed-recoverable note secrets, which is
+  a wallet-side vector - a mint never sees a derivation, only `sha256(k1)`. So
+  nothing here changes; the pin moves so the grade names the current suite.
+
 ## 0.10.0 - 2026-09-04
 
 Two changes here are breaking for an existing deployment, and both are
