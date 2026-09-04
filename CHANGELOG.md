@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+**Graded against conformance 0.6.0, and the stale-probe exception is gone.**
+The suite now enforces the LUD-25 MUSTs moneyer already implements: every
+rotate, split and merge must return a signature, a retried mutation must be
+answered as a replay of its original success, and a hash lookup must not
+distinguish a burned note id from an unknown one. Moneyer passes all of them
+unchanged - the work landed in 0.9.1 and this is the first suite that checks
+it.
+
+`test/conformance-compat.ts` carried an allowlist for two probes that
+conformance 0.4.0 sent without the then-new mandatory comment, so a correct
+refusal looked like a failure. 0.6.0 sends the comment on both, so the
+allowlist is deleted and the test asserts no failures at all.
+
+**`lnurlcash-kit` moves to 0.7.0**, which refuses a mint publishing no
+`mintPubkey`, raises `UnverifiableNoteError` for a mutation it confirms
+without signing, and re-sends a mutation whose answer the transport lost.
+Moneyer is on the SERVICE side of all three, so nothing here changes - but
+the kit is also what its own tests drive the mint with, and they pass against
+the stricter client.
+
 **A caller-supplied invoice preimage is no longer required of a funding
 source.** It was, and the README said so: "the capability a LUD-25 mint
 cannot exist without". That was true of the draft that keyed a bearer note by
