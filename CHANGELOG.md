@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.10.0 - 2026-09-04
+
+Two changes here are breaking for an existing deployment, and both are
+deliberate.
+
+**An operator upgrading must set `MONEYER_SIGNING_KEY` before the mint will
+start.** LUD-25 makes offline-verifiable note signatures mandatory for a
+SERVICE, so issuing unsigned notes is no longer an allowed operating mode and
+failing loudly at boot beats doing it quietly. `moneyer admin keys rotate`
+bootstraps a persistent key; `--dev` still generates an ephemeral one for a
+valueless mint.
+
+**A custom `LightningBackend` must declare `acceptsInvoicePreimage`.** The
+bundled cln, lnd and fake backends declare `true` and behave exactly as
+before.
+
 **Graded against conformance 0.6.0, and the stale-probe exception is gone.**
 The suite now enforces the LUD-25 MUSTs moneyer already implements: every
 rotate, split and merge must return a signature, a retried mutation must be
