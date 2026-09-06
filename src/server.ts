@@ -315,7 +315,25 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       ? {nodeCapacity: nodeInfo.capacityMsat, nodeCapacityMsat: nodeInfo.capacityMsat}
       : {}),
     ...(nodeInfo.numChannels !== undefined ? {nodeNumChannels: nodeInfo.numChannels} : {}),
-    ...(nodeInfo.numPeers !== undefined ? {nodeNumPeers: nodeInfo.numPeers} : {})
+    ...(nodeInfo.numPeers !== undefined ? {nodeNumPeers: nodeInfo.numPeers} : {}),
+    // Every address the node announces. nodeUri stays, and stays the
+    // first of these: a wallet that only reads the singular field must
+    // keep working, and the reference mint publishes both for the same
+    // reason.
+    ...(nodeInfo.uris?.length ? {nodeUris: nodeInfo.uris} : {}),
+    // Advance warning of a planned shutdown, so a wallet can tell its
+    // holder while spending is still possible.
+    ...(config.sunsetDate ? {sunsetDate: config.sunsetDate} : {}),
+    // What this mint owes, in msat: the combined value of every note it
+    // has issued and not burned. A fact about its own database, so it
+    // survives an unreachable funding source - but it is the same
+    // disclosure /stats makes, so it answers to the same two switches. An
+    // operator who has turned stats off, or down to the coverage ratio
+    // alone, has already said not to put the size of the book on the
+    // internet, and this endpoint is not a way around that.
+    ...(config.stats !== false && config.statsRatioOnly !== true
+      ? {outstandingNotesMsat: store.liabilities().outstandingMsat}
+      : {})
   })
 
   // An hourly signed snapshot, so the coverage history can be checked

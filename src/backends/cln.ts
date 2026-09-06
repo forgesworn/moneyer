@@ -139,9 +139,15 @@ export const createClnBackend = (config: {url: string; rune: string}): Lightning
     async nodeInfo() {
       const info = await mustCall('/v1/getinfo', {})
       const id = info?.id
-      const address = (info?.address ?? [])[0]
-      const uri =
-        id && address?.address && address?.port ? `${id}@${address.address}:${address.port}` : id
+      // Every announced address, not just the first: a node reachable over
+      // both Tor and clearnet announces both, and a peer that can only use
+      // one of them needs to be told about it.
+      const uris: string[] = id
+        ? (info?.address ?? [])
+            .filter((entry: {address?: string; port?: number}) => entry?.address && entry?.port)
+            .map((entry: {address: string; port: number}) => `${id}@${entry.address}:${entry.port}`)
+        : []
+      const uri = uris[0] ?? id
       const color = typeof info?.color === 'string' ? `#${info.color.replace(/^#/, '')}` : undefined
       const numChannels = Number(info?.num_active_channels)
       const numPeers = Number(info?.num_peers)
@@ -159,6 +165,7 @@ export const createClnBackend = (config: {url: string; rune: string}): Lightning
       return {
         ...(info?.alias ? {alias: info.alias} : {}),
         ...(uri ? {uri} : {}),
+        ...(uris.length ? {uris} : {}),
         ...(color && /^#[0-9a-fA-F]{6}$/.test(color) ? {color} : {}),
         ...(Number.isSafeInteger(numChannels) ? {numChannels} : {}),
         ...(Number.isSafeInteger(numPeers) ? {numPeers} : {}),

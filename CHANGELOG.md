@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+**Three fields the reference mint publishes and moneyer did not.** Each
+answers a question a wallet had no way to ask.
+
+- `nodeUris` - every address the funding node announces, not just the first.
+  A node reachable over Tor as well as clearnet announces both, and `nodeUri`
+  alone told a peer about a door it may not be able to open. `nodeUri` is
+  unchanged and stays the first of the list. lnd already fetched all of them;
+  cln now builds the list the same way instead of taking `address[0]`.
+- `sunsetDate` - `MONEYER_SUNSET_DATE`, an ISO-8601 day, published so a wallet
+  can warn its holder while spending is still possible. Deliberately separate
+  from `MONEYER_SUNSET`, which stops minting: by the time that flag goes on,
+  a holder who was going to be told has already not been told. The value is
+  validated at boot, so a typo fails loudly rather than putting a wrong date
+  in front of a holder. It also shows on the mint's own landing page.
+- `outstandingNotesMsat` - what the mint owes, in msat. A fact about its own
+  database, so it survives an unreachable funding source, but it is the same
+  disclosure `/stats` makes and answers to the same two switches:
+  `MONEYER_STATS=false` or `MONEYER_STATS_RATIO_ONLY=true` leaves it off.
+
 - Graded against `lnurlcash-conformance` 0.7.0. Its one addition is
   `cash-derivation.json`, LUD-25's own seed-recoverable note secrets, which is
   a wallet-side vector - a mint never sees a derivation, only `sha256(k1)`. So
