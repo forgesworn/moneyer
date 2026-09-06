@@ -116,6 +116,12 @@ export type MoneyerConfig = {
   // Winding down: refuse anything that grows liabilities (mints and
   // splits). Rotate, merge and melt stay available so holders can leave.
   sunset: boolean
+  // Advance warning of a planned shutdown, ISO-8601 date ("2026-12-31"),
+  // published in the discovery document. Deliberately independent of
+  // `sunset`, which stops minting: by the time that flag goes on, a holder
+  // who was going to be told has already not been told. This is the field
+  // that lets a wallet warn while there is still time to spend.
+  sunsetDate?: string
   // Zap-to-note: lightning addresses on this host that, when paid, mint a
   // note to a Nostr pubkey and gift-wrap it there (see zap.ts). Unset means
   // the feature is off and those names 404 like any other.
@@ -231,6 +237,7 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     throw new Error('MONEYER_SIGNING_KEY must be 32 bytes of hex.')
   }
   const previousSigningPubkeys = previousPubkeysFromEnv(env, signingKey)
+  const sunsetDate = sunsetDateFromEnv(env)
 
   const kind = env.MONEYER_BACKEND ?? 'fake'
   let backend: BackendConfig
@@ -364,9 +371,32 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     ...(env.MONEYER_WALLET_URL ? {walletUrl: env.MONEYER_WALLET_URL.replace(/\/+$/, '')} : {}),
     maxK1s: int(env.MONEYER_MAX_K1S, DEFAULTS.maxK1s),
     sunset: flag(env.MONEYER_SUNSET, DEFAULTS.sunset),
+    ...(sunsetDate ? {sunsetDate} : {}),
     ...(zap ? {zap} : {}),
     ...(namePriceMsat !== undefined ? {namePriceMsat} : {})
   }
+}
+
+// MONEYER_SUNSET_DATE="2026-12-31" - the day this mint plans to stop.
+// Validated rather than passed through, because a wallet showing a holder
+// "this mint closes on 31/12/2026" off a string nobody checked is worse
+// than showing nothing: a typo that parses as a date in 2027 buys the
+// holder confidence they have not earned, and one that parses as nothing
+// silently disables the warning the operator thought they had switched on.
+// Whole days only - an hour of notice is not notice.
+const sunsetDateFromEnv = (env: NodeJS.ProcessEnv): string | undefined => {
+  const raw = env.MONEYER_SUNSET_DATE?.trim()
+  if (!raw) return undefined
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    throw new Error('MONEYER_SUNSET_DATE must be an ISO-8601 date, e.g. 2026-12-31.')
+  }
+  // Round-tripped, so 2026-02-31 is caught: Date accepts it and rolls it
+  // forward to 3 March, which is not the day the operator typed.
+  const parsed = new Date(`${raw}T00:00:00Z`)
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== raw) {
+    throw new Error(`MONEYER_SUNSET_DATE is not a real date: ${JSON.stringify(raw)}.`)
+  }
+  return raw
 }
 
 // MONEYER_PREVIOUS_SIGNING_PUBKEYS="02ab...,03cd..." - the keys this mint

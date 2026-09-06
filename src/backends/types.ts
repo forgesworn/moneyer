@@ -11,6 +11,12 @@
 export type NodeInfo = {
   alias?: string
   uri?: string
+  // Every address this node announces, each already "node_key@host:port".
+  // `uri` is the first of these and stays the one-address answer; a node
+  // behind Tor as well as clearnet has more than one, and publishing only
+  // the first tells a peer to dial the door it may not be able to reach.
+  // Omitted rather than empty when the node announces nothing at all.
+  uris?: string[]
   color?: string
   // Best-effort node statistics for the discovery endpoint; a backend that
   // cannot answer cheaply just leaves these out.

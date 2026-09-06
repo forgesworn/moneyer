@@ -114,6 +114,7 @@ default, and a variable set to an empty string counts as unset.
 | `MONEYER_VERIFY` | `true` | the LUD-21 `verify` endpoint. Off means 404 |
 | `MONEYER_WALLET_URL` | | a companion web wallet the mint's site links notes into |
 | `MONEYER_SUNSET` | `false` | wind down: refuse anything that grows liabilities, keep every way out open |
+| `MONEYER_SUNSET_DATE` | | the day this mint plans to close, ISO-8601 (`2026-12-31`). Published so a wallet can warn its holder while spending is still possible |
 | `MONEYER_STATS` | `true` | the `/stats` endpoint. Off means 404 |
 | `MONEYER_STATS_RATIO_ONLY` | `false` | publish the coverage ratio alone, without the size of the book |
 | `MONEYER_STATS_PUBLISH` | `false` | publish a signed hourly snapshot of `/stats` to Nostr |
@@ -238,6 +239,13 @@ one row on the mint's own site and its fallback landing page. The
 endpoint is public by design. `MONEYER_STATS=false` switches it off;
 `MONEYER_STATS_RATIO_ONLY=true` publishes the ratio without the size of
 the book.
+
+The discovery document carries the same number as `outstandingNotesMsat`,
+so a wallet reading a mint address learns what it owes without a second
+request. Both switches govern it: an operator who has turned `/stats` off,
+or down to the ratio, has already said not to publish the size of the
+book, and a second endpoint doing it anyway would make those switches a
+lie.
 
 ### Signed snapshots
 

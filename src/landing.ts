@@ -107,6 +107,7 @@ ${mintPubkey ? `<div class="kv"><span>notes signed by</span><code>${escapeHtml(m
 ${nodeInfo.uri ? `<div class="kv"><span>node</span><code>${escapeHtml(nodeInfo.uri)}</code></div>` : ''}
 ${coverageLine ? `<div class="kv"><span>coverage</span><b>${escapeHtml(coverageLine)}</b></div>` : ''}
 ${config.sunset ? '<div class="kv"><span>status</span><b>sunsetting - redeem only</b></div>' : ''}
+${!config.sunset && config.sunsetDate ? `<div class="kv"><span>closing</span><b>${escapeHtml(config.sunsetDate)} - spend or move notes before then</b></div>` : ''}
 ${contacts.map(entry => `<div class="kv"><span>${entry.label}</span><code>${escapeHtml(entry.value)}</code></div>`).join('\n')}
 ${config.tosUrl ? `<div class="kv"><span>terms</span><a href="${escapeHtml(config.tosUrl)}" rel="noopener noreferrer">${escapeHtml(config.tosUrl)}</a></div>` : ''}
 </div>

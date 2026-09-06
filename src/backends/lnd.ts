@@ -235,6 +235,10 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
       return {
         ...(res.json?.alias ? {alias: res.json.alias} : {}),
         ...(uris[0] || res.json?.identity_pubkey ? {uri: uris[0] ?? res.json.identity_pubkey} : {}),
+        // getinfo already hands back every announced address; `uri` only
+        // ever carried the first. A node with nothing announced falls back
+        // to the bare pubkey above and has no list to publish.
+        ...(uris.length ? {uris} : {}),
         ...(color && /^#[0-9a-fA-F]{6}$/.test(color) ? {color} : {}),
         // !== undefined narrows for exactOptionalPropertyTypes; the isFinite
         // half keeps a NaN from an unparseable channel capacity out.

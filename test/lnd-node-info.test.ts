@@ -90,3 +90,36 @@ describe('lnd nodeInfo capacity', () => {
     expect(info.alias).toBe('moneyer')
   })
 })
+
+describe('lnd nodeInfo addresses', () => {
+  it('publishes every announced address, with uri still the first', async () => {
+    // A node behind Tor as well as clearnet announces both. `nodeUri`
+    // alone only ever carried the first, so a peer that can reach only the
+    // other one was told about a door it cannot open.
+    const onion = `${PUBKEY}@abcdefghijklmnop.onion:9735`
+    const clearnet = `${PUBKEY}@2.29.14.244:9735`
+    const {backend} = withLnd(path =>
+      path === '/v1/getinfo'
+        ? {status: 200, body: {...getinfo, uris: [clearnet, onion]}}
+        : {status: 404, body: {}}
+    )
+
+    const info = await backend.nodeInfo!()
+
+    expect(info.uri).toBe(clearnet)
+    expect(info.uris).toEqual([clearnet, onion])
+  })
+
+  it('has no address list for a node that announces nothing', async () => {
+    // The bare pubkey still stands in as `uri`, the way it always has, but
+    // an empty list would claim the node announced something.
+    const {backend} = withLnd(path =>
+      path === '/v1/getinfo' ? {status: 200, body: {...getinfo, uris: []}} : {status: 404, body: {}}
+    )
+
+    const info = await backend.nodeInfo!()
+
+    expect(info.uri).toBe(PUBKEY)
+    expect(info.uris).toBeUndefined()
+  })
+})
