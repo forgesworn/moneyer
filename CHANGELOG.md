@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 - 2026-09-06
 
 **Three fields the reference mint publishes and moneyer did not.** Each
 answers a question a wallet had no way to ask.
