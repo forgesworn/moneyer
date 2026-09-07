@@ -408,7 +408,7 @@ describe('the informational GET', () => {
     )
     const live = await fetchNoteInfo(note.url)
     await rotateNote(live.callback, note.k1)
-    await expect(fetchNoteInfoByHash(`${mint.moneyer.url}/w`, hashK1(note.k1))).rejects.toThrow(NoteUnknownError)
+    await expect(fetchNoteInfoByHash(`${mint.moneyer.url}/w`, hashK1(note.k1))).rejects.toThrow(NoteSpentError)
 
     const both = new URL(`${mint.moneyer.url}/w`)
     both.searchParams.set('k1', note.k1)

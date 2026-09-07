@@ -923,11 +923,9 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       // second time. `h` is accepted in place of `k1`, never alongside it.
       const note = h ? await resolveNoteId(h) : await resolveNote(k1!)
       if (!note) return fail('Unknown note.')
-      // A hash-only lookup must not disclose whether a note id once existed:
-      // LUD-25 gives a never-registered and an already-spent h the same
-      // response as an unknown k1. A caller presenting the bearer k1 still
-      // receives the useful already-spent distinction.
-      if (note.state === 'burned') return fail(h ? 'Unknown note.' : 'Note already spent.')
+      // Hash lookups protect the secret, not the note's spent state.
+      // Retained burned rows let a wallet reconcile without revealing k1.
+      if (note.state === 'burned') return fail('Note already spent.')
       // A note reserved by an in-flight melt is not withdrawable, and must
       // not be advertised as though it were. LUD-25 makes this GET the way
       // anyone checks what a note is worth, so answering "live, worth all

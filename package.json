@@ -1,6 +1,6 @@
 {
   "name": "@forgesworn/moneyer",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "An LNURLcash (LUD-25) mint - strikes Lightning bearer notes. Independent implementation, cln/lnd funding sources, SQLite, zero HTTP framework.",
   "author": "TheCryptoDonkey",
   "license": "MIT",
@@ -70,7 +70,7 @@
     "@types/node": "^24.0.0",
     "animejs": "^4.0.0",
     "happy-dom": "^20.0.0",
-    "lnurlcash-conformance": "^0.7.0",
+    "lnurlcash-conformance": "https://codeload.github.com/lnurlcash/lnurlcash-conformance/tar.gz/6c6aee66cf1b6cba72a03af976ecec113f470c9e",
     "playwright": "^1.62.1",
     "typescript": "^5.7.0",
     "uqr": "^0.1.2",
