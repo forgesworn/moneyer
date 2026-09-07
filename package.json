@@ -70,7 +70,7 @@
     "@types/node": "^24.0.0",
     "animejs": "^4.0.0",
     "happy-dom": "^20.0.0",
-    "lnurlcash-conformance": "^0.7.0",
+    "lnurlcash-conformance": "https://codeload.github.com/lnurlcash/lnurlcash-conformance/tar.gz/6c6aee66cf1b6cba72a03af976ecec113f470c9e",
     "playwright": "^1.62.1",
     "typescript": "^5.7.0",
     "uqr": "^0.1.2",

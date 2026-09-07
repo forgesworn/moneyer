@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Hash lookups report `Note already spent.` for retained burned notes,
+  `Unknown note.` for unregistered hashes, and `pending` for unresolved
+  melts. This follows the proposed LUD-25 status revision and lets wallets
+  recognise a redeemed note without sending its bearer secret. Existing
+  burned rows are retained already; no database migration is required.
+- The development conformance dependency is pinned to the matching proposal
+  commit until that grader change is reviewed and released.
+
 ## 0.11.0 - 2026-09-06
 
 **Three fields the reference mint publishes and moneyer did not.** Each

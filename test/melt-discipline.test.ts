@@ -27,7 +27,7 @@ const meltOnce = async (mint: TestMint, amountMsat = 21_000) => {
   const paymentHash = freshK1()
   const pr = fakeBolt11({amountMsat, paymentHashHex: hashK1(paymentHash)})
   await meltNote(info.callback, k1, pr)
-  return {noteId: hashK1(k1), paymentHash: hashK1(paymentHash)}
+  return {k1, noteId: hashK1(k1), paymentHash: hashK1(paymentHash)}
 }
 
 const noteState = (mint: TestMint, noteId: string) => mint.moneyer.store.noteById(noteId)?.state
@@ -82,6 +82,43 @@ describe('melt discipline', () => {
     mint.backend.control.setPayMode('fail-clean')
     const {noteId} = await meltOnce(mint)
     await waitFor(() => noteState(mint, noteId) === 'outstanding')
+    const restored = await fetch(`${mint.moneyer.url}/w?h=${noteId}`).then(r => r.json())
+    expect(restored).toMatchObject({tag: 'withdrawRequest', maxWithdrawable: 21_000})
+    expect(restored).not.toHaveProperty('k1')
+  })
+
+  it('reports pending then spent by hash, retaining that distinction after restart', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'moneyer-spent-hash-'))
+    cleanups.push(() => rmSync(dir, {recursive: true, force: true}))
+    const dbPath = join(dir, 'mint.sqlite')
+    const mint = (active = await startMint({dbPath}))
+    mint.backend.control.setPayMode('ambiguous-pending')
+    const {k1, noteId, paymentHash} = await meltOnce(mint, 3000)
+    await waitFor(() => noteState(mint, noteId) === 'pending')
+    for (const lookup of [`h=${noteId}`, `k1=${k1}`]) {
+      expect(await fetch(`${mint.moneyer.url}/w?${lookup}`).then(r => r.json()))
+        .toEqual({status: 'ERROR', reason: 'pending'})
+    }
+
+    mint.backend.control.resolvePayment(paymentHash, 'complete')
+    for (let attempt = 0; attempt < 60 && noteState(mint, noteId) !== 'burned'; attempt += 1) {
+      await mint.moneyer.reconcile()
+      if (noteState(mint, noteId) !== 'burned') await new Promise(resolve => setTimeout(resolve, 25))
+    }
+    expect(noteState(mint, noteId)).toBe('burned')
+    for (const lookup of [`h=${noteId}`, `k1=${k1}`]) {
+      expect(await fetch(`${mint.moneyer.url}/w?${lookup}`).then(r => r.json()))
+        .toEqual({status: 'ERROR', reason: 'Note already spent.'})
+    }
+
+    await mint.moneyer.close()
+    active = null
+    const reborn = (active = await startMint({dbPath}, {backend: mint.backend}))
+    expect(await fetch(`${reborn.moneyer.url}/w?h=${noteId}`).then(r => r.json()))
+      .toEqual({status: 'ERROR', reason: 'Note already spent.'})
+    expect(await fetch(`${reborn.moneyer.url}/w?h=${hashK1(freshK1())}`).then(r => r.json()))
+      .toEqual({status: 'ERROR', reason: 'Unknown note.'})
+    expect(noteState(reborn, noteId)).toBe('burned')
   })
 
   it('burns the note when the backend REPORTS failure but the payment landed', async () => {
