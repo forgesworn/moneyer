@@ -9,6 +9,9 @@
   burned rows are retained already; no database migration is required.
 - Test tooling uses an immutable conformance commit matching this response
   contract. It is a development dependency, not a runtime dependency.
+  Since 2026-09-09 that contract is released as `lnurlcash-conformance`
+  0.8.0 and the pin is the version rather than the commit; the graded bytes
+  are the same ones 0.11.1 shipped against.
 
 ## 0.11.0 - 2026-09-06
 
