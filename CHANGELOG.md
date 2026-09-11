@@ -11,6 +11,16 @@
 - The callback's missing-output reasons are now `missing p1` and
   `missing p2` (were `missing h`/`missing h2`), and `p1 and p2 must
   differ.` The pay callback's `missing h` is unchanged.
+- **LUD-25 Part 2 notes.** A note can be keyed by a public key and spent
+  with a recoverable signature, so the mint never holds anything that could
+  spend it. `comment=cp1…` mints one; `k1=ck1…` looks it up or spends it;
+  `p`, `p1` and `p2` take `cp1` keys; and a Part 2 note's certificate comes
+  back as `cs1`, on the lookup and on every rotate, split and merge. The two
+  kinds mix freely in one merge.
+- A note named twice in one request is now caught by the note each `k1`
+  spends rather than by the `k1` string, since one Part 2 note has many
+  valid `ck1` strings. The store refuses a repeated input as well.
+- Takes lnurlcash-kit 0.10.0.
 
 ## 0.11.1 - 2026-09-07
 

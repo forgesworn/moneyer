@@ -23,7 +23,12 @@ request carrying a callback's query string cannot mutate anything.
 
 **A holder inflating a merge or split with a repeated k1.** Duplicated k1
 parameters in one request are refused outright; they would otherwise count
-one note's value twice into the output.
+one note's value twice into the output. The check is on the note each k1
+spends, not on the k1 string: a Part 2 note's `ck1` is a signature, and one
+note has many valid ones (anyone holding a `ck1` can flip it to `(r, n-s)`,
+and the key's owner can sign again). The store refuses a note named twice
+among a swap's inputs as well, so the rule does not rest on the handler
+alone.
 
 **A holder claiming an output id that already exists.** `h`/`h2` may not
 collide with any existing note, any mint invoice's payment hash, settled

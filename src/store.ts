@@ -315,6 +315,11 @@ export class NoteStore {
   // a secret the mint really did mint a note against.
   swap(inputIds: string[], outputs: Array<{id: string; amountMsat: number}>, fingerprint?: string): void {
     this.tx(() => {
+      // Every input is checked before any is burned, so a note named twice
+      // would pass both checks and be counted twice by the caller.
+      if (new Set(inputIds).size !== inputIds.length) {
+        throw new NoteUnavailableError('a note is named twice among the inputs')
+      }
       for (const id of inputIds) this.assertOutstanding(id)
       for (const output of outputs) this.assertOutputIdFree(output.id)
       for (const id of inputIds) this.setNoteState(id, 'burned')
