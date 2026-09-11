@@ -35,6 +35,8 @@ const call = async (mint: TestMint, path: string, params: Array<[string, string]
   return (await (await fetch(url)).json()) as Body
 }
 const info = (mint: TestMint, params: Array<[string, string]>) => call(mint, '/w', params)
+const worth = async (mint: TestMint, k1: string): Promise<unknown> =>
+  (await info(mint, [['k1', k1]])).maxWithdrawable
 const callback = (mint: TestMint, params: Array<[string, string]>) => call(mint, '/w/cb', params)
 
 type NoteKey = {sk: Uint8Array; id: string; cp1: string; ck1: string}
@@ -164,12 +166,12 @@ describe('spending with a ck1', () => {
     const next = freshK1()
     const toHash = await callback(mint, [['k1', key.ck1], ['p1', hashK1(next)]])
     expect(toHash.status).toBe('OK')
-    // a hash output keeps its plain hex signature
-    expect(toHash.sig).toMatch(/^[0-9a-f]{130}$/)
-    expect(verifyNoteSignature(next, 20_000, toHash.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
+    // a hash output is a plain note, and a plain note is unsigned
+    expect(toHash).not.toHaveProperty('sig')
+    expect(await worth(mint, next)).toBe(20_000)
   })
 
-  it('splits into a cp1 key and a hash, each certified in its own form', async () => {
+  it('splits into a cp1 key and a hash: the key is certified, the hash is not', async () => {
     const mint = await start()
     const from = creditKey(mint, 50_000)
     const key = freshKey()
@@ -182,7 +184,8 @@ describe('spending with a ck1', () => {
     ])
     expect(reply.status).toBe('OK')
     expect(certifies(mint, key, 20_000, reply.sig)).toBe(true)
-    expect(verifyNoteSignature(change, 30_000, reply.sig2 as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(reply).not.toHaveProperty('sig2')
+    expect(await worth(mint, change)).toBe(30_000)
   })
 
   it('merges a Part 1 note and a Part 2 note in one request', async () => {

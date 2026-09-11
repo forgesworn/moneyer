@@ -34,6 +34,13 @@ describe('lnurlcash-conformance', () => {
     const report = createReport()
     await gradeNote(buildNoteUrl(`${mint.moneyer.url}/w`, k1, 21_000), report)
     expect(failures(report)).toEqual([])
+    // The Part 2 check is a warning on a mint without Part 2; here it has
+    // to have run for real: the cp1 note certified, and the plain note it
+    // rotated home to unsigned.
+    const part2 = report.results.find(result => result.name === 'certifies a cp1 note it issues (Part 2)')
+    expect(part2?.status).toBe('pass')
+    expect(part2?.detail).toContain('verified offline')
+    expect(part2?.detail).toContain('is unsigned')
   })
 
   it('passes the spending checks with a mint fee advertised - exact fee algebra', async () => {

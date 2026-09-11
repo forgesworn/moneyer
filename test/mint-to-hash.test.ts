@@ -159,9 +159,12 @@ describe('minting to a named note', () => {
     const after = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, secret))
     expect(after.maxWithdrawable).toBe(21_000)
     const rotated = await rotateNote(after.callback, secret)
-    // The mint signs the rotated note for the full 21,000 msat, which is
-    // the value the buyer paid for and nobody else ever held.
-    expect(verifyNoteSignature(rotated.k1, 21_000, rotated.signature!, mint.moneyer.signer!.pubkey)).toBe(true)
+    // The rotated note holds the full 21,000 msat, which is the value the
+    // buyer paid for and nobody else ever held. It is a plain note, so it
+    // is unsigned; the settlement receipt above is what authenticated it.
+    expect(rotated.signature).toBeUndefined()
+    const held = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, rotated.k1))
+    expect(held.maxWithdrawable).toBe(21_000)
   })
 
   it('withholds the mint fee from a named note exactly as from any other', async () => {
