@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- An operator name that changes owner drops the branch the previous owner
+  set. `MONEYER_ZAP_NAMES` re-points a name at every startup, and until now
+  the old owner's `cx1` survived it, so the name went on paying the previous
+  owner's keys. The same owner keeps their branch and its index across a
+  restart, as before.
+
 ## 0.13.1 - 2026-09-11
 
 - A name's owner can set or clear its `cx1` while self-service registration

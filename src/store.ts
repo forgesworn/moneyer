@@ -703,11 +703,19 @@ export class NoteStore {
   // The operator's own names, re-applied at every startup. Idempotent, and
   // the environment wins: it is the operator's mint, and a name they put
   // in the environment is one they mean to have.
+  //
+  // A branch the owner set survives a restart, but not a change of owner:
+  // it is the previous owner's keys, and keeping it would go on paying the
+  // name to someone the operator just took it from.
   putOperatorZapName(name: string, pubkey: string): void {
     this.db
       .prepare(
         `INSERT INTO zap_names (name, pubkey, created_at, paid_msat, source) VALUES (?, ?, ?, 0, 'env')
-         ON CONFLICT(name) DO UPDATE SET pubkey = excluded.pubkey, source = 'env'`
+         ON CONFLICT(name) DO UPDATE SET
+           cx1 = CASE WHEN zap_names.pubkey = excluded.pubkey THEN zap_names.cx1 ELSE NULL END,
+           next_index = CASE WHEN zap_names.pubkey = excluded.pubkey THEN zap_names.next_index ELSE 0 END,
+           pubkey = excluded.pubkey,
+           source = 'env'`
       )
       .run(name.toLowerCase(), pubkey, Date.now())
   }
