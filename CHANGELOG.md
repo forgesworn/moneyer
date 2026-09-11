@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.0 - 2026-09-11
 
 - **Names that pay to the holder's own keys.** `POST /names` takes a `cx1`,
   a watch-only branch, and the key that owns a name can set or clear one
