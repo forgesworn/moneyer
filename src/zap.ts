@@ -1,5 +1,5 @@
 import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
-import {hashK1} from 'lnurlcash-kit'
+import {decodeCx1, deriveNotePubkey, encodeCp1, hashK1} from 'lnurlcash-kit'
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import {finalizeEvent, getPublicKey, type Event, type UnsignedEvent} from 'nostr-tools/pure'
 import {SimplePool} from 'nostr-tools/pool'
@@ -107,6 +107,9 @@ export type ZapBridgeDeps = {
   // The mint's public origin. Required when zaps are on: a settled zap is
   // minted by a timer, with no request to read a Host header from.
   origin: string
+  // The mint's certificate for a Part 2 note, as cs1: what lets the holder
+  // check what arrived before touching the mint.
+  certify: (noteIdHex: string, amountMsat: number) => string
   log?: (message: string) => void
   now?: () => number
 }
@@ -221,8 +224,7 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
     return {pr, ...(deps.verify ? {verify: `${origin}/verify/${paymentHash}`} : {})}
   }
 
-  // The note as the recipient's wallet will paste it, wrapped to them.
-  const buildWrap = (row: ZapInvoiceRow, k1: string): Event => {
+  const wrapTags = (row: ZapInvoiceRow): string[][] => {
     const tags: string[][] = [
       ['p', row.recipient],
       ['amount', String(row.netMsat)],
@@ -240,15 +242,29 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
       // older one simply does not see this.
       tags.push(['description', row.zapRequest])
     }
-    const rumor: UnsignedEvent = {
-      kind: NOTE_KIND,
-      pubkey,
-      created_at: Math.floor(now() / 1000),
-      tags,
-      content: `${origin}/w?k1=${k1}&amount=${row.netMsat}`
-    }
+    return tags
+  }
+
+  const wrap = (row: ZapInvoiceRow, tags: string[][], content: string): Event => {
+    const rumor: UnsignedEvent = {kind: NOTE_KIND, pubkey, created_at: Math.floor(now() / 1000), tags, content}
     return wrapEvent(rumor, secret, row.recipient)
   }
+
+  // The note as the recipient's wallet will paste it, wrapped to them.
+  const buildWrap = (row: ZapInvoiceRow, k1: string): Event =>
+    wrap(row, wrapTags(row), `${origin}/w?k1=${k1}&amount=${row.netMsat}`)
+
+  // A zap to a name with a cx1: the note already belongs to the holder's
+  // key, so the wrap carries no secret at all, only where to look (`p`),
+  // the certificate, and the index `i` the holder derives the key at. A
+  // reader that knows only note URLs sees no k1 and passes it by, and the
+  // note waits at the mint for a scan to find it.
+  const buildKeyWrap = (row: ZapInvoiceRow, noteId: string, index: number): Event =>
+    wrap(
+      row,
+      [...wrapTags(row), ['i', String(index)]],
+      `${origin}/w?p=${encodeCp1(hexToBytes(noteId))}&amount=${row.netMsat}&sig=${deps.certify(noteId, row.netMsat)}&i=${index}`
+    )
 
   // NIP-57 receipt, without the preimage tag: it is optional there, and
   // here it would only invite someone to mistake it for the note.
@@ -269,6 +285,26 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
         continue
       }
       if (!paid) continue
+      const branch = decodeCx1(store.zapName(row.name)?.cx1 ?? '')
+      if (branch) {
+        const receipt = buildReceipt(row)
+        const keyAt = (index: number): string | null => {
+          try {
+            return bytesToHex(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, index))
+          } catch {
+            return null
+          }
+        }
+        const landed = store.settleZapInvoiceToKey(row.paymentHash, keyAt, (noteId, index) => ({
+          wrapJson: JSON.stringify(buildKeyWrap(row, noteId, index)),
+          receiptJson: receipt ? JSON.stringify(receipt) : null
+        }))
+        if (landed) {
+          minted += 1
+          log(`zap: ${row.name} received ${row.netMsat} msat; note minted to key ${landed.index}, wrap parked`)
+        }
+        continue
+      }
       const k1 = bytesToHex(randomBytes(32))
       const noteId = hashK1(k1)
       const wrap = buildWrap(row, k1)

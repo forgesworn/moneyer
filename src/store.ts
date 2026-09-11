@@ -99,6 +99,10 @@ export type ZapNameRow = {
   createdAt: number
   paidMsat: number
   source: 'env' | 'self'
+  // LUD-25 Part 2: the holder's watch-only branch. With one, a payment is
+  // minted to the holder's next key rather than to a secret this mint draws.
+  cx1: string | null
+  nextIndex: number
 }
 
 export type NoteListRow = NoteRow & {createdAt: number; updatedAt: number}
@@ -213,6 +217,13 @@ export class NoteStore {
     // Two invoices may not name the same note. SQLite counts NULLs as
     // distinct, so every unbound invoice still fits.
     this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS mint_invoices_output_id ON mint_invoices (output_id)')
+    const nameColumns = (this.db.prepare('PRAGMA table_info(zap_names)').all() as Array<{name: string}>).map(
+      column => column.name
+    )
+    if (!nameColumns.includes('cx1')) this.db.exec('ALTER TABLE zap_names ADD COLUMN cx1 TEXT')
+    if (!nameColumns.includes('next_index')) {
+      this.db.exec('ALTER TABLE zap_names ADD COLUMN next_index INTEGER NOT NULL DEFAULT 0')
+    }
 
     this.db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);')
     // The moment this mint stopped publishing preimages for notes nobody
@@ -597,6 +608,41 @@ export class NoteStore {
   }
 
   // Settled zaps whose wrap has not yet reached a relay.
+  // A zap to a name with a cx1, minted to the next unused key on its
+  // branch. The index is taken here, at settlement, never when the invoice
+  // is made, so an invoice nobody pays leaves no gap in the holder's scan.
+  // A key that already names a note is skipped, as LUD-25 requires.
+  // `keyAt` answers null for an index that yields no usable key.
+  settleZapInvoiceToKey(
+    paymentHash: string,
+    keyAt: (index: number) => string | null,
+    build: (noteId: string, index: number) => {wrapJson: string; receiptJson: string | null}
+  ): {noteId: string; index: number} | null {
+    return this.tx(() => {
+      const row = this.zapInvoiceByHash(paymentHash)
+      if (!row || row.settled) return null
+      const name = this.zapName(row.name)
+      if (!name?.cx1) return null
+      let index = name.nextIndex
+      let noteId: string | null = null
+      for (let tries = 0; tries < 1000 && noteId === null; tries++) {
+        const candidate = keyAt(index)
+        if (candidate !== null && !this.outputIdInUse(candidate)) noteId = candidate
+        else index += 1
+      }
+      if (noteId === null) throw new Error(`no free key on the branch of ${row.name}`)
+      this.insertNote(noteId, row.netMsat)
+      this.db.prepare('UPDATE zap_names SET next_index = ? WHERE name = ?').run(index + 1, row.name)
+      const {wrapJson, receiptJson} = build(noteId, index)
+      this.db
+        .prepare(
+          'UPDATE zap_invoices SET settled = 1, note_id = ?, wrap_json = ?, receipt_json = ?, settled_at = ? WHERE payment_hash = ?'
+        )
+        .run(noteId, wrapJson, receiptJson, Date.now(), paymentHash)
+      return {noteId, index}
+    })
+  }
+
   unpublishedZaps(): ZapInvoiceRow[] {
     const rows = this.db
       .prepare(`SELECT ${NoteStore.ZAP_COLUMNS} FROM zap_invoices WHERE settled = 1 AND published_at IS NULL`)
@@ -618,27 +664,40 @@ export class NoteStore {
   // and names people registered themselves. The lookup path that serves a
   // zap does not care which is which, so there is one of it.
 
+  private static readonly NAME_COLUMNS = 'name, pubkey, created_at, paid_msat, source, cx1, next_index'
+
+  private nameRow(row: Record<string, unknown>): ZapNameRow {
+    return {
+      name: row.name as string,
+      pubkey: row.pubkey as string,
+      createdAt: row.created_at as number,
+      paidMsat: row.paid_msat as number,
+      source: row.source as 'env' | 'self',
+      cx1: (row.cx1 as string | null) ?? null,
+      nextIndex: row.next_index as number
+    }
+  }
+
   zapName(name: string): ZapNameRow | null {
     const row = this.db
-      .prepare('SELECT name, pubkey, created_at, paid_msat, source FROM zap_names WHERE name = ?')
-      .get(name.toLowerCase()) as
-      | {name: string; pubkey: string; created_at: number; paid_msat: number; source: 'env' | 'self'}
-      | undefined
-    if (!row) return null
-    return {name: row.name, pubkey: row.pubkey, createdAt: row.created_at, paidMsat: row.paid_msat, source: row.source}
+      .prepare(`SELECT ${NoteStore.NAME_COLUMNS} FROM zap_names WHERE name = ?`)
+      .get(name.toLowerCase()) as Record<string, unknown> | undefined
+    return row ? this.nameRow(row) : null
   }
 
   zapNames(): ZapNameRow[] {
     const rows = this.db
-      .prepare('SELECT name, pubkey, created_at, paid_msat, source FROM zap_names ORDER BY name')
-      .all() as Array<{name: string; pubkey: string; created_at: number; paid_msat: number; source: 'env' | 'self'}>
-    return rows.map(row => ({
-      name: row.name,
-      pubkey: row.pubkey,
-      createdAt: row.created_at,
-      paidMsat: row.paid_msat,
-      source: row.source
-    }))
+      .prepare(`SELECT ${NoteStore.NAME_COLUMNS} FROM zap_names ORDER BY name`)
+      .all() as Record<string, unknown>[]
+    return rows.map(row => this.nameRow(row))
+  }
+
+  // A new branch starts at index 0; the same branch sent again keeps its
+  // place, so re-registering cannot walk the holder's keys backwards.
+  setZapNameCx1(name: string, cx1: string | null): void {
+    this.db
+      .prepare('UPDATE zap_names SET next_index = CASE WHEN cx1 IS ? THEN next_index ELSE 0 END, cx1 = ? WHERE name = ?')
+      .run(cx1, cx1, name.toLowerCase())
   }
 
   // The operator's own names, re-applied at every startup. Idempotent, and
@@ -658,15 +717,15 @@ export class NoteStore {
   // failure modes either side of it are both bad - a name nobody paid
   // for, or a note burned for a name somebody else got first. The INSERT
   // is also the race check: two requests for one name cannot both win.
-  buyZapName(args: {name: string; pubkey: string; noteId?: string; paidMsat: number}): void {
+  buyZapName(args: {name: string; pubkey: string; noteId?: string; paidMsat: number; cx1?: string | null}): void {
     this.tx(() => {
       if (args.noteId !== undefined) {
         this.assertOutstanding(args.noteId)
         this.setNoteState(args.noteId, 'burned')
       }
       this.db
-        .prepare("INSERT INTO zap_names (name, pubkey, created_at, paid_msat, source) VALUES (?, ?, ?, ?, 'self')")
-        .run(args.name.toLowerCase(), args.pubkey, Date.now(), args.paidMsat)
+        .prepare("INSERT INTO zap_names (name, pubkey, created_at, paid_msat, source, cx1) VALUES (?, ?, ?, ?, 'self', ?)")
+        .run(args.name.toLowerCase(), args.pubkey, Date.now(), args.paidMsat, args.cx1 ?? null)
     })
   }
 

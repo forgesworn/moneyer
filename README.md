@@ -542,6 +542,28 @@ A registered name resolves on both rails at once:
 The discovery endpoint advertises `namePriceMsat` while registration is
 open, so a wallet can offer the flow without asking.
 
+### A name that pays to your own keys (LUD-25 Part 2)
+
+Add `"cx1": "cx1..."` to the registration body, or send `{"name", "cx1"}`
+again later from the key that owns the name, and payments to it stop being
+custodial. A `cx1` is a watch-only branch: from it the mint can work out each
+of the holder's note keys in turn, but never spend one.
+
+When a zap to the name settles, the mint takes the next index on the branch
+and credits the note to that key. It skips any key already holding a note,
+and an invoice nobody pays takes no index at all, so a wallet scanning its
+branch never meets a gap it did not make. The gift wrap still goes to the
+owner's npub, but it carries no secret: a lookup URL,
+`https://mint.example/w?p=<cp1>&amount=<msat>&sig=<cs1>&i=<index>`, plus an
+`i` tag. The wallet derives the key at that index, checks the certificate,
+and spends with its own `ck1`. A wallet that only knows note URLs sees no
+`k1` and passes the wrap by, and the note waits at the mint for a scan of the
+branch.
+
+`"cx1": null` clears the branch and puts the name back on the custodial path.
+Sending a new branch starts it at index 0; sending the same one again keeps
+its place. Zap receipts are unchanged.
+
 ## Reaching the mint over Tor
 
 Set `MONEYER_ONION_URL` to this mint's hidden service address and a request

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **Names that pay to the holder's own keys.** `POST /names` takes a `cx1`,
+  a watch-only branch, and the key that owns a name can set or clear one
+  later. A zap to such a name is credited to the holder's next key on the
+  branch, and the gift wrap carries only where to look and the index:
+  `/w?p=<cp1>&amount=&sig=<cs1>&i=`, plus an `i` tag. The mint never holds
+  a secret for it.
+- The index is taken when the zap settles, never when the invoice is made,
+  so an unpaid invoice leaves no gap in the holder's scan. A key that
+  already holds a note is skipped.
+- Names gain two columns, `cx1` and `next_index`, added in place on first
+  start.
+
 ## 0.12.0 - 2026-09-11
 
 - LUD-25's renamed parameters are accepted: `p` for the informational
