@@ -561,6 +561,9 @@ and spends with its own `ck1`. A wallet that only knows note URLs sees no
 branch.
 
 `"cx1": null` clears the branch and puts the name back on the custodial path.
+This works while registration is closed too: closing it stops new names, not
+the owner of one choosing where it pays, including a name the operator set up
+in `MONEYER_ZAP_NAMES`.
 Sending a new branch starts it at index 0; sending the same one again keeps
 its place. Zap receipts are unchanged.
 

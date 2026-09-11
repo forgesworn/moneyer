@@ -115,8 +115,6 @@ export const registerName = (args: {
   host: string
 }): NameGranted | NameRefusal => {
   const {store, pubkey, priceMsat} = args
-  if (priceMsat === undefined) return refuse('This mint is not registering names.', 404)
-
   const raw = typeof args.body.name === 'string' ? args.body.name.trim().toLowerCase() : ''
   if (!NAME_RULE.test(raw)) {
     return refuse('A name is 3 to 32 characters of a-z, 0-9, dot, dash or underscore, starting with a letter or digit.', 400)
@@ -144,6 +142,9 @@ export const registerName = (args: {
     }
     return refuse('That name is taken.', 409)
   }
+  // Checked after the owner's update above: closing registration stops new
+  // names, not a holder choosing where their own name pays.
+  if (priceMsat === undefined) return refuse('This mint is not registering names.', 404)
 
   let paidMsat = 0
   let noteId: string | undefined

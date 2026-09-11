@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- A name's owner can set or clear its `cx1` while self-service registration
+  is closed. Closing registration stops new names; it no longer stops the
+  owner of an existing one, an operator name included, from choosing where
+  it pays. A request for a new name still gets the same 404.
+
 ## 0.13.0 - 2026-09-11
 
 - **Names that pay to the holder's own keys.** `POST /names` takes a `cx1`,

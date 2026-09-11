@@ -554,7 +554,10 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     // a POST because it creates something, and it is authenticated by
     // NIP-98 rather than by anything this mint has to store.
     if (requestUrl.pathname === '/names' && req.method === 'POST') {
-      if (config.namePriceMsat === undefined) return fail('This mint is not registering names.', 404)
+      // Closed registration still lets a name's owner set where it pays;
+      // registerName refuses a new name there. Without zaps there are no
+      // names at all.
+      if (!zap) return fail('This mint is not registering names.', 404)
       const body = await readBody(req)
       if (body === null) return fail('Request body too large.', 413)
       const authorized = validateNip98(req.headers.authorization, {
