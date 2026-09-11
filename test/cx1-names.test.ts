@@ -218,4 +218,24 @@ describe('a name with a cx1', () => {
     expect((await claim(mint, holder().sk, {name: 'bobby', cx1: holder().cx1})).status).toBe(404)
     expect((await claim(mint, holder().sk, {name: 'alice', cx1: holder().cx1})).status).toBe(409)
   })
+
+  it("keeps an operator name's branch across a restart, and drops it when the operator gives the name away", async () => {
+    const alice = holder()
+    const {mint, relay} = await start({
+      namePriceMsat: undefined,
+      zap: {nostrKey: MINT_NOSTR_KEY, relays: ['wss://mint-relay.example'], names: {alice: alice.pubkey}}
+    })
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})
+    await settle(mint, relay, alice, await invoice(mint, 'alice', 21_000))
+    const store = mint.moneyer.store
+    expect(store.zapName('alice')).toMatchObject({cx1: alice.cx1, nextIndex: 1})
+
+    // What every startup does with the environment's names.
+    store.putOperatorZapName('alice', alice.pubkey)
+    expect(store.zapName('alice')).toMatchObject({pubkey: alice.pubkey, cx1: alice.cx1, nextIndex: 1})
+
+    const bob = holder()
+    store.putOperatorZapName('alice', bob.pubkey)
+    expect(store.zapName('alice')).toMatchObject({pubkey: bob.pubkey, cx1: null, nextIndex: 0})
+  })
 })
