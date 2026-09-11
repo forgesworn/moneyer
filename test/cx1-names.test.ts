@@ -52,14 +52,15 @@ afterEach(async () => {
   active = null
 })
 
-const start = async () => {
+const start = async (overrides: Record<string, unknown> = {}) => {
   const relay = fakeRelay()
   active = await startMint(
     {
       publicOrigin: `http://${HOST}`,
       mintFee: {baseFeeMsat: 1000, feePpm: 0},
       zap: {nostrKey: MINT_NOSTR_KEY, relays: ['wss://mint-relay.example'], names: {}},
-      namePriceMsat: 0
+      namePriceMsat: 0,
+      ...overrides
     },
     {nostr: relay.transport, zapPollMs: 20}
   )
@@ -202,5 +203,19 @@ describe('a name with a cx1', () => {
     const paid = await settle(mint, relay, alice, await invoice(mint, 'alice', 21_000))
     expect(paid.url.searchParams.get('k1')).toMatch(/^[0-9a-f]{64}$/)
     expect(paid.url.searchParams.has('p')).toBe(false)
+  })
+
+  it('lets the owner of an operator name set a branch while registration is closed', async () => {
+    const alice = holder()
+    const {mint} = await start({
+      namePriceMsat: undefined,
+      zap: {nostrKey: MINT_NOSTR_KEY, relays: ['wss://mint-relay.example'], names: {alice: alice.pubkey}}
+    })
+    const set = await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})
+    expect(set.status).toBe(200)
+    expect(mint.moneyer.store.zapName('alice')?.cx1).toBe(alice.cx1)
+    // still closed to anyone wanting a new name, and still not a stranger's
+    expect((await claim(mint, holder().sk, {name: 'bobby', cx1: holder().cx1})).status).toBe(404)
+    expect((await claim(mint, holder().sk, {name: 'alice', cx1: holder().cx1})).status).toBe(409)
   })
 })
