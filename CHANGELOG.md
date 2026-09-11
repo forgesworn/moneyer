@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.1 - 2026-09-11
 
 - A name's owner can set or clear its `cx1` while self-service registration
   is closed. Closing registration stops new names; it no longer stops the
