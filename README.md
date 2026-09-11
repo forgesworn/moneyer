@@ -416,9 +416,10 @@ signatures, nothing burned, nothing minted, no balance moved. A retry is
 a read.
 
 A request is the same request when it names the same input notes and asks
-for the same outputs: the same `h`, the same `h2`, the same `amount`.
+for the same outputs: the same `p1`, the same `p2`, the same `amount`.
 Input order does not matter, because a reordered retry is the same
-operation. Anything else naming a burned note is a double-spend attempt
+operation, and nor does spelling: `h`/`h2`, the older names for
+`p1`/`p2`, name the same outputs. Anything else naming a burned note is a double-spend attempt
 and still gets `Invalid or already spent k1.`, unchanged. Provenance is
 recorded rather than inferred for that reason: matching on "a note exists
 at `h`" alone would let anyone holding a burned `k1` and any outstanding
@@ -589,8 +590,8 @@ clearnet.
 | `/p/cb` | LUD-06 pay callback; issues the mint invoice, and takes an optional `h` naming the note |
 | `/z/cb/<zap name>` | the zap callback; validates the kind 9734 and issues the invoice |
 | `/verify/<hash>` | LUD-21 verify, for mint invoices and melt payments |
-| `/w` | LUD-03 informational GET; accepts `k1` or the non-disclosing LUD-25 `h=sha256(k1)` check; a live note also carries `payLink` |
-| `/w/cb` | the mutating callback: melt, rotate, split, merge |
+| `/w` | LUD-03 informational GET; accepts `k1` or the non-disclosing LUD-25 `p=sha256(k1)` check (`h` is its older name, still accepted); a live note also carries `payLink` |
+| `/w/cb` | the mutating callback: melt, rotate, split, merge; outputs as `p1`/`p2`, or their older names `h`/`h2` |
 | `POST /names` | claim a lightning address, authenticated by NIP-98 |
 | `/.well-known/nostr.json` | NIP-05 for the names this mint serves |
 | `/stats` | what the mint owes, what the node holds, and the coverage between them |
