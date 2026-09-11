@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.2 - 2026-09-11
 
 - An operator name that changes owner drops the branch the previous owner
   set. `MONEYER_ZAP_NAMES` re-points a name at every startup, and until now
