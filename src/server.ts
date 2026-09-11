@@ -29,6 +29,18 @@ import {CONFIG_TOKEN, loadWebAssets, type WebAssets} from './web-assets.ts'
 
 const HEX32 = /^[0-9a-f]{64}$/
 
+// LUD-25 renamed `h` to `p` on the lookup and `h`/`h2` to `p1`/`p2` on the
+// callback. The old names stay accepted; sending both spellings must agree.
+const renamedParam = (
+  q: URLSearchParams,
+  name: string,
+  legacy: string
+): {value: string | undefined; conflict: boolean} => {
+  const current = q.get(name)?.toLowerCase()
+  const old = q.get(legacy)?.toLowerCase()
+  return {value: current ?? old, conflict: current !== undefined && old !== undefined && current !== old}
+}
+
 export type Moneyer = {
   url: string
   port: number
@@ -908,9 +920,11 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     // ---- LUD-03 informational GET ----
     if (requestUrl.pathname === '/w') {
       const hasK1 = q.has('k1')
-      const hasH = q.has('h')
       const k1 = q.get('k1')?.toLowerCase()
-      const h = q.get('h')?.toLowerCase()
+      const lookup = renamedParam(q, 'p', 'h')
+      if (lookup.conflict) return fail('p and h name different notes')
+      const h = lookup.value
+      const hasH = h !== undefined
       if (
         hasK1 === hasH ||
         (hasK1 && (!k1 || !HEX32.test(k1))) ||
@@ -920,7 +934,8 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       }
       // LUD-25's hash-only check lets a wallet prove that the note it just
       // bought exists without sending the bearer secret to the service a
-      // second time. `h` is accepted in place of `k1`, never alongside it.
+      // second time. `p` (or `h`) is accepted in place of `k1`, never
+      // alongside it.
       const note = h ? await resolveNoteId(h) : await resolveNote(k1!)
       if (!note) return fail('Unknown note.')
       // Hash lookups protect the secret, not the note's spent state.
@@ -969,8 +984,12 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       const k1s = q.getAll('k1').map(value => value.toLowerCase())
       const pr = q.get('pr')
       const amountRaw = q.get('amount')
-      const h = q.get('h')?.toLowerCase()
-      const h2 = q.get('h2')?.toLowerCase()
+      // One value per output from here on, so the replay match below treats
+      // `p1=X` and `h=X` as the same request.
+      const out1 = renamedParam(q, 'p1', 'h')
+      const out2 = renamedParam(q, 'p2', 'h2')
+      const h = out1.value
+      const h2 = out2.value
 
       if (k1s.length === 0) return fail('Missing k1.')
       if (k1s.length > config.maxK1s) return fail(`Too many k1s (max ${config.maxK1s}).`)
@@ -980,9 +999,11 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       // Hash parameters are checked before any note resolves, so an
       // invalid or missing hash can never burn anything.
       if (!pr) {
-        if (!h || !HEX32.test(h)) return fail('missing h')
-        if (amountRaw !== null && (!h2 || !HEX32.test(h2))) return fail('missing h2')
-        if (h2 !== undefined && h2 === h) return fail('h and h2 must differ.')
+        if (out1.conflict) return fail('p1 and h name different outputs')
+        if (out2.conflict) return fail('p2 and h2 name different outputs')
+        if (!h || !HEX32.test(h)) return fail('missing p1')
+        if (amountRaw !== null && (!h2 || !HEX32.test(h2))) return fail('missing p2')
+        if (h2 !== undefined && h2 === h) return fail('p1 and p2 must differ.')
       }
       if (config.sunset && amountRaw !== null) {
         return fail('This mint is sunsetting - splitting is disabled.')

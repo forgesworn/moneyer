@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- LUD-25's renamed parameters are accepted: `p` for the informational
+  GET's hash lookup, `p1`/`p2` for the callback's outputs. The old names
+  `h` and `h`/`h2` keep working, and a wallet may mix them in one request.
+  Sending both spellings of one value with different contents is refused.
+  A retry is matched on the outputs, not the spelling, so a split first
+  sent as `h`/`h2` and retried as `p1`/`p2` is answered as a replay.
+- The callback's missing-output reasons are now `missing p1` and
+  `missing p2` (were `missing h`/`missing h2`), and `p1 and p2 must
+  differ.` The pay callback's `missing h` is unchanged.
+
 ## 0.11.1 - 2026-09-07
 
 - Hash lookups report `Note already spent.` for retained burned notes,

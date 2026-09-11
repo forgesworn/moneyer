@@ -28,7 +28,8 @@ Client library to build against a mint: lnurlcash-kit
    (phoenixd, NIP-47 make_invoice) can back a mint.
 2. Mutations are atomic: all named k1 burn and all outputs mint, or
    nothing happens. Duplicate k1 in one request is refused.
-3. h/h2 are WALLET-supplied hashes; the mint never generates a
+3. p1/p2 (older names h/h2, still accepted; both spellings of one output
+   must agree) are WALLET-supplied hashes; the mint never generates a
    replacement secret, and refuses output ids that already exist as
    notes, as mint-invoice payment hashes, or as a note another payer has
    already bought with `h`. A malformed `h` on the pay callback is
@@ -56,8 +57,8 @@ Client library to build against a mint: lnurlcash-kit
    part applies at mint time only.
 7. Reason strings are protocol surface: 'pending',
    'Invalid or already spent k1.', 'Unknown note.', 'Note already spent.',
-   'missing h', 'missing h2', 'insufficient value' - wallets classify on
-   them.
+   'missing p1', 'missing p2' (withdraw callback), 'missing h' (pay
+   callback), 'insufficient value' - wallets classify on them.
 8. minSendable must survive the mint's own fee (grossUpForMintFee of the
    dust floor), or the mint advertises an amount it will refuse.
 
@@ -86,5 +87,5 @@ NoteStore - SQLite store; notes by sha256(k1), never secrets
 /.well-known/lnurlw/{user}  LUD-25 mint address (experimental)
 /p/cb                       LUD-06 pay callback (optional h names the note)
 /verify/{payment_hash}      LUD-21 verify (mint invoices AND melt payments)
-/w                          LUD-03 informational GET by k1 or hash-only h
-/w/cb                       melt / rotate / split / merge
+/w                          LUD-03 informational GET by k1 or hash-only p (or older h)
+/w/cb                       melt / rotate / split / merge; outputs p1/p2 (or older h/h2)
