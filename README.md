@@ -151,11 +151,11 @@ against the same endpoints every wallet uses:
   before the invoice exists, invoice QR (tap opens a wallet), LUD-21
   polling with a countdown, and on settlement the note is claimed and
   **immediately rotated** - the preimage any invoice-observer could poll
-  out of verify is dead before the note is shown. The rotated note's
-  signature is verified against the mint's advertised key in front of the
-  user, and the QR arrives under scratch-off silver foil, rubbed away like a scratch card.
+  out of verify is dead before the note is shown. The settlement receipt
+  is verified against the mint's advertised key in front of the user, and
+  the QR arrives under scratch-off silver foil, rubbed away like a scratch card.
 - **Check a note**: live value, spent/unknown/pending classified in plain
-  words, offline signature verification.
+  words, and offline verification of a `cp1` note's certificate.
 - `MONEYER_WALLET_URL` (optional) links minted notes straight into a
   companion web wallet's `#/claim` route.
 
@@ -354,7 +354,8 @@ named or spent, the two kinds mix freely:
 - `GET /w?k1=<ck1>` or `GET /w?p=<cp1>` looks a Part 2 note up, and the
   answer carries `sig`, the mint's certificate for it as `cs1`.
 - `p1`/`p2` on the callback may be `cp1` keys, and the matching `sig`/`sig2`
-  come back as `cs1`. A hash output still gets a plain hex signature.
+  come back as `cs1`. A hash output gets none: a plain note is unsigned by
+  design, since there is nothing to attest to without disclosing the secret.
 - A merge may combine Part 1 secrets and Part 2 `ck1`s in one request.
 
 A recipient checks a Part 2 note offline from its `ck1` and `cs1` alone.

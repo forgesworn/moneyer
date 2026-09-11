@@ -975,18 +975,16 @@ const viewInvoice = (args: {
           if (!valid) throw new Error('The settled receipt does not match or authenticate this note.')
           claimed = true
           if (ticker) clearInterval(ticker)
+          // The receipt's signature authenticated settlement to us; it is
+          // not carried on the note. A plain note is unsigned by design
+          // (LUD-25 Part 2 certifies cp1 notes only), so the URL handed
+          // out is the bare secret and amount.
           const rawUrl = buildNoteUrl(
             pay!.withdrawLink ?? `${API}/w`,
             args.bound.secret,
             args.bound.amountMsat
           )
-          const signedUrl = withNewK1(
-            rawUrl,
-            args.bound.secret,
-            args.bound.amountMsat,
-            receipt!.signature
-          )
-          viewNote({url: signedUrl, amountMsat: args.bound.amountMsat, verified: true, secured: true})
+          viewNote({url: rawUrl, amountMsat: args.bound.amountMsat, verified: true, secured: true})
           return
         }
         if (result.settled && args.namedSecret) {

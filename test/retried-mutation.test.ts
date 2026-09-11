@@ -40,7 +40,7 @@ const creditNote = (mint: TestMint, amountMsat: number): {k1: string; url: strin
 }
 
 describe('a retried mutation', () => {
-  it('answers a repeated rotate with the same signature, and mints nothing new', async () => {
+  it('answers a repeated rotate as a replay, and mints nothing new', async () => {
     const mint = await start()
     const note = creditNote(mint, 21_000)
     const callback = `${mint.moneyer.url}/w/cb`
@@ -48,8 +48,11 @@ describe('a retried mutation', () => {
 
     const first = await rotateNoteWithHash(callback, note.k1, hashK1(fresh))
     const retry = await rotateNoteWithHash(callback, note.k1, hashK1(fresh))
+    // A plain output is unsigned, so the replay is proven by the ledger
+    // below rather than by a repeated certificate; part2-notes covers the
+    // cp1 case, where the certificate comes back identical.
+    expect(first.signature).toBeUndefined()
     expect(retry.signature).toBe(first.signature)
-    expect(verifyNoteSignature(fresh, 21_000, retry.signature!, mint.moneyer.signer!.pubkey)).toBe(true)
 
     // The note at the staged secret is untouched: still one note, still
     // worth what it was, still spendable.
@@ -69,7 +72,7 @@ describe('a retried mutation', () => {
     await expect(rotateNoteWithHash(callback, note.k1, hashK1(freshK1()))).rejects.toThrow(NoteSpentError)
   })
 
-  it('replays a split with both signatures', async () => {
+  it('replays a split', async () => {
     const mint = await start({mintFee: {baseFeeMsat: 1000, feePpm: 0}})
     const note = creditNote(mint, 21_000)
     const callback = `${mint.moneyer.url}/w/cb`

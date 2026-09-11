@@ -164,10 +164,14 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   const store = deps.store ?? new NoteStore(config.dbPath)
   const backend = deps.backend ?? backendFor(config)
   const signer = createNoteSigner(config.signingKey)
-  // A cp1 note's certificate is the same signature, carried as cs1.
-  const certify = (ref: NoteRef, amountMsat: number): string => {
-    const sig = signer.sign(ref.id, amountMsat)
-    return ref.cp1 ? encodeCs1(hexToBytes(sig)) : sig
+  // LUD-25 Part 2 signs cp1 notes only, as cs1. A hash output is a plain
+  // Part 1 note: there is nothing to attest to without disclosing the
+  // secret, so it goes out unsigned.
+  const certify = (ref: NoteRef, amountMsat: number): string | undefined =>
+    ref.cp1 ? encodeCs1(hexToBytes(signer.sign(ref.id, amountMsat))) : undefined
+  const certified = (field: 'sig' | 'sig2', ref: NoteRef, amountMsat: number): {sig?: string; sig2?: string} => {
+    const sig = certify(ref, amountMsat)
+    return sig ? {[field]: sig} : {}
   }
   const webAssets = deps.webAssets === undefined ? loadWebAssets() : deps.webAssets
 
@@ -247,7 +251,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           mintFeeLine,
           feeInWords,
           verify: config.verify,
-          certify: (noteId, amountMsat) => certify({id: noteId, cp1: true}, amountMsat),
+          certify: (noteId, amountMsat) => certify({id: noteId, cp1: true}, amountMsat)!,
           // configFromEnv guarantees this when zap is set; a caller
           // building the config by hand gets the same rule.
           origin: config.publicOrigin ?? (() => {
@@ -1026,7 +1030,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         ...(signer ? {mintPubkey: signer.pubkey} : {}),
         // LUD-25 Part 2: a note named by cp1 or ck1 gets its certificate
         // here, so a wallet need not rotate just to obtain one.
-        ...(ref.cp1 ? {sig: certify(ref, note.amountMsat)} : {})
+        ...certified('sig', ref, note.amountMsat)
       })
     }
 
@@ -1101,12 +1105,8 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         if (first) {
           return send({
             status: 'OK',
-            ...(signer
-              ? {
-                  sig: certify(o1!, first.amountMsat),
-                  ...(second ? {sig2: certify(o2!, second.amountMsat)} : {})
-                }
-              : {})
+            ...certified('sig', o1!, first.amountMsat),
+            ...(second ? certified('sig2', o2!, second.amountMsat) : {})
           })
         }
       }
@@ -1241,7 +1241,8 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         }
         return send({
           status: 'OK',
-          ...(signer ? {sig: certify(o1!, amount), sig2: certify(o2!, changeMsat)} : {})
+          ...certified('sig', o1!, amount),
+          ...certified('sig2', o2!, changeMsat)
         })
       }
 
@@ -1257,7 +1258,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // same oracle-free reason for a collision as for a dead k1
         return fail('Invalid or already spent k1.')
       }
-      return send({status: 'OK', ...(signer ? {sig: certify(o1!, mergedMsat)} : {})})
+      return send({status: 'OK', ...certified('sig', o1!, mergedMsat)})
     }
 
     return fail('Not found.', 404)

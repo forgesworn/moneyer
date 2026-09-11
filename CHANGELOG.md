@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.14.0 - 2026-09-11
+
+- **A plain note is unsigned.** LUD-25 Part 2 certifies `cp1` notes only:
+  a hash has nothing to attest to without disclosing the secret. A rotate,
+  split or merge to a hash output now answers a bare `{"status":"OK"}`,
+  where it used to carry the old Part 1 signature over the hash. `cp1`
+  outputs are certified as before, with `cs1`, on the callback and on the
+  informational GET by `ck1` or `cp1`. The web client no longer attaches
+  the settlement receipt's signature to the note it mints; the receipt
+  still authenticates settlement, and `/verify` still carries it.
+- Graded by lnurlcash-conformance 0.10.0, whose new Part 2 check rotates
+  a note into a `cp1` key, verifies its certificate, and rotates it home.
+
 ## 0.13.2 - 2026-09-11
 
 - An operator name that changes owner drops the branch the previous owner
