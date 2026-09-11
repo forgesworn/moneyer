@@ -344,6 +344,21 @@ preimage then buys nothing: it is an ordinary payment proof, which is why
 there is no race left to run, and no window in which holding the invoice
 is nearly holding the money.
 
+### Or name it by a key (LUD-25 Part 2)
+
+The comment can instead be `cp1<pk>`, a public key. The note is keyed by
+that key and spent with `ck1`, a recoverable signature by its private key,
+so the mint never sees anything that could spend it. Everywhere a note is
+named or spent, the two kinds mix freely:
+
+- `GET /w?k1=<ck1>` or `GET /w?p=<cp1>` looks a Part 2 note up, and the
+  answer carries `sig`, the mint's certificate for it as `cs1`.
+- `p1`/`p2` on the callback may be `cp1` keys, and the matching `sig`/`sig2`
+  come back as `cs1`. A hash output still gets a plain hex signature.
+- A merge may combine Part 1 secrets and Part 2 `ck1`s in one request.
+
+A recipient checks a Part 2 note offline from its `ck1` and `cs1` alone.
+
 Moneyer's earlier `mintToHash` extension remains additive. A compatible
 wallet repeats the same commitment as `h`; it does not replace `comment`:
 
@@ -587,11 +602,11 @@ clearnet.
 | `/.well-known/lnurlp/<user>` | LUD-16 payRequest; paying mints a note |
 | `/.well-known/lnurlp/<zap name>` | NIP-57 payRequest; paying mints a note *to the name's pubkey* |
 | `/.well-known/lnurlw/<user>` | LUD-25 mint address discovery (experimental) |
-| `/p/cb` | LUD-06 pay callback; issues the mint invoice, and takes an optional `h` naming the note |
+| `/p/cb` | LUD-06 pay callback; issues the mint invoice for the note the `comment` names, a hash or a `cp1` key (`h` is an older spelling for a hash) |
 | `/z/cb/<zap name>` | the zap callback; validates the kind 9734 and issues the invoice |
 | `/verify/<hash>` | LUD-21 verify, for mint invoices and melt payments |
-| `/w` | LUD-03 informational GET; accepts `k1` or the non-disclosing LUD-25 `p=sha256(k1)` check (`h` is its older name, still accepted); a live note also carries `payLink` |
-| `/w/cb` | the mutating callback: melt, rotate, split, merge; outputs as `p1`/`p2`, or their older names `h`/`h2` |
+| `/w` | LUD-03 informational GET; accepts `k1` (a secret or a `ck1`) or the non-disclosing LUD-25 `p` check (`sha256(k1)` or a `cp1` key; `h` is its older name, still accepted); a live note also carries `payLink`, and a Part 2 note its `cs1` as `sig` |
+| `/w/cb` | the mutating callback: melt, rotate, split, merge; inputs as secrets or `ck1`s, outputs as `p1`/`p2` hashes or `cp1` keys, or their older names `h`/`h2` |
 | `POST /names` | claim a lightning address, authenticated by NIP-98 |
 | `/.well-known/nostr.json` | NIP-05 for the names this mint serves |
 | `/stats` | what the mint owes, what the node holds, and the coverage between them |

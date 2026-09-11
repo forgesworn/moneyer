@@ -39,7 +39,8 @@ const worth = async (mint: TestMint, k1: string): Promise<unknown> =>
 // A reason a wallet would read as a statement about the note itself.
 const NOTE_STATE = /spent|unknown|not found|^pending$/i
 
-// Shaped like a Part 2 `cp1` key, which this mint does not take yet.
+// Shaped like a Part 2 `cp1` key, but its checksum is wrong, so it names
+// nothing. Real cp1 keys are covered in part2-notes.test.ts.
 const CP1 = `cp1${'q'.repeat(58)}`
 
 describe('the informational GET by p', () => {
