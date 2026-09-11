@@ -247,6 +247,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           mintFeeLine,
           feeInWords,
           verify: config.verify,
+          certify: (noteId, amountMsat) => certify({id: noteId, cp1: true}, amountMsat),
           // configFromEnv guarantees this when zap is set; a caller
           // building the config by hand gets the same rule.
           origin: config.publicOrigin ?? (() => {
@@ -562,9 +563,9 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         body
       })
       if ('reason' in authorized) return fail(authorized.reason, 401)
-      let parsed: {name?: unknown; note?: unknown}
+      let parsed: {name?: unknown; note?: unknown; cx1?: unknown}
       try {
-        parsed = JSON.parse(body || '{}') as {name?: unknown; note?: unknown}
+        parsed = JSON.parse(body || '{}') as {name?: unknown; note?: unknown; cx1?: unknown}
       } catch {
         return fail('Body must be JSON.', 400)
       }
@@ -580,14 +581,21 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         host
       })
       if (isRefusal(result)) return fail(result.reason, result.status)
-      log(`name ${result.name} registered to ${result.pubkey.slice(0, 8)} for ${result.paidMsat} msat`)
+      log(
+        result.updated
+          ? `name ${result.name} ${result.cx1 ? 'now pays to a branch' : 'pays out custodially again'}`
+          : `name ${result.name} registered to ${result.pubkey.slice(0, 8)} for ${result.paidMsat} msat`
+      )
       return send({
         status: 'OK',
         name: result.name,
         pubkey: result.pubkey,
         address: `${result.name}@${host}`,
         priceMsat: config.namePriceMsat,
-        paidMsat: result.paidMsat
+        paidMsat: result.paidMsat,
+        // With a cx1 the name pays to the holder's own keys; without, as a
+        // note gift-wrapped to them.
+        cx1: result.cx1
       })
     }
 

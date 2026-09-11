@@ -90,6 +90,14 @@ only the buyer ever held, the preimage is bearer material for nothing, and
 what `/verify` serves is an ordinary payment proof. Wallets should prefer
 that path wherever a mint advertises `mintToHash`.
 
+**What a `cx1` on a name gives away.** A name with a watch-only branch is
+paid to the holder's keys, so the mint never holds a secret for those notes.
+But the mint can work out every key on the branch, so it can link every
+payment to that name, and see when each note is spent. That is no more than
+a custodial name already reveals. A wallet should keep the branch for
+receiving and rotate what arrives onto keys the mint cannot enumerate, which
+is what notecase and lnurl-wallet do.
+
 ## Out of scope
 
 - Compromise of the host or the funding source credentials: at that point

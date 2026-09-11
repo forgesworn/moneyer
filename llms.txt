@@ -91,3 +91,9 @@ NoteStore - SQLite store; notes by sha256(k1), never secrets
 /verify/{payment_hash}      LUD-21 verify (mint invoices AND melt payments)
 /w                          LUD-03 informational GET by k1 (secret or ck1) or p (hash or cp1, older h); a cp1 note carries its cs1 as sig
 /w/cb                       melt / rotate / split / merge; inputs secrets or ck1, outputs p1/p2 hashes or cp1 (or older h/h2); cp1 outputs certified as cs1
+POST /names                 claim a name (NIP-98; the signer owns it); body {name, note?, cx1?}.
+                            The owner may resend {name, cx1} to set a branch, or cx1: null to clear it
+/z/cb/{name}                zap invoice for a name. With a cx1 the settled note is credited to the
+                            holder's next key, and the kind 2525 gift wrap carries no secret:
+                            /w?p=<cp1>&amount=&sig=<cs1>&i=<index> plus an `i` tag. The index is
+                            taken at settlement, never at the invoice, and occupied keys are skipped

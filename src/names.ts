@@ -1,7 +1,7 @@
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, utf8ToBytes} from '@noble/hashes/utils.js'
 import {verifyEvent, type Event} from 'nostr-tools/pure'
-import {hashK1, noteK1} from 'lnurlcash-kit'
+import {decodeCx1, hashK1, noteK1} from 'lnurlcash-kit'
 import {NotePendingError, NoteStore, NoteUnavailableError} from './store.ts'
 
 // Self-service lightning addresses.
@@ -93,7 +93,7 @@ export const validateNip98 = (
 }
 
 export type NameRefusal = {reason: string; status: number}
-export type NameGranted = {name: string; pubkey: string; paidMsat: number}
+export type NameGranted = {name: string; pubkey: string; paidMsat: number; cx1: string | null; updated: boolean}
 
 const refuse = (reason: string, status: number): NameRefusal => ({reason, status})
 
@@ -107,7 +107,7 @@ export const isRefusal = (result: NameGranted | NameRefusal): result is NameRefu
 export const registerName = (args: {
   store: NoteStore
   pubkey: string
-  body: {name?: unknown; note?: unknown}
+  body: {name?: unknown; note?: unknown; cx1?: unknown}
   priceMsat: number | undefined
   // The mint's own username, plus anything else it will not give away.
   reserved: string[]
@@ -124,7 +124,26 @@ export const registerName = (args: {
   if ([...ALWAYS_RESERVED, ...args.reserved.map(name => name.toLowerCase())].includes(raw)) {
     return refuse('That name is reserved.', 403)
   }
-  if (store.zapName(raw)) return refuse('That name is taken.', 409)
+  // LUD-25 Part 2: a watch-only branch, so payments to the name are minted
+  // to the holder's own keys. Absent leaves it as it is; null clears it.
+  let cx1: string | null | undefined
+  if (args.body.cx1 === null) {
+    cx1 = null
+  } else if (args.body.cx1 !== undefined) {
+    const given = typeof args.body.cx1 === 'string' ? args.body.cx1.trim().toLowerCase() : ''
+    if (!decodeCx1(given)) return refuse('That is not a cx1.', 400)
+    cx1 = given
+  }
+
+  const existing = store.zapName(raw)
+  if (existing) {
+    // Its owner may set or clear the branch; nobody else may touch it.
+    if (existing.pubkey === pubkey && cx1 !== undefined) {
+      store.setZapNameCx1(raw, cx1)
+      return {name: raw, pubkey, paidMsat: 0, cx1, updated: true}
+    }
+    return refuse('That name is taken.', 409)
+  }
 
   let paidMsat = 0
   let noteId: string | undefined
@@ -171,7 +190,7 @@ export const registerName = (args: {
   }
 
   try {
-    store.buyZapName({name: raw, pubkey, ...(noteId ? {noteId} : {}), paidMsat})
+    store.buyZapName({name: raw, pubkey, ...(noteId ? {noteId} : {}), paidMsat, cx1: cx1 ?? null})
   } catch (err) {
     if (err instanceof NotePendingError) return refuse('That note has a melt in flight.', 409)
     if (err instanceof NoteUnavailableError) return refuse('That note is spent or was never minted here.', 400)
@@ -179,5 +198,5 @@ export const registerName = (args: {
     // the name and the note together or not at all.
     return refuse('That name is taken.', 409)
   }
-  return {name: raw, pubkey, paidMsat}
+  return {name: raw, pubkey, paidMsat, cx1: cx1 ?? null, updated: false}
 }
