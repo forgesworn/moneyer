@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.0 - 2026-09-11
 
 - LUD-25's renamed parameters are accepted: `p` for the informational
   GET's hash lookup, `p1`/`p2` for the callback's outputs. The old names
