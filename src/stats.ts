@@ -110,7 +110,7 @@ export const verifyStatsSignature = (stats: MintStats, signatureHex: string, min
     return false
   }
   const target = mintPubkeyHex.trim().toLowerCase()
-  // Both byte orders are tried for the same reason lnurlcash-kit tries
+  // Both byte orders are tried for the same reason @lnurlcash/kit tries
   // both: recovery-id-first is what noble emits, recovery-id-last is what
   // the wire carries.
   const recoveryIdFirst = new Uint8Array([wireSig[64]!, ...wireSig.subarray(0, 64)])

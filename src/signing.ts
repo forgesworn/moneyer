@@ -7,7 +7,7 @@ import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 //
 //   "LNURLcash:" || amount_msat || ":" || note_id
 //
-// where note_id is hex(sha256(k1)). lnurlcash-kit's noteSignatureDigest
+// where note_id is hex(sha256(k1)). @lnurlcash/kit's noteSignatureDigest
 // takes the SECRET and hashes it itself, which a wallet holds and a mint
 // never does - so the digest is rebuilt here from the id. The two must
 // agree byte for byte; the test suite proves they do by verifying every
@@ -26,7 +26,7 @@ export const signDigestRecoverable = (digest: Uint8Array, privateKeyHex: string)
 }
 
 // Does this signature recover to that public key? Both byte orders are
-// tried for the same reason lnurlcash-kit tries both: recovery-id-first is
+// tried for the same reason @lnurlcash/kit tries both: recovery-id-first is
 // what noble emits, recovery-id-last is what the wire carries.
 export const recoversToPubkey = (digest: Uint8Array, signatureHex: string, pubkeyHex: string): boolean => {
   let wireSig: Uint8Array

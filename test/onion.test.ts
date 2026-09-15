@@ -1,7 +1,7 @@
 import {afterEach, describe, expect, it} from 'vitest'
 import {request} from 'node:http'
 import {configFromEnv} from '../src/config.ts'
-import {hashK1} from 'lnurlcash-kit'
+import {hashK1} from '@lnurlcash/kit'
 import {freshK1, startMint, type TestMint} from './helpers.ts'
 
 // The same mint, reached over Tor.

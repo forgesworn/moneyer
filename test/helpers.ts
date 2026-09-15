@@ -1,4 +1,5 @@
 import {bytesToHex, randomBytes} from '@noble/hashes/utils.js'
+import {applyMintFee, type MintFee} from '@lnurlcash/kit'
 import type {MoneyerConfig} from '../src/config.ts'
 import {createFakeBackend, type FakeBackend} from '../src/backends/fake.ts'
 import {createMoneyer, type Moneyer, type MoneyerDeps} from '../src/server.ts'
@@ -47,6 +48,20 @@ export const startMint = async (
 }
 
 export const freshK1 = (): string => bytesToHex(randomBytes(32))
+
+// Test-side prediction only. Production accepts the same range through
+// withinMintFeeBand; the shared kit deliberately does not expose UI ranges.
+export const mintFeeBand = (
+  grossMsat: number,
+  fee: MintFee
+): {minNetMsat: number; maxNetMsat: number} => {
+  const maxNetMsat = applyMintFee(grossMsat, fee)
+  const exactFee = grossMsat - maxNetMsat
+  return {
+    minNetMsat: Math.max(0, grossMsat - Math.ceil(exactFee / 1000) * 1000),
+    maxNetMsat
+  }
+}
 
 export const waitFor = async (predicate: () => boolean, timeoutMs = 2_000): Promise<void> => {
   const deadline = Date.now() + timeoutMs

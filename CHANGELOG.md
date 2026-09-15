@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.15.0 - 2026-09-15
+
+- Use `@lnurlcash/kit` 0.14 as the protocol implementation. Removed kit
+  convenience APIs that are Moneyer policy remain local rather than becoming
+  changes to the reference wallet package.
+- Match the current reference mint's mutation proof formats: legacy hash
+  outputs receive the raw 65-byte Part 1 signature when signing is available;
+  `cp1` outputs receive an amount-bearing `cs1` certificate. Informational
+  lookup still publishes a certificate only for `cp1` notes.
+- Grade against `lnurlcash-conformance` 0.11, including amount-bearing
+  certificates, Part 2 address ownership and internal transfers.
+- Publish a key-backed name's `cx1:<next-free-index>` as `text/xpub` metadata
+  so a wallet already holding Moneyer notes can pay it by an ordinary
+  rotate/split/merge without Lightning. The hint is derived from current
+  ledger occupancy and public-key output collisions receive the reference
+  retry signal.
+
 ## 0.14.0 - 2026-09-11
 
 - **A plain note is unsigned.** LUD-25 Part 2 certifies `cp1` notes only:

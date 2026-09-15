@@ -2,7 +2,7 @@ import {afterEach, describe, expect, it} from 'vitest'
 import {finalizeEvent, generateSecretKey, getPublicKey, type EventTemplate} from 'nostr-tools/pure'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, utf8ToBytes} from '@noble/hashes/utils.js'
-import {buildNoteUrl, hashK1} from 'lnurlcash-kit'
+import {buildNoteUrl, hashK1} from '@lnurlcash/kit'
 import {NIP98_KIND} from '../src/names.ts'
 import {freshK1, startMint, type TestMint} from './helpers.ts'
 

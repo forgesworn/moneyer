@@ -1,8 +1,9 @@
 import {afterEach, describe, expect, it} from 'vitest'
-import {claimMintedNote, fetchPayRequest, hashK1, requestInvoice} from 'lnurlcash-kit'
+import {fetchPayRequest, hashK1, requestInvoice} from '@lnurlcash/kit'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {createFakeBackend} from '../src/backends/fake.ts'
 import {createMoneyer, type Moneyer} from '../src/server.ts'
+import {claimMintedNote} from '../src/claim.ts'
 import {testConfig} from './helpers.ts'
 
 // A fake mint a wallet can actually use.
@@ -37,7 +38,7 @@ const startDevMint = async (autoSettle: boolean, autoSettleAfterMs = 0): Promise
 const buyNote = async (mint: Moneyer, amountMsat: number) => {
   const pay = await fetchPayRequest(`${mint.url}/.well-known/lnurlp/mint`)
   const secret = 'ab'.repeat(32)
-  const quote = await requestInvoice(pay.callback, amountMsat, {h: hashK1(secret)})
+  const quote = await requestInvoice(pay.callback, amountMsat, hashK1(secret))
   return {claim: await claimMintedNote(pay.withdrawLink!, secret), quote}
 }
 
@@ -78,7 +79,7 @@ describe('a fake mint a wallet can use', () => {
     const pay = await fetchPayRequest(`${mint.url}/.well-known/lnurlp/mint`)
     // Current mint quotes are always named. Their verify preimage is payment
     // proof rather than the bearer note, but it still must not appear early.
-    const quote = await requestInvoice(pay.callback, 21_000, {h: hashK1('ab'.repeat(32))})
+    const quote = await requestInvoice(pay.callback, 21_000, hashK1('ab'.repeat(32)))
     const verify = (await (await fetch(quote.verify!)).json()) as {settled?: boolean; preimage?: string | null}
     expect(verify.settled).toBe(false)
     expect(verify.preimage).toBeNull()
@@ -88,7 +89,7 @@ describe('a fake mint a wallet can use', () => {
     const mint = await startDevMint(true, 60_000)
     const pay = await fetchPayRequest(`${mint.url}/.well-known/lnurlp/mint`)
     const secret = 'cd'.repeat(32)
-    await requestInvoice(pay.callback, 21_000, {h: hashK1(secret)})
+    await requestInvoice(pay.callback, 21_000, hashK1(secret))
     // Nothing has paid, so naming an output buys nothing yet.
     const claim = await claimMintedNote(pay.withdrawLink!, secret)
     expect(claim.state).toBe('unminted')
@@ -97,7 +98,7 @@ describe('a fake mint a wallet can use', () => {
   it('settles the invoice itself rather than pretending the note exists', async () => {
     const mint = await startDevMint(true)
     const pay = await fetchPayRequest(`${mint.url}/.well-known/lnurlp/mint`)
-    const quote = await requestInvoice(pay.callback, 21_000, {h: hashK1('cd'.repeat(32))})
+    const quote = await requestInvoice(pay.callback, 21_000, hashK1('cd'.repeat(32)))
     const paymentHash = decodeBolt11(quote.pr).paymentHashHex
     // The LUD-21 path has to agree with the note path, or a wallet that
     // polls verify and a wallet that claims directly see different mints.

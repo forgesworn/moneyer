@@ -5,13 +5,13 @@ paying an invoice it issues mints a note whose spend secret is the
 invoice's payment preimage, or a secret the buyer named with `h` on the
 pay callback. ESM-only. MIT.
 
-Install: not yet on npm - build from source (see README)
+Install: npm install @forgesworn/moneyer
 Run: node dist/cli.js --dev   (fake funding source, prints a funded note)
 
 Draft spec: https://github.com/lnurl/luds/pull/301
-Conformance: https://github.com/TheCryptoDonkey/lnurlcash-conformance
+Conformance: https://github.com/lnurlcash/lnurlcash-conformance
 Companion wallet: @forgesworn/notecase
-Client library to build against a mint: lnurlcash-kit
+Client library to build against a mint: @lnurlcash/kit
 
 ## Rules this SERVICE follows (and any mint MUST)
 
@@ -95,5 +95,7 @@ POST /names                 claim a name (NIP-98; the signer owns it); body {nam
                             The owner may resend {name, cx1} to set a branch, or cx1: null to clear it
 /z/cb/{name}                zap invoice for a name. With a cx1 the settled note is credited to the
                             holder's next key, and the kind 2525 gift wrap carries no secret:
-                            /w?p=<cp1>&amount=&sig=<cs1>&i=<index> plus an `i` tag. The index is
+                            /w?p=<cp1>&sig=<amount-bearing-cs1>&i=<index> plus an `i` tag. The index is
                             taken at settlement, never at the invoice, and occupied keys are skipped
+                            Its payRequest metadata publishes text/xpub = cx1:<next-free-index> for
+                            same-mint rotate/split/merge transfers; a raced key returns "already in use"

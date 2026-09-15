@@ -1,5 +1,7 @@
 import {describe, expect, it} from 'vitest'
-import {hashK1, noteSignatureDigest, verifyNoteSignature} from 'lnurlcash-kit'
+import {hashK1, verifyNoteSignature} from '@lnurlcash/kit'
+import {sha256} from '@noble/hashes/sha2.js'
+import {utf8ToBytes} from '@noble/hashes/utils.js'
 import {createNoteSigner, noteIdSignatureDigest} from '../src/signing.ts'
 import {
   buildStats,
@@ -20,7 +22,10 @@ describe('note signing', () => {
 
   it('agrees with the kit digest built from the secret', () => {
     const k1 = freshK1()
-    expect(noteIdSignatureDigest(hashK1(k1), 21_000)).toEqual(noteSignatureDigest(k1, 21_000))
+    const expected = sha256(
+      sha256(utf8ToBytes(`Lightning Signed Message:LNURLcash:21000:${hashK1(k1)}`))
+    )
+    expect(noteIdSignatureDigest(hashK1(k1), 21_000)).toEqual(expected)
   })
 
   it('produces signatures the kit verifies against the mint pubkey', () => {

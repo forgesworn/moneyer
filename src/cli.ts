@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import {parseArgs} from 'node:util'
 import {bytesToHex, randomBytes} from '@noble/hashes/utils.js'
-import {buildNoteUrl, hashK1} from 'lnurlcash-kit'
+import {buildNoteUrl, hashK1} from '@lnurlcash/kit'
 import {configFromEnv} from './config.ts'
 import {createMoneyer} from './server.ts'
 

@@ -6,7 +6,7 @@ import {
   signNoteOwnership,
   verifyNoteSignature,
   verifyNoteSignatureHash
-} from 'lnurlcash-kit'
+} from '@lnurlcash/kit'
 import {secp256k1} from '@noble/curves/secp256k1.js'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, hexToBytes, randomBytes, utf8ToBytes} from '@noble/hashes/utils.js'
@@ -83,7 +83,6 @@ const resigned = (key: NoteKey): string => {
 
 const certifies = (mint: TestMint, key: NoteKey, amountMsat: number, sig: unknown): boolean =>
   typeof sig === 'string' &&
-  sig.startsWith('cs1') &&
   verifyNoteSignature(key.ck1, amountMsat, sig, mint.moneyer.signer.pubkey)
 
 describe('minting to a cp1 key', () => {
@@ -166,12 +165,20 @@ describe('spending with a ck1', () => {
     const next = freshK1()
     const toHash = await callback(mint, [['k1', key.ck1], ['p1', hashK1(next)]])
     expect(toHash.status).toBe('OK')
-    // a hash output is a plain note, and a plain note is unsigned
-    expect(toHash).not.toHaveProperty('sig')
+    expect(verifyNoteSignature(next, 20_000, toHash.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
     expect(await worth(mint, next)).toBe(20_000)
   })
 
-  it('splits into a cp1 key and a hash: the key is certified, the hash is not', async () => {
+  it('names a public-key output collision so an internal transfer can advance its index', async () => {
+    const mint = await start()
+    const from = creditSecret(mint, 20_000)
+    const occupied = creditKey(mint, 5_000)
+    const reply = await callback(mint, [['k1', from], ['p1', occupied.cp1]])
+    expect(reply).toEqual({status: 'ERROR', reason: 'Output already in use.'})
+    expect(await worth(mint, from)).toBe(20_000)
+  })
+
+  it('splits into a cp1 key and a hash, certifying each in its wire format', async () => {
     const mint = await start()
     const from = creditKey(mint, 50_000)
     const key = freshKey()
@@ -184,7 +191,7 @@ describe('spending with a ck1', () => {
     ])
     expect(reply.status).toBe('OK')
     expect(certifies(mint, key, 20_000, reply.sig)).toBe(true)
-    expect(reply).not.toHaveProperty('sig2')
+    expect(verifyNoteSignature(change, 30_000, reply.sig2 as string, mint.moneyer.signer.pubkey)).toBe(true)
     expect(await worth(mint, change)).toBe(30_000)
   })
 

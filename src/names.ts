@@ -1,7 +1,7 @@
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, utf8ToBytes} from '@noble/hashes/utils.js'
 import {verifyEvent, type Event} from 'nostr-tools/pure'
-import {decodeCx1, hashK1, noteK1} from 'lnurlcash-kit'
+import {decodeCx1, hashK1, noteK1} from '@lnurlcash/kit'
 import {NotePendingError, NoteStore, NoteUnavailableError} from './store.ts'
 
 // Self-service lightning addresses.

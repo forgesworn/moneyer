@@ -18,7 +18,6 @@ import {
   fetchNoteInfo,
   fetchPayRequest,
   grossUpForMintFee,
-  formatFeePercent,
   hashK1,
   noteK1,
   noteSignature,
@@ -33,10 +32,11 @@ import {
   NoteSpentError,
   NoteUnknownError,
   PendingNoteError,
+  ServiceError,
   type MintAddressInfo,
   type MintFee,
   type PayRequestInfo
-} from 'lnurlcash-kit'
+} from '@lnurlcash/kit'
 import {MINT_KNOWS, MINT_KNOWS_HEADING} from '../../src/privacy.ts'
 import {icons} from './icons.ts'
 import {rosette} from './guilloche.ts'
@@ -44,13 +44,16 @@ import {banknote} from './banknote.ts'
 import {noteImage} from './note-image.ts'
 
 // The mint's own website: mint a note right here, check one, read the
-// terms. Every protocol step goes through lnurlcash-kit against the same
+// terms. Every protocol step goes through @lnurlcash/kit against the same
 // endpoints any wallet uses - the page IS a wallet-grade client, minus the
 // storage. Set like a banknote, because that is what it strikes.
 
 type MintRuntime = {username: string; walletUrl?: string; sunset?: boolean; origin?: string}
 
-// The mint-info fields moneyer publishes on top of what lnurlcash-kit
+// Presentation belongs to this page, not the shared protocol package.
+const formatFeePercent = (ppm: number): string => (ppm / 10_000).toFixed(4).replace(/\.?0+$/, '')
+
+// The mint-info fields moneyer publishes on top of what @lnurlcash/kit
 // types today. The kit passes unknown fields through untouched, so they
 // arrive whether or not its own type has caught up; every one is optional
 // and a mint that publishes none of them renders exactly as before.
@@ -733,7 +736,7 @@ const termsCard = (): HTMLElement => {
     <div class="kv"><span>mint fee</span><b>${esc(feeLine())}</b></div>
     <div class="kv"><span>note values</span><b>${sats(minNet)} to ${sats(maxNet)} sat</b></div>
     <div class="kv"><span>the fee falls</span><b>once, at the striking - mutations free, merges refund</b></div>
-    ${addr?.nodePubkey ? `<div class="kv"><span>notes signed by</span><code>${esc(addr.nodePubkey)}</code></div>` : '<div class="kv"><span>note signatures</span><b>not offered</b></div>'}
+    ${addr?.mintPubkey ? `<div class="kv"><span>notes signed by</span><code>${esc(addr.mintPubkey)}</code></div>` : '<div class="kv"><span>note signatures</span><b>not offered</b></div>'}
     ${coverageLine() ? `<div class="kv"><span>coverage</span><b>${esc(coverageLine()!)}</b></div>` : ''}
     ${addr?.contact?.email ? `<div class="kv"><span>email</span><code>${esc(addr.contact.email)}</code></div>` : ''}
     ${addr?.contact?.nostr ? `<div class="kv"><span>nostr</span><code>${esc(addr.contact.nostr)}</code></div>` : ''}
@@ -851,7 +854,7 @@ const viewMint = (): void => {
             grossMsat: gross,
             amountMsat: expectedNet
           })
-          const invoice = await requestInvoice(p.callback, gross, {h})
+          const invoice = await requestInvoice(p.callback, gross, h)
           const committedAmount = invoice.mint?.amountMsat
           // LUD-25 does not specify whether a mint rounds its advertised
           // millisatoshi fee up to a whole sat. Accept either reading of
@@ -901,7 +904,7 @@ const viewMint = (): void => {
         const invoice = await requestInvoice(
           p.callback,
           gross,
-          secret ? {h: hashK1(secret)} : {}
+          secret ? hashK1(secret) : undefined
         )
         if (!invoice.verify) {
           throw new Error('This mint offers no payment verification, so the page cannot claim the note for you.')
@@ -1259,7 +1262,10 @@ const viewCheck = (): void => {
             renderResult('bad', 'Spent', 'Already spent', 'The mint knows this note and reports it burned. Whatever it was worth has already been redeemed.')
           } else if (err instanceof NoteUnknownError) {
             renderResult('bad', 'Unknown', 'Unknown note', `${noteHost === HOST ? 'This mint' : noteHost} has never issued a note with this id. Either it was minted elsewhere, or it never existed.`)
-          } else if (err instanceof PendingNoteError) {
+          } else if (
+            err instanceof PendingNoteError ||
+            (err instanceof ServiceError && err.reason.trim().toLowerCase() === 'pending')
+          ) {
             renderResult('wait', 'In flight', 'Locked mid-payment', 'A melt is in flight on this note. It resolves shortly - either spent, or restored untouched.')
           } else {
             renderResult('wait', 'Held', 'Could not reach the mint', noteHost === HOST ? 'The mint did not answer. Try again shortly.' : `${noteHost} did not answer from this page - check it in a wallet instead.`)

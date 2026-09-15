@@ -1,5 +1,5 @@
 import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
-import {decodeCx1, deriveNotePubkey, encodeCp1, hashK1} from 'lnurlcash-kit'
+import {decodeCx1, deriveNotePubkey, encodeCp1, hashK1} from '@lnurlcash/kit'
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import {finalizeEvent, getPublicKey, type Event, type UnsignedEvent} from 'nostr-tools/pure'
 import {SimplePool} from 'nostr-tools/pool'
@@ -130,11 +130,18 @@ export type ZapBridge = {
   sweep(nowMs?: number): number
 }
 
-const metadataFor = (name: string, host: string, mintFeeLine: string | null, feeInWords: string | null = null): string => {
+const metadataFor = (
+  name: string,
+  host: string,
+  mintFeeLine: string | null,
+  feeInWords: string | null = null,
+  internalTransfer?: string
+): string => {
   const metadata: Array<[string, string]> = [
     ['text/plain', `Zap ${name}@${host}: arrives as a Lightning bearer note${feeInWords ? ` (${feeInWords})` : ''}`],
     ['text/identifier', `${name}@${host}`]
   ]
+  if (internalTransfer) metadata.push(['text/xpub', internalTransfer])
   if (mintFeeLine) metadata.push(['text/plain', mintFeeLine])
   return JSON.stringify(metadata)
 }
@@ -158,13 +165,30 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
 
   const payRequest = (name: string): Record<string, unknown> | null => {
     const lowered = name.toLowerCase()
-    if (!isZapName(lowered)) return null
+    const registered = store.zapName(lowered)
+    if (!registered) return null
+    let internalTransfer: string | undefined
+    const branch = decodeCx1(registered.cx1 ?? '')
+    if (branch) {
+      let index = registered.nextIndex
+      for (let tries = 0; tries < 1000; tries++, index++) {
+        try {
+          const noteId = bytesToHex(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, index))
+          if (!store.outputIdInUse(noteId)) {
+            internalTransfer = `${registered.cx1}:${index}`
+            break
+          }
+        } catch {
+          // A vanishingly rare unusable tweak consumes this public index.
+        }
+      }
+    }
     return {
       tag: 'payRequest',
       callback: `${origin}/z/cb/${lowered}`,
       minSendable: deps.minSendableMsat,
       maxSendable: deps.maxSendableMsat,
-      metadata: metadataFor(lowered, host, deps.mintFeeLine, deps.feeInWords),
+      metadata: metadataFor(lowered, host, deps.mintFeeLine, deps.feeInWords, internalTransfer),
       allowsNostr: true,
       nostrPubkey: pubkey
       // Deliberately no withdrawLink: the preimage of this invoice is NOT
@@ -263,7 +287,7 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
     wrap(
       row,
       [...wrapTags(row), ['i', String(index)]],
-      `${origin}/w?p=${encodeCp1(hexToBytes(noteId))}&amount=${row.netMsat}&sig=${deps.certify(noteId, row.netMsat)}&i=${index}`
+      `${origin}/w?p=${encodeCp1(hexToBytes(noteId))}&sig=${deps.certify(noteId, row.netMsat)}&i=${index}`
     )
 
   // NIP-57 receipt, without the preimage tag: it is optional there, and

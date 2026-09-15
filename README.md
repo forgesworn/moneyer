@@ -9,7 +9,7 @@ split, merge and melt it against the withdraw callback. The note's spend
 secret is chosen by the buyer, before the invoice exists, and named to the
 mint only as a hash - so the mint never holds it, and neither does any node
 that forwards the payment. It passes the full
-[lnurlcash-conformance](https://github.com/TheCryptoDonkey/lnurlcash-conformance)
+[lnurlcash-conformance](https://github.com/lnurlcash/lnurlcash-conformance)
 grader, including the spending checks, and the grader runs in this repo's
 own test suite.
 
@@ -43,14 +43,10 @@ lesson, that behaviour is kept deliberately and tested.
 
 ## Run
 
-Not on npm yet - build from source, with the sibling repos it links
-against until those publish:
+Install the published package and build it:
 
 ```bash
-git clone https://github.com/TheCryptoDonkey/lnurlcash-kit
-git clone https://github.com/TheCryptoDonkey/lnurlcash-conformance
 git clone https://github.com/forgesworn/moneyer
-(cd lnurlcash-kit && npm install && npm run build)
 cd moneyer && npm install && npm run build && npm run web:build
 ```
 
@@ -144,7 +140,7 @@ payRequest metadata's fee prose), `version`, and `previousPubkeys`.
 
 `GET /` serves the mint's own site (`web/`, vite + anime.js, built by
 `npm run web:build` into memory-served static files). It is a wallet-grade
-LNURLcash client in its own right, driven entirely by `lnurlcash-kit`
+LNURLcash client in its own right, driven entirely by `@lnurlcash/kit`
 against the same endpoints every wallet uses:
 
 - **Mint a note in the browser**: amount in, fee grossed up and shown
@@ -292,7 +288,7 @@ single mint's implementation.
 LUD-25 gives the fee as a flat `base_fee_msat` plus a ppm cut and says
 nothing about rounding. dni's lnurl-mint, the reference, ceilings it to a
 whole sat on purpose so the mint is never short a sat; moneyer withholds
-the msat-exact amount. Neither is out of spec - lnurlcash-kit's
+the msat-exact amount. Neither is out of spec - `@lnurlcash/kit`'s
 `mintFeeBand` treats anything between the two as the mint keeping its
 word, and the conformance grader accepts both.
 
@@ -354,8 +350,8 @@ named or spent, the two kinds mix freely:
 - `GET /w?k1=<ck1>` or `GET /w?p=<cp1>` looks a Part 2 note up, and the
   answer carries `sig`, the mint's certificate for it as `cs1`.
 - `p1`/`p2` on the callback may be `cp1` keys, and the matching `sig`/`sig2`
-  come back as `cs1`. A hash output gets none: a plain note is unsigned by
-  design, since there is nothing to attest to without disclosing the secret.
+  come back as amount-bearing `cs1`. A legacy hash output instead receives
+  the raw 65-byte Part 1 signature used by the reference mint.
 - A merge may combine Part 1 secrets and Part 2 `ck1`s in one request.
 
 A recipient checks a Part 2 note offline from its `ck1` and `cs1` alone.
@@ -411,7 +407,7 @@ whose secret was a preimage could never offer.
 
 The proposed normative wire text, invalid cases and compatibility matrix are
 kept executable in
-[`lnurlcash-conformance`](https://github.com/TheCryptoDonkey/lnurlcash-conformance/blob/main/docs/BOUND-MINT-RECEIPTS.md).
+[`lnurlcash-conformance`](https://github.com/lnurlcash/lnurlcash-conformance/blob/main/docs/BOUND-MINT-RECEIPTS.md).
 
 ## A retried mutation is answered, not refused
 
@@ -555,7 +551,7 @@ and credits the note to that key. It skips any key already holding a note,
 and an invoice nobody pays takes no index at all, so a wallet scanning its
 branch never meets a gap it did not make. The gift wrap still goes to the
 owner's npub, but it carries no secret: a lookup URL,
-`https://mint.example/w?p=<cp1>&amount=<msat>&sig=<cs1>&i=<index>`, plus an
+`https://mint.example/w?p=<cp1>&sig=<amount-bearing-cs1>&i=<index>`, plus an
 `i` tag. The wallet derives the key at that index, checks the certificate,
 and spends with its own `ck1`. A wallet that only knows note URLs sees no
 `k1` and passes the wrap by, and the note waits at the mint for a scan of the
@@ -567,6 +563,13 @@ the owner of one choosing where it pays, including a name the operator set up
 in `MONEYER_ZAP_NAMES`.
 Sending a new branch starts it at index 0; sending the same one again keeps
 its place. Zap receipts are unchanged.
+
+The name's payRequest also publishes `['text/xpub', '<cx1>:<index>']`, where
+the index is the next key not already present in this mint's ledger. A payer
+already holding a note here can therefore rotate, split or merge straight to
+that `cp1` without creating or routing a Lightning invoice. The index is a
+hint: if another payment wins the key first, Moneyer returns `Output already
+in use.` so the reference kit advances and retries.
 
 ## Reaching the mint over Tor
 
@@ -707,7 +710,7 @@ against live nodes; treat them as beta until they have.
 ## Dogfood
 
 Part of the ForgeSworn LNURLcash stack: built on
-[`lnurlcash-kit`](https://github.com/TheCryptoDonkey/lnurlcash-kit) (fee
+[`@lnurlcash/kit`](https://github.com/lnurlcash/lnurl-wallet/tree/main/src/lib) (fee
 maths, hashing, signature agreement) and
 [`farrier-kit`](https://github.com/forgesworn/farrier-kit) (BOLT-11
 decoding and preimage verification on the melt path). The companion wallet

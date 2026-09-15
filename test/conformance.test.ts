@@ -1,5 +1,5 @@
 import {afterEach, describe, expect, it} from 'vitest'
-import {buildNoteUrl, hashK1} from 'lnurlcash-kit'
+import {buildNoteUrl, hashK1} from '@lnurlcash/kit'
 // The grader deliberately shares no code with any LNURLcash library - which
 // is exactly why passing it means something.
 import {createReport, gradeMint, gradeNote} from 'lnurlcash-conformance'
@@ -36,11 +36,11 @@ describe('lnurlcash-conformance', () => {
     expect(failures(report)).toEqual([])
     // The Part 2 check is a warning on a mint without Part 2; here it has
     // to have run for real: the cp1 note certified, and the plain note it
-    // rotated home to unsigned.
+    // rotated home to the reference mint's legacy Part 1 signature.
     const part2 = report.results.find(result => result.name === 'certifies a cp1 note it issues (Part 2)')
     expect(part2?.status).toBe('pass')
     expect(part2?.detail).toContain('verified offline')
-    expect(part2?.detail).toContain('is unsigned')
+    expect(part2?.detail).toContain('still signed the Part 1 way')
   })
 
   it('passes the spending checks with a mint fee advertised - exact fee algebra', async () => {

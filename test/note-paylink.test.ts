@@ -1,5 +1,5 @@
 import {afterEach, describe, expect, it} from 'vitest'
-import {hashK1, mintAddressUrl} from 'lnurlcash-kit'
+import {hashK1, mintAddressUrl} from '@lnurlcash/kit'
 import {freshK1, startMint, type TestMint} from './helpers.ts'
 
 // A note is often all a holder ever has of a mint: handed one over Nostr or

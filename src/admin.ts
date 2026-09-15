@@ -1,7 +1,7 @@
 import {existsSync} from 'node:fs'
 import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
-import {hashK1, noteDeclaredAmount, noteK1, noteSignature, verifyNoteSignature} from 'lnurlcash-kit'
+import {hashK1, noteDeclaredAmount, noteK1, noteSignature, verifyNoteSignature} from '@lnurlcash/kit'
 import {configFromEnv, pubkeyHex, type MoneyerConfig} from './config.ts'
 import {NoteStore, type NoteState} from './store.ts'
 import {buildStats} from './stats.ts'

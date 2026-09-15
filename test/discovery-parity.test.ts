@@ -1,5 +1,5 @@
 import {afterEach, describe, expect, it} from 'vitest'
-import {hashK1} from 'lnurlcash-kit'
+import {hashK1} from '@lnurlcash/kit'
 import {createFakeBackend} from '../src/backends/fake.ts'
 import {createMoneyer} from '../src/server.ts'
 import {configFromEnv} from '../src/config.ts'
