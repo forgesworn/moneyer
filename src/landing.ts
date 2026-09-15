@@ -3,7 +3,7 @@ import type {NodeInfo} from './backends/types.ts'
 import type {MintStats} from './stats.ts'
 import {MINT_KNOWS, MINT_KNOWS_HEADING} from './privacy.ts'
 import {feeInUnits} from './fee-words.ts'
-import {applyMintFee} from 'lnurlcash-kit'
+import {applyMintFee} from '@lnurlcash/kit'
 
 // The mint's face: one self-contained page at GET /, no build step, no
 // external assets. It states what a visitor needs before trusting a mint

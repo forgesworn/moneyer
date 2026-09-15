@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import {afterAll, beforeAll, describe, expect, it} from 'vitest'
 import {bolt11PaymentHash} from 'farrier-kit/bolt11'
-import {buildNoteUrl} from 'lnurlcash-kit'
+import {buildNoteUrl} from '@lnurlcash/kit'
 import {MINT_KNOWS, MINT_KNOWS_HEADING} from '../src/privacy.ts'
 import {installNodeFetch} from './browser-fetch-shim.ts'
 import {freshK1, startMint, type TestMint} from './helpers.ts'

@@ -1,5 +1,5 @@
 import {afterEach, describe, expect, it} from 'vitest'
-import {buildNoteUrl, fetchNoteInfo, hashK1} from 'lnurlcash-kit'
+import {buildNoteUrl, fetchNoteInfo, hashK1} from '@lnurlcash/kit'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'

@@ -8,7 +8,7 @@ import {
   rotateNoteWithHash,
   splitNoteWithHash,
   verifyNoteSignature
-} from 'lnurlcash-kit'
+} from '@lnurlcash/kit'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
 import {freshK1, startMint, type TestMint} from './helpers.ts'
 
@@ -48,10 +48,7 @@ describe('a retried mutation', () => {
 
     const first = await rotateNoteWithHash(callback, note.k1, hashK1(fresh))
     const retry = await rotateNoteWithHash(callback, note.k1, hashK1(fresh))
-    // A plain output is unsigned, so the replay is proven by the ledger
-    // below rather than by a repeated certificate; part2-notes covers the
-    // cp1 case, where the certificate comes back identical.
-    expect(first.signature).toBeUndefined()
+    expect(verifyNoteSignature(fresh, 21_000, first.signature!, mint.moneyer.signer.pubkey)).toBe(true)
     expect(retry.signature).toBe(first.signature)
 
     // The note at the staged secret is untouched: still one note, still

@@ -4,20 +4,20 @@ import {unwrapEvent} from 'nostr-tools/nip59'
 import {matchFilter, type Filter} from 'nostr-tools/filter'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, randomBytes, utf8ToBytes} from '@noble/hashes/utils.js'
+import {secp256k1} from '@noble/curves/secp256k1.js'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {
-  cashNodeToCx1,
-  deriveCashAddressNode,
-  deriveCashRoot,
   deriveNotePubkey,
   deriveNoteSecretKey,
   encodeCk1,
   encodeCp1,
   encodeCx1,
+  hashK1,
+  parseInternalTransferHint,
+  payInternalTransfer,
   signNoteOwnership,
-  verifyNoteSignature,
-  type CashNode
-} from 'lnurlcash-kit'
+  verifyNoteSignature
+} from '@lnurlcash/kit'
 import {NIP98_KIND} from '../src/names.ts'
 import {NOTE_KIND, type NostrTransport} from '../src/zap.ts'
 import {startMint, waitFor, type TestMint} from './helpers.ts'
@@ -91,20 +91,35 @@ const claim = async (mint: TestMint, secret: Uint8Array, body: Record<string, un
   return {status: res.status, body: (await res.json()) as Record<string, unknown>}
 }
 
-type Holder = {sk: Uint8Array; pubkey: string; node: CashNode; cx1: string}
+type Holder = {
+  sk: Uint8Array
+  pubkey: string
+  branchPrivateKey: Uint8Array
+  branchPubkey: Uint8Array
+  chainCode: Uint8Array
+  cx1: string
+}
 
 const holder = (): Holder => {
   const sk = generateSecretKey()
-  const node = deriveCashAddressNode(deriveCashRoot(randomBytes(32)), HOST)
-  const {pubkeyXOnly, chainCode} = cashNodeToCx1(node)
-  return {sk, pubkey: getPublicKey(sk), node, cx1: encodeCx1(pubkeyXOnly, chainCode)}
+  const branchPrivateKey = secp256k1.utils.randomSecretKey()
+  const branchPubkey = secp256k1.getPublicKey(branchPrivateKey, true).subarray(1)
+  const chainCode = randomBytes(32)
+  return {
+    sk,
+    pubkey: getPublicKey(sk),
+    branchPrivateKey,
+    branchPubkey,
+    chainCode,
+    cx1: encodeCx1(branchPubkey, chainCode)
+  }
 }
 
 const keyAt = (who: Holder, index: number): string =>
-  bytesToHex(deriveNotePubkey(cashNodeToCx1(who.node).pubkeyXOnly, who.node.chainCode, index))
+  bytesToHex(deriveNotePubkey(who.branchPubkey, who.chainCode, index))
 
 const ck1At = (who: Holder, index: number): string =>
-  encodeCk1(signNoteOwnership(deriveNoteSecretKey(who.node.privateKey, who.node.chainCode, index)))
+  encodeCk1(signNoteOwnership(deriveNoteSecretKey(who.branchPrivateKey, who.chainCode, index)))
 
 // Asks for an invoice to `name`, and returns its payment hash.
 const invoice = async (mint: TestMint, name: string, amountMsat: number): Promise<string> => {
@@ -150,7 +165,7 @@ describe('a name with a cx1', () => {
     expect(first.url.searchParams.has('k1')).toBe(false)
     expect(first.url.searchParams.get('p')).toBe(encodeCp1(Buffer.from(keyAt(alice, 0), 'hex')))
     expect(first.url.searchParams.get('i')).toBe('0')
-    expect(first.url.searchParams.get('amount')).toBe('20000')
+    expect(first.url.searchParams.has('amount')).toBe(false)
     expect(first.rumor.tags).toContainEqual(['i', '0'])
     // the holder checks the certificate, then opens the note with its own key
     expect(verifyNoteSignature(ck1At(alice, 0), 20_000, first.url.searchParams.get('sig')!, mint.moneyer.signer.pubkey)).toBe(
@@ -172,6 +187,43 @@ describe('a name with a cx1', () => {
     await invoice(mint, 'alice', 21_000)
     const paid = await settle(mint, relay, alice, await invoice(mint, 'alice', 21_000))
     expect(paid.url.searchParams.get('i')).toBe('0')
+  })
+
+  it('publishes the next free branch key as an internal-transfer hint', async () => {
+    const {mint} = await start()
+    const alice = holder()
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})
+    mint.moneyer.store.creditNote(keyAt(alice, 0), 5_000)
+
+    const pay = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/alice`)).json()) as {metadata: string}
+    expect(JSON.parse(pay.metadata)).toContainEqual(['text/xpub', `${alice.cx1}:1`])
+
+    const custodial = holder()
+    await claim(mint, custodial.sk, {name: 'bobby'})
+    const oldPay = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/bobby`)).json()) as {metadata: string}
+    expect(JSON.parse(oldPay.metadata).some((entry: unknown[]) => entry[0] === 'text/xpub')).toBe(false)
+  })
+
+  it('accepts a reference-kit internal transfer and advances after a raced hint', async () => {
+    const {mint} = await start()
+    const alice = holder()
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})
+    const pay = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/alice`)).json()) as {metadata: string}
+    const hint = parseInternalTransferHint(pay.metadata)
+    expect(hint?.startIndex).toBe(0)
+
+    // The payRequest was honest when read, but another transfer wins index
+    // zero before this one lands. The specific collision answer lets the
+    // kit retry at one without risking the input.
+    mint.moneyer.store.creditNote(keyAt(alice, 0), 5_000)
+    const source = bytesToHex(randomBytes(32))
+    mint.moneyer.store.creditNote(hashK1(source), 21_000)
+    const paid = await payInternalTransfer(`${mint.moneyer.url}/w/cb`, [source], 21_000, 21_000, hint!)
+
+    expect(paid).toMatchObject({kind: 'merge', index: 1})
+    expect(mint.moneyer.store.noteById(hashK1(source))?.state).toBe('burned')
+    expect(mint.moneyer.store.noteById(keyAt(alice, 1))).toMatchObject({amountMsat: 21_000, state: 'outstanding'})
+    expect(verifyNoteSignature(ck1At(alice, 1), 21_000, paid.signature, mint.moneyer.signer.pubkey)).toBe(true)
   })
 
   it('skips a key that already names a note', async () => {

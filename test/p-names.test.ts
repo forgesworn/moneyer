@@ -1,5 +1,5 @@
 import {afterEach, describe, expect, it} from 'vitest'
-import {hashK1, verifyNoteSignature} from 'lnurlcash-kit'
+import {hashK1, verifyNoteSignature} from '@lnurlcash/kit'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
 import {freshK1, startMint, type TestMint} from './helpers.ts'
 
@@ -101,8 +101,7 @@ describe('the callback under p1 and p2', () => {
     const fresh = freshK1()
     const body = await callback(mint, [['k1', k1], ['p1', hashK1(fresh)]])
     expect(body.status).toBe('OK')
-    // a plain output is unsigned: LUD-25 Part 2 certifies cp1 notes only
-    expect(body).not.toHaveProperty('sig')
+    expect(verifyNoteSignature(fresh, 21_000, body.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
     expect(await worth(mint, fresh)).toBe(21_000)
     expect((await info(mint, [['k1', k1]])).reason).toBe('Note already spent.')
   })
@@ -119,8 +118,8 @@ describe('the callback under p1 and p2', () => {
       ['p2', hashK1(change)]
     ])
     expect(body.status).toBe('OK')
-    expect(body).not.toHaveProperty('sig')
-    expect(body).not.toHaveProperty('sig2')
+    expect(verifyNoteSignature(keep, 5_000, body.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(verifyNoteSignature(change, 16_000, body.sig2 as string, mint.moneyer.signer.pubkey)).toBe(true)
     expect(await worth(mint, keep)).toBe(5_000)
     expect(await worth(mint, change)).toBe(16_000)
   })

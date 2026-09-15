@@ -1,4 +1,4 @@
-import type {MintFee} from 'lnurlcash-kit'
+import type {MintFee} from '@lnurlcash/kit'
 import {getPublicKey} from 'nostr-tools/pure'
 import {secp256k1} from '@noble/curves/secp256k1.js'
 import {decode as decodeNip19, npubEncode} from 'nostr-tools/nip19'
@@ -49,7 +49,7 @@ export type MoneyerConfig = {
   mintFee: MintFee | null
   // Ceiling the mint fee to a whole sat, as dni's lnurl-mint does on
   // purpose so it is "never short a sat". LUD-25 says nothing either way
-  // and lnurlcash-kit's mintFeeBand accepts both, so this is a posture
+  // and @lnurlcash/kit's mintFeeBand accepts both, so this is a posture
   // choice rather than a compliance one.
   //
   // ON by default, because the alternative deals in fractions of a sat

@@ -1,7 +1,7 @@
 import {afterEach, describe, expect, it} from 'vitest'
 import {getPublicKey, type Event} from 'nostr-tools/pure'
 import {hexToBytes} from '@noble/hashes/utils.js'
-import {hashK1} from 'lnurlcash-kit'
+import {hashK1} from '@lnurlcash/kit'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
 import {sweepExpiredMintInvoices} from '../src/server.ts'
 import {STATS_D_TAG, STATS_KIND, verifyStatsSnapshot} from '../src/stats.ts'

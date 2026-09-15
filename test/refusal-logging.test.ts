@@ -1,5 +1,5 @@
 import {afterEach, describe, expect, it} from 'vitest'
-import {buildNoteUrl, hashK1} from 'lnurlcash-kit'
+import {buildNoteUrl, hashK1} from '@lnurlcash/kit'
 import {createMoneyer, type Moneyer} from '../src/server.ts'
 import {createFakeBackend} from '../src/backends/fake.ts'
 import {freshK1, testConfig} from './helpers.ts'

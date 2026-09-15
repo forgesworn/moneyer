@@ -5,11 +5,11 @@ import {
   applyMintFee,
   decodeCk1,
   decodeCp1,
-  encodeCs1,
+  encodeCs1WithAmount,
   grossUpForMintFee,
   hashK1,
   recoverNoteOwnershipPubkey
-} from 'lnurlcash-kit'
+} from '@lnurlcash/kit'
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import type {MoneyerConfig} from './config.ts'
 import {
@@ -165,10 +165,13 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   const backend = deps.backend ?? backendFor(config)
   const signer = createNoteSigner(config.signingKey)
   // LUD-25 Part 2 signs cp1 notes only, as cs1. A hash output is a plain
-  // Part 1 note: there is nothing to attest to without disclosing the
-  // secret, so it goes out unsigned.
-  const certify = (ref: NoteRef, amountMsat: number): string | undefined =>
-    ref.cp1 ? encodeCs1(hexToBytes(signer.sign(ref.id, amountMsat))) : undefined
+  // Match the reference mint's wire format: legacy hash outputs carry the
+  // compact signature as hex, while public-key outputs carry the same
+  // signature and amount in a cs1 certificate.
+  const certify = (ref: NoteRef, amountMsat: number): string => {
+    const signature = signer.sign(ref.id, amountMsat)
+    return ref.cp1 ? encodeCs1WithAmount(amountMsat, hexToBytes(signature)) : signature
+  }
   const certified = (field: 'sig' | 'sig2', ref: NoteRef, amountMsat: number): {sig?: string; sig2?: string} => {
     const sig = certify(ref, amountMsat)
     return sig ? {[field]: sig} : {}
@@ -198,7 +201,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   const mintFeeMsat = (grossMsat: number): number => {
     if (!config.mintFee) return 0
     const exact = grossMsat - applyMintFee(grossMsat, config.mintFee)
-    // Both readings sit inside lnurlcash-kit's mintFeeBand, so a wallet
+    // Both readings sit inside @lnurlcash/kit's mintFeeBand, so a wallet
     // is not misled either way - it is told the range up front.
     //
     // Absent means ON, the same as DEFAULTS and MONEYER_ROUND_FEE_TO_SAT:
@@ -364,7 +367,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     ...(nodeInfo.uri ? {nodeUri: nodeInfo.uri} : {}),
     ...(nodeInfo.color ? {nodeColor: nodeInfo.color} : {}),
     // nodeCapacity is the name the reference mint, the conformance
-    // mock and lnurlcash-kit all use; nodeCapacityMsat was ours alone
+    // mock and @lnurlcash/kit all use; nodeCapacityMsat was ours alone
     // and only survived a round trip through the kit's rest-spread.
     // Both go out for one release, then the old name goes.
     ...(nodeInfo.capacityMsat !== undefined
@@ -1028,9 +1031,10 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // exists.
         ...(mirrors.length ? {mirrors} : {}),
         ...(signer ? {mintPubkey: signer.pubkey} : {}),
-        // LUD-25 Part 2: a note named by cp1 or ck1 gets its certificate
-        // here, so a wallet need not rotate just to obtain one.
-        ...certified('sig', ref, note.amountMsat)
+        // Part 2: a note named by cp1 or ck1 gets its certificate here, so
+        // a wallet need not rotate just to obtain one. The reference mint
+        // omits the legacy raw signature from this informational response.
+        ...(ref.cp1 ? certified('sig', ref, note.amountMsat) : {})
       })
     }
 
@@ -1235,6 +1239,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           )
         } catch (err) {
           if (err instanceof NotePendingError) return fail('pending')
+          if (err instanceof OutputCollisionError && (o1!.cp1 || o2!.cp1)) return fail('Output already in use.')
           // OutputCollisionError shares the dead-k1 reason on purpose:
           // which table the id collided with is an oracle nobody is owed.
           return fail('Invalid or already spent k1.')
@@ -1255,6 +1260,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         store.swap(inputIds, [{id: o1!.id, amountMsat: mergedMsat}], fingerprint ?? undefined)
       } catch (err) {
         if (err instanceof NotePendingError) return fail('pending')
+        if (err instanceof OutputCollisionError && o1!.cp1) return fail('Output already in use.')
         // same oracle-free reason for a collision as for a dead k1
         return fail('Invalid or already spent k1.')
       }

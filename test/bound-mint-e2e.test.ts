@@ -1,11 +1,12 @@
 import {afterEach, describe, expect, it} from 'vitest'
 import {bytesToHex, randomBytes} from '@noble/hashes/utils.js'
-import {buildNoteUrl, claimMintedNote, fetchMintAddress, fetchPayRequest, hashK1, mintFeeBand, requestInvoice} from 'lnurlcash-kit'
+import {buildNoteUrl, fetchMintAddress, fetchPayRequest, hashK1, requestInvoice} from '@lnurlcash/kit'
 // The grader shares no code with the kit or with this mint, which is what
 // makes agreement between the three mean something.
 import {createReport, gradeBoundMint, gradeMint} from 'lnurlcash-conformance'
 import {decodeBolt11} from 'farrier-kit/bolt11'
-import {startMint, type TestMint} from './helpers.ts'
+import {claimMintedNote} from '../src/claim.ts'
+import {mintFeeBand, startMint, type TestMint} from './helpers.ts'
 import {expectNoUnexpectedFailures, failures} from './conformance-compat.ts'
 
 // Buying a note end to end, with three separate implementations in the
@@ -13,7 +14,7 @@ import {expectNoUnexpectedFailures, failures} from './conformance-compat.ts'
 //
 // test/mint-to-hash.test.ts pins the wire by calling the pay callback
 // directly, because a wire contract has to be tested at the wire. These
-// tests are the other half: the wallet is lnurlcash-kit as published, the
+// tests are the other half: the wallet is @lnurlcash/kit as published, the
 // mint is this one, and the verdict on what happened comes from
 // lnurlcash-conformance's grader rather than from an assertion written
 // next to the code it grades. Until the kit could send `h` there was no
@@ -42,7 +43,7 @@ const buyNote = async (mint: TestMint, amountMsat: number) => {
   // matters: a wallet that asks first and generates afterwards can lose
   // the secret to a crash and have paid for nothing.
   const secret = bytesToHex(randomBytes(32))
-  const quote = await requestInvoice(pay.callback, amountMsat, {h: hashK1(secret)})
+  const quote = await requestInvoice(pay.callback, amountMsat, hashK1(secret))
   // Said of this quote, not of the mint in general - the payRequest can be
   // cached, this cannot.
   expect(quote.mintToHash).toBe(true)
@@ -114,7 +115,7 @@ describe('buying a bound note, kit to mint to grader', () => {
     )
     expect(pay.commentAllowed).toBeGreaterThanOrEqual(64)
     expect(pay.mintToHash).toBe(true)
-    expect(address.mintToHash).toBe(true)
+    expect((address as unknown as {mintToHash?: boolean}).mintToHash).toBe(true)
 
     const report = createReport()
     await gradeMint(`${mint.moneyer.url}/.well-known/lnurlp/mint`, report)

@@ -3,7 +3,7 @@ import {finalizeEvent, generateSecretKey, getPublicKey, verifyEvent, type Event}
 import {unwrapEvent} from 'nostr-tools/nip59'
 import {matchFilter, type Filter} from 'nostr-tools/filter'
 import {bytesToHex} from '@noble/hashes/utils.js'
-import {fetchNoteInfo, hashK1, rotateNote} from 'lnurlcash-kit'
+import {fetchNoteInfo, hashK1, rotateNote} from '@lnurlcash/kit'
 import {configFromEnv} from '../src/config.ts'
 import {INBOX_RELAYS_KIND, NOTE_KIND, type NostrTransport} from '../src/zap.ts'
 import {startMint, waitFor, type TestMint} from './helpers.ts'

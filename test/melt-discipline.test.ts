@@ -1,5 +1,5 @@
 import {afterEach, describe, expect, it} from 'vitest'
-import {buildNoteUrl, hashK1, meltNote, fetchNoteInfo, PendingNoteError} from 'lnurlcash-kit'
+import {buildNoteUrl, hashK1, meltNote, fetchNoteInfo, ServiceError} from '@lnurlcash/kit'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
 import {NoteStore} from '../src/store.ts'
 import {createMoneyer} from '../src/server.ts'
@@ -187,11 +187,9 @@ describe('melt discipline', () => {
     await meltNote((await fetchNoteInfo(url)).callback, k1, pr)
     await waitFor(() => noteState(mint, hashK1(k1)) === 'pending')
 
-    // The same refusal the mutating callback already gives, and the same
-    // one the reference mint gives here - and the kit classifies it as the
-    // typed error a wallet acts on, rather than an unknown-note answer that
-    // would have it write the note off.
-    await expect(fetchNoteInfo(url)).rejects.toThrow(PendingNoteError)
+    // Informational pending is the reference mint's literal service reason;
+    // the product layer classifies it without changing the shared kit.
+    await expect(fetchNoteInfo(url)).rejects.toMatchObject({constructor: ServiceError, reason: 'pending'})
   })
 
   it('refuses to melt into a hash the funding source already paid for someone else', async () => {

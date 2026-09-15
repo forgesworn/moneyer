@@ -7,11 +7,10 @@ import {
   fetchNoteInfo,
   fetchPayRequest,
   hashK1,
-  mintFeeBand,
   rotateNote,
   rotateNoteWithHash,
   verifyNoteSignature
-} from 'lnurlcash-kit'
+} from '@lnurlcash/kit'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
@@ -20,7 +19,7 @@ import {mkdtempSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {NoteStore} from '../src/store.ts'
-import {freshK1, startMint, type TestMint} from './helpers.ts'
+import {freshK1, mintFeeBand, startMint, type TestMint} from './helpers.ts'
 
 // Naming the note you are buying.
 //
@@ -55,7 +54,7 @@ type CallbackReply = {
   mint?: {h: string; amount: number; sig?: string}
 }
 
-// The pay callback called directly. lnurlcash-kit can send `h` now, and
+// The pay callback called directly. @lnurlcash/kit can send `h` now, and
 // test/bound-mint-e2e.test.ts drives the whole purchase through it, but
 // these cases stay on the raw wire on purpose: most of them send shapes a
 // wallet library refuses client-side, and refusing to send is not the same
@@ -159,10 +158,9 @@ describe('minting to a named note', () => {
     const after = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, secret))
     expect(after.maxWithdrawable).toBe(21_000)
     const rotated = await rotateNote(after.callback, secret)
-    // The rotated note holds the full 21,000 msat, which is the value the
-    // buyer paid for and nobody else ever held. It is a plain note, so it
-    // is unsigned; the settlement receipt above is what authenticated it.
-    expect(rotated.signature).toBeUndefined()
+    // The rotated note holds the full 21,000 msat, and carries the
+    // reference format's legacy raw signature over its hash and value.
+    expect(verifyNoteSignature(rotated.k1, 21_000, rotated.signature!, mint.moneyer.signer.pubkey)).toBe(true)
     const held = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, rotated.k1))
     expect(held.maxWithdrawable).toBe(21_000)
   })

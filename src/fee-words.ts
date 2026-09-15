@@ -4,7 +4,7 @@
 //
 // The raw pair is spelled out deliberately. The machine-readable line
 // beside it in the payRequest metadata is "Mint fees: 5000,1000" - the
-// shape lnurlcash-kit parses, anchored and digits-only, so it cannot
+// shape @lnurlcash/kit parses, anchored and digits-only, so it cannot
 // carry its own units - and a reader who has not parsed LUD-25 reads
 // both numbers as satoshis. A tester who thinks the fee is 5000 sats on
 // a 10k sat mint has been told something alarming and false, so the

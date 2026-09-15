@@ -3,7 +3,7 @@ import {
   NoteSpentError,
   NoteUnknownError,
   PendingNoteError,
-  ServiceRejectedError,
+  ServiceError,
   buildNoteUrl,
   fetchInvoiceVerification,
   fetchMintAddress,
@@ -13,14 +13,13 @@ import {
   hashK1,
   mergeNotes,
   meltNote,
-  mintFeeBand,
   probeBurnedNote,
   requestInvoice,
   rotateNote,
   settleNote,
   splitNote,
   verifyNoteSignature
-} from 'lnurlcash-kit'
+} from '@lnurlcash/kit'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {readFileSync} from 'node:fs'
 import {npubEncode} from 'nostr-tools/nip19'
@@ -28,9 +27,9 @@ import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
 import {createFakeBackend, FAKE_LOCAL_BALANCE_MSAT} from '../src/backends/fake.ts'
 import {createMoneyer} from '../src/server.ts'
 import {MINT_KNOWS, MINT_KNOWS_HEADING} from '../src/privacy.ts'
-import {freshK1, startMint, testConfig, waitFor, type TestMint} from './helpers.ts'
+import {freshK1, mintFeeBand, startMint, testConfig, waitFor, type TestMint} from './helpers.ts'
 
-// moneyer driven end to end by lnurlcash-kit - the same client every
+// moneyer driven end to end by @lnurlcash/kit - the same client every
 // wallet built on the kit would bring. The kit's own strictness (k1 echo,
 // amount checks, error taxonomy) grades the mint on every call.
 
@@ -46,11 +45,11 @@ afterEach(async () => {
 
 const requestMintInvoice = async (callback: string, amountMsat: number) => {
   const secret = freshK1()
-  const invoice = await requestInvoice(callback, amountMsat, {h: hashK1(secret)})
+  const invoice = await requestInvoice(callback, amountMsat, hashK1(secret))
   return {invoice, secret}
 }
 
-// The discovery endpoint carries more than lnurlcash-kit's type names
+// The discovery endpoint carries more than @lnurlcash/kit's type names
 // today; the kit passes unknown fields through, so read the JSON directly.
 type Discovery = Record<string, unknown> & {previousPubkeys?: string[]}
 const discovery = async (mint: TestMint, user = 'mint'): Promise<Discovery> =>
@@ -110,7 +109,7 @@ describe('discovery', () => {
     const info = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/_`)
     expect(info.tag).toBe('payRequest')
     await expect(fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/nobody`)).rejects.toThrow(
-      ServiceRejectedError
+      ServiceError
     )
   })
 
@@ -118,7 +117,8 @@ describe('discovery', () => {
     const mint = await start()
     const info = await fetchMintAddress(`${mint.moneyer.url}/.well-known/lnurlw/mint`)
     expect(info.callback).toBe(`${mint.moneyer.url}/w`)
-    expect(info.nodePubkey).toBe(mint.moneyer.signer!.pubkey)
+    expect(info.mintPubkey).toBe(mint.moneyer.signer!.pubkey)
+    expect(info.nodePubkey).toBeUndefined()
     expect(info.payLink).toContain('/.well-known/lnurlp/mint')
   })
 
@@ -322,7 +322,8 @@ describe('minting', () => {
     await expect(
       fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, preimage!))
     ).rejects.toThrow(NoteUnknownError)
-    // settled onto a plain secret, which is unsigned by design
+    // Invoice settlement creates a legacy note but has no mutation response
+    // on which to return the raw Part 1 signature.
     expect(settled.signature).toBeUndefined()
   })
 
@@ -335,7 +336,7 @@ describe('minting', () => {
 
     const info = await fetchNoteInfoByHash(pay.withdrawLink!, hashK1(secret))
     expect(info.maxWithdrawable).toBe(21_000)
-    expect(info.k1).toBeUndefined()
+    expect(info).not.toHaveProperty('k1')
     expect(mint.moneyer.store.noteById(hashK1(secret))?.state).toBe('outstanding')
   })
 
@@ -353,21 +354,21 @@ describe('minting', () => {
   it('refuses amounts out of range and dust nets', async () => {
     const mint = await start({mintFee: {baseFeeMsat: 2000, feePpm: 0}})
     const pay = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
-    await expect(requestInvoice(pay.callback, 500)).rejects.toThrow(ServiceRejectedError)
-    await expect(requestInvoice(pay.callback, 200_000_000)).rejects.toThrow(ServiceRejectedError)
+    await expect(requestInvoice(pay.callback, 500)).rejects.toThrow(ServiceError)
+    await expect(requestInvoice(pay.callback, 200_000_000)).rejects.toThrow(ServiceError)
     // nets 500 msat after the 2 sat base fee - below the 1 sat dust floor
-    await expect(requestInvoice(pay.callback, 2_500)).rejects.toThrow(ServiceRejectedError)
+    await expect(requestInvoice(pay.callback, 2_500)).rejects.toThrow(ServiceError)
   })
 
   it('refuses to mint while sunsetting but still lets holders leave', async () => {
     const mint = await start({sunset: true})
     const pay = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
-    await expect(requestInvoice(pay.callback, 21_000)).rejects.toThrow(ServiceRejectedError)
+    await expect(requestInvoice(pay.callback, 21_000)).rejects.toThrow(ServiceError)
 
     const note = creditNote(mint, 21_000)
     const info = await fetchNoteInfo(note.url)
     // splits grow liabilities - refused
-    await expect(splitNote(info.callback, [note.k1], 1_000)).rejects.toThrow(ServiceRejectedError)
+    await expect(splitNote(info.callback, [note.k1], 1_000)).rejects.toThrow(ServiceError)
     // rotate does not - allowed
     const rotated = await rotateNote(info.callback, note.k1)
     expect(rotated.k1).toBeDefined()
@@ -401,7 +402,7 @@ describe('the informational GET', () => {
     const note = creditNote(mint, 42_000)
     const info = await fetchNoteInfoByHash(`${mint.moneyer.url}/w`, hashK1(note.k1))
     expect(info.maxWithdrawable).toBe(42_000)
-    expect(info.k1).toBeUndefined()
+    expect(info).not.toHaveProperty('k1')
     expect(info.mintPubkey).toBe(mint.moneyer.signer!.pubkey)
 
     await expect(fetchNoteInfoByHash(`${mint.moneyer.url}/w`, hashK1(freshK1()))).rejects.toThrow(
@@ -414,27 +415,25 @@ describe('the informational GET', () => {
     const both = new URL(`${mint.moneyer.url}/w`)
     both.searchParams.set('k1', note.k1)
     both.searchParams.set('h', hashK1(note.k1))
-    await expect(fetchNoteInfo(both.toString())).rejects.toThrow(NoteUnknownError)
+    expect(await (await fetch(both)).json()).toMatchObject({status: 'ERROR', reason: 'Unknown note.'})
   })
 })
 
 describe('mutations', () => {
-  it('rotates, splits and merges with value conserved, and plain outputs unsigned', async () => {
+  it('rotates, splits and merges with value conserved and signed outputs', async () => {
     const mint = await start()
     const note = creditNote(mint, 100_000)
     const info = await fetchNoteInfo(note.url)
 
-    // LUD-25 Part 2 certifies cp1 notes only; a hash output carries no
-    // signature, which the kit reads as unverifiable rather than invalid.
     const rotated = await rotateNote(info.callback, note.k1)
-    expect(rotated.signature).toBeUndefined()
+    expect(verifyNoteSignature(rotated.k1, 100_000, rotated.signature!, mint.moneyer.signer.pubkey)).toBe(true)
 
     const split = await splitNote(info.callback, [rotated.k1], 30_000)
-    expect(split.signature).toBeUndefined()
-    expect(split.changeSignature).toBeUndefined()
+    expect(verifyNoteSignature(split.k1, 30_000, split.signature!, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(verifyNoteSignature(split.change, 70_000, split.changeSignature!, mint.moneyer.signer.pubkey)).toBe(true)
 
     const merged = await mergeNotes(info.callback, [split.k1, split.change])
-    expect(merged.signature).toBeUndefined()
+    expect(verifyNoteSignature(merged.k1, 100_000, merged.signature!, mint.moneyer.signer.pubkey)).toBe(true)
 
     const finalInfo = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, merged.k1))
     expect(finalInfo.maxWithdrawable).toBe(100_000)
@@ -447,7 +446,7 @@ describe('mutations', () => {
     const b = creditNote(mint, 5_000)
     const info = await fetchNoteInfo(a.url)
     await rotateNote(info.callback, b.k1)
-    await expect(mergeNotes(info.callback, [a.k1, b.k1])).rejects.toThrow(ServiceRejectedError)
+    await expect(mergeNotes(info.callback, [a.k1, b.k1])).rejects.toThrow(NoteSpentError)
     // the refusal burned nothing
     expect((await fetchNoteInfo(a.url)).maxWithdrawable).toBe(10_000)
   })
@@ -456,7 +455,7 @@ describe('mutations', () => {
     const mint = await start()
     const note = creditNote(mint, 10_000)
     const info = await fetchNoteInfo(note.url)
-    await expect(mergeNotes(info.callback, [note.k1, note.k1])).rejects.toThrow(ServiceRejectedError)
+    await expect(mergeNotes(info.callback, [note.k1, note.k1])).rejects.toThrow(NoteSpentError)
     expect((await fetchNoteInfo(note.url)).maxWithdrawable).toBe(10_000)
   })
 
@@ -464,7 +463,7 @@ describe('mutations', () => {
     const mint = await start()
     const note = creditNote(mint, 10_000)
     const info = await fetchNoteInfo(note.url)
-    await expect(splitNote(info.callback, [note.k1], 10_000)).rejects.toThrow(ServiceRejectedError)
+    await expect(splitNote(info.callback, [note.k1], 10_000)).rejects.toThrow(ServiceError)
   })
 
   it('refuses an output hash that collides with a live note', async () => {
@@ -472,8 +471,8 @@ describe('mutations', () => {
     const a = creditNote(mint, 10_000)
     const b = creditNote(mint, 5_000)
     const info = await fetchNoteInfo(a.url)
-    const {rotateNoteWithHash} = await import('lnurlcash-kit')
-    await expect(rotateNoteWithHash(info.callback, a.k1, hashK1(b.k1))).rejects.toThrow(ServiceRejectedError)
+    const {rotateNoteWithHash} = await import('@lnurlcash/kit')
+    await expect(rotateNoteWithHash(info.callback, a.k1, hashK1(b.k1))).rejects.toThrow(NoteSpentError)
     expect((await fetchNoteInfo(a.url)).maxWithdrawable).toBe(10_000)
   })
 })
@@ -504,9 +503,9 @@ describe('split and merge fees', () => {
     const note = creditNote(mint, 10_000)
     const info = await fetchNoteInfo(note.url)
     // change before the fee is 500 - cannot cover it
-    await expect(splitNote(info.callback, [note.k1], 9_500)).rejects.toThrow(ServiceRejectedError)
+    await expect(splitNote(info.callback, [note.k1], 9_500)).rejects.toThrow(ServiceError)
     // change would land at exactly nothing
-    await expect(splitNote(info.callback, [note.k1], 9_000)).rejects.toThrow(ServiceRejectedError)
+    await expect(splitNote(info.callback, [note.k1], 9_000)).rejects.toThrow(ServiceError)
     // the refusals burned nothing
     expect((await fetchNoteInfo(note.url)).maxWithdrawable).toBe(10_000)
   })
@@ -605,7 +604,7 @@ describe('melting', () => {
     const info = await fetchNoteInfo(note.url)
 
     await expect(meltNote(info.callback, note.k1, fakeBolt11({paymentHashHex: freshK1()}))).rejects.toThrow(
-      ServiceRejectedError
+      ServiceError
     )
     // Refused whole: the note is untouched and can still be melted by a
     // wallet that invoices its exact value.
@@ -622,19 +621,19 @@ describe('melting', () => {
 
     await expect(
       meltNote(info.callback, note.k1, fakeBolt11({amountMsat: 20_000, paymentHashHex: freshK1()}))
-    ).rejects.toThrow(ServiceRejectedError)
+    ).rejects.toThrow(ServiceError)
 
     // an invoice this mint itself issued
     const pay = await fetchPayRequest(`${mint.moneyer.url}/.well-known/lnurlp/mint`)
     const {invoice: own} = await requestMintInvoice(pay.callback, 21_000)
-    await expect(meltNote(info.callback, note.k1, own.pr)).rejects.toThrow(ServiceRejectedError)
+    await expect(meltNote(info.callback, note.k1, own.pr)).rejects.toThrow(ServiceError)
 
     // an invoice an earlier melt already used
     const other = creditNote(mint, 21_000)
     const pr = fakeBolt11({amountMsat: 21_000, paymentHashHex: freshK1()})
     await meltNote(info.callback, other.k1, pr)
     await waitFor(() => mint.moneyer.store.noteById(hashK1(other.k1))?.state === 'burned')
-    await expect(meltNote(info.callback, note.k1, pr)).rejects.toThrow(ServiceRejectedError)
+    await expect(meltNote(info.callback, note.k1, pr)).rejects.toThrow(ServiceError)
   })
 })
 
