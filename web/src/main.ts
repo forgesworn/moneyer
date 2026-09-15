@@ -646,7 +646,7 @@ const viewHome = (): void => {
       <footer>
         <div class="microprint">${Array(8).fill('MONEYER · PAYS THE BEARER ON DEMAND · LNURLCASH · NOT LEGAL TENDER · ').join('')}</div>
         <div class="luds">${LUDS.map(([n, href]) => `<a href="${href}" target="_blank" rel="noopener" title="LUD-${n}">LUD-${n}</a>`).join('')}</div>
-        <p>An independent implementation of the <a href="https://github.com/lnurl/luds/pull/301" target="_blank" rel="noopener">LNURLcash draft</a>, graded by <a href="https://github.com/TheCryptoDonkey/lnurlcash-conformance" target="_blank" rel="noopener">lnurlcash-conformance</a>.<br/>
+        <p>An independent implementation of the <a href="https://github.com/lnurl/luds/pull/301" target="_blank" rel="noopener">LNURLcash draft</a>, graded by <a href="https://github.com/lnurlcash/lnurlcash-conformance" target="_blank" rel="noopener">lnurlcash-conformance</a>.<br/>
         Source: <a href="https://github.com/forgesworn/moneyer" target="_blank" rel="noopener">forgesworn/moneyer</a> · a companion wallet: <a href="https://github.com/forgesworn/notecase" target="_blank" rel="noopener">forgesworn/notecase</a></p>
       </footer>
     </div>`)
