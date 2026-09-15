@@ -115,7 +115,7 @@ ${config.tosUrl ? `<div class="kv"><span>terms</span><a href="${escapeHtml(confi
 <h2>${escapeHtml(MINT_KNOWS_HEADING)}</h2>
 ${MINT_KNOWS.map(paragraph => `<p>${escapeHtml(paragraph)}</p>`).join('\n')}
 </section>
-<p class="small">Works with any LUD-25 wallet - <a href="https://github.com/forgesworn/notecase">notecase</a> among them. Verify a note offline against the signing key above.<br/>Independent implementation of the <a href="https://github.com/lnurl/luds/pull/301">LNURLcash draft</a> - graded by <a href="https://github.com/TheCryptoDonkey/lnurlcash-conformance">lnurlcash-conformance</a>.</p>
+<p class="small">Works with any LUD-25 wallet - <a href="https://github.com/forgesworn/notecase">notecase</a> among them. Verify a note offline against the signing key above.<br/>Independent implementation of the <a href="https://github.com/lnurl/luds/pull/301">LNURLcash draft</a> - graded by <a href="https://github.com/lnurlcash/lnurlcash-conformance">lnurlcash-conformance</a>.</p>
 </main>
 </body>
 </html>`
