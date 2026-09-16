@@ -7,9 +7,9 @@ import {
   verifyNoteSignature,
   verifyNoteSignatureHash
 } from '@lnurlcash/kit'
-import {secp256k1} from '@noble/curves/secp256k1.js'
+import {schnorr, secp256k1} from '@noble/curves/secp256k1.js'
 import {sha256} from '@noble/hashes/sha2.js'
-import {bytesToHex, hexToBytes, randomBytes, utf8ToBytes} from '@noble/hashes/utils.js'
+import {bytesToHex, randomBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
 import {freshK1, startMint, type TestMint} from './helpers.ts'
@@ -44,7 +44,8 @@ type NoteKey = {sk: Uint8Array; id: string; cp1: string; ck1: string}
 const freshKey = (): NoteKey => {
   const sk = secp256k1.utils.randomSecretKey()
   const pk = secp256k1.getPublicKey(sk, true).slice(1)
-  return {sk, id: bytesToHex(pk), cp1: encodeCp1(pk), ck1: encodeCk1(signNoteOwnership(sk))}
+  const {pubkeyXOnly, signature} = signNoteOwnership(sk)
+  return {sk, id: bytesToHex(pk), cp1: encodeCp1(pk), ck1: encodeCk1(pubkeyXOnly, signature)}
 }
 
 const creditKey = (mint: TestMint, amountMsat: number): NoteKey => {
@@ -59,26 +60,18 @@ const creditSecret = (mint: TestMint, amountMsat: number): string => {
   return k1
 }
 
-const OWNERSHIP_DIGEST = sha256(sha256(utf8ToBytes('Lightning Signed Message:LNURLcash')))
-const N = secp256k1.Point.Fn.ORDER
-
-// The same note's ck1, spelled differently: (r, n - s) with the recovery id
-// flipped recovers to the same key, and anyone holding a ck1 can make it.
-const malleated = (key: NoteKey): string => {
-  const sig = signNoteOwnership(key.sk)
-  const s = BigInt(`0x${bytesToHex(sig.subarray(32, 64))}`)
-  const flipped = hexToBytes((N - s).toString(16).padStart(64, '0'))
-  return encodeCk1(new Uint8Array([...sig.subarray(0, 32), ...flipped, sig[64]! ^ 1]))
-}
+const OWNERSHIP_DIGEST = sha256(utf8ToBytes('LNURLcash'))
 
 // A second, equally valid ck1 the key's owner can make with a fresh nonce.
+// BIP-340 Schnorr, unlike the old recoverable-ECDSA scheme, has no cheap
+// bit-flip malleation of a FIXED signature into another one that still
+// verifies (there is no separate "flip s and the recovery id" trick): the
+// only way to get a second valid ck1 for one key is a fresh nonce, same as
+// this.
 const resigned = (key: NoteKey): string => {
-  const lead = secp256k1.sign(OWNERSHIP_DIGEST, key.sk, {
-    format: 'recovered',
-    prehash: false,
-    extraEntropy: randomBytes(32)
-  })
-  return encodeCk1(new Uint8Array([...lead.subarray(1), lead[0]!]))
+  const pubkeyXOnly = secp256k1.getPublicKey(key.sk, true).slice(1)
+  const signature = schnorr.sign(OWNERSHIP_DIGEST, key.sk, randomBytes(32))
+  return encodeCk1(pubkeyXOnly, signature)
 }
 
 const certifies = (mint: TestMint, key: NoteKey, amountMsat: number, sig: unknown): boolean =>
@@ -244,7 +237,6 @@ describe('a note named twice', () => {
   // Two ck1 strings for one note would count its value twice in a merge.
   for (const [how, spell] of [
     ['the same ck1 twice', (key: NoteKey) => key.ck1],
-    ['a malleated ck1', malleated],
     ['a second signature by the same key', resigned]
   ] as const) {
     it(`is refused when spelled as ${how}, with nothing burned`, async () => {

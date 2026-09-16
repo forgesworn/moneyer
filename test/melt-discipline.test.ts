@@ -1,8 +1,9 @@
 import {afterEach, describe, expect, it} from 'vitest'
-import {buildNoteUrl, hashK1, meltNote, fetchNoteInfo, ServiceError} from '@lnurlcash/kit'
+import {buildNoteUrl, hashK1, meltNote, fetchNoteInfo, PendingNoteError} from '@lnurlcash/kit'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
 import {NoteStore} from '../src/store.ts'
 import {createMoneyer} from '../src/server.ts'
+import {claimMintedNote} from '../src/claim.ts'
 import {freshK1, startMint, testConfig, waitFor, type TestMint} from './helpers.ts'
 import {mkdtempSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
@@ -188,8 +189,29 @@ describe('melt discipline', () => {
     await waitFor(() => noteState(mint, hashK1(k1)) === 'pending')
 
     // Informational pending is the reference mint's literal service reason;
-    // the product layer classifies it without changing the shared kit.
-    await expect(fetchNoteInfo(url)).rejects.toMatchObject({constructor: ServiceError, reason: 'pending'})
+    // the kit itself now classifies it as PendingNoteError (2026-09,
+    // matching lnurlcash-core's Error::NotePending), not a generic
+    // ServiceError the product layer has to interpret.
+    await expect(fetchNoteInfo(url)).rejects.toBeInstanceOf(PendingNoteError)
+  })
+
+  it('claimMintedNote reports pending rather than throwing once a melt reserves the note', async () => {
+    // A bound-mint quote polls claimMintedNote while waiting for the
+    // wallet-chosen secret to appear. It must classify a melt-in-flight note
+    // as pending, the same as the raw informational GET above - not throw,
+    // which would surface as an unreachable-mint error to the poller.
+    const mint = (active = await startMint())
+    mint.backend.control.setPayMode('ambiguous-pending')
+    const k1 = freshK1()
+    mint.moneyer.store.creditNote(hashK1(k1), 21_000)
+    const url = buildNoteUrl(`${mint.moneyer.url}/w`, k1, 21_000)
+
+    const pr = fakeBolt11({amountMsat: 21_000, paymentHashHex: hashK1(freshK1())})
+    await meltNote((await fetchNoteInfo(url)).callback, k1, pr)
+    await waitFor(() => noteState(mint, hashK1(k1)) === 'pending')
+
+    const claim = await claimMintedNote(`${mint.moneyer.url}/w`, k1)
+    expect(claim.state).toBe('pending')
   })
 
   it('refuses to melt into a hash the funding source already paid for someone else', async () => {

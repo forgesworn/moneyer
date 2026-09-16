@@ -3,7 +3,6 @@ import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
 import {finalizeEvent} from 'nostr-tools/pure'
 import {
   applyMintFee,
-  decodeCk1,
   decodeCp1,
   encodeCs1WithAmount,
   grossUpForMintFee,
@@ -54,9 +53,8 @@ const namedRef = (value: string): NoteRef | null => {
 // to the same note, so inputs are compared by ref, never by k1 string.
 const spentRef = (k1: string): NoteRef | null => {
   if (HEX32.test(k1)) return {id: hashK1(k1), cp1: false}
-  const signature = decodeCk1(k1)
-  const pubkey = signature ? recoverNoteOwnershipPubkey(signature) : null
-  return pubkey ? {id: bytesToHex(pubkey), cp1: true} : null
+  const owner = recoverNoteOwnershipPubkey(k1)
+  return owner ? {id: bytesToHex(owner.pubkeyXOnly), cp1: true} : null
 }
 
 // LUD-25 renamed `h` to `p` on the lookup and `h`/`h2` to `p1`/`p2` on the
