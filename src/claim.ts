@@ -1,7 +1,7 @@
 import {
   NoteSpentError,
   NoteUnknownError,
-  ServiceError,
+  PendingNoteError,
   buildNoteUrl,
   fetchNoteInfo,
   isPreimage
@@ -35,9 +35,7 @@ export const claimMintedNote = async (withdrawLink: string, k1: string): Promise
       callback: info.callback
     }
   } catch (error) {
-    if (error instanceof ServiceError && error.reason.trim().toLowerCase() === 'pending') {
-      return {...blank, state: 'pending'}
-    }
+    if (error instanceof PendingNoteError) return {...blank, state: 'pending'}
     if (error instanceof NoteSpentError) return {...blank, state: 'spent'}
     if (error instanceof NoteUnknownError) return {...blank, state: 'unminted'}
     throw error

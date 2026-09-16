@@ -118,8 +118,10 @@ const holder = (): Holder => {
 const keyAt = (who: Holder, index: number): string =>
   bytesToHex(deriveNotePubkey(who.branchPubkey, who.chainCode, index))
 
-const ck1At = (who: Holder, index: number): string =>
-  encodeCk1(signNoteOwnership(deriveNoteSecretKey(who.branchPrivateKey, who.chainCode, index)))
+const ck1At = (who: Holder, index: number): string => {
+  const {pubkeyXOnly, signature} = signNoteOwnership(deriveNoteSecretKey(who.branchPrivateKey, who.chainCode, index))
+  return encodeCk1(pubkeyXOnly, signature)
+}
 
 // Asks for an invoice to `name`, and returns its payment hash.
 const invoice = async (mint: TestMint, name: string, amountMsat: number): Promise<string> => {

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.16.0 - 2026-09-16
+
+- Bump `@lnurlcash/kit` from 0.14.2 to 0.18.1: the previous pin predated the
+  entire Schnorr `ck1` migration, so any note produced by a current wallet
+  was already unverifiable here. Brings the `ck1`/address-proof sha256
+  digest fix (signing `sha256(message)` instead of the raw string, matching
+  most conforming Schnorr signers) and a legacy-read fallback for notes
+  minted under the intermediate raw-message scheme.
+- `spentRef` follows `recoverNoteOwnershipPubkey`'s new signature: it now
+  takes the `ck1` string directly and returns `{pubkeyXOnly, legacy}` rather
+  than raw recovered bytes.
+- `claimMintedNote` now classifies a melt-in-flight note by catching the
+  kit's own `PendingNoteError`, replacing a `ServiceError{reason:'pending'}`
+  check the kit stopped throwing. The bump had silently broken this: an
+  unhandled `PendingNoteError` would have surfaced to a bound-mint quote's
+  poller as an unreachable-mint error rather than "pending" - untested
+  before this bump, now covered.
+
 ## 0.15.0 - 2026-09-15
 
 - Use `@lnurlcash/kit` 0.14 as the protocol implementation. Removed kit
