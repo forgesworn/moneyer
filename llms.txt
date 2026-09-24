@@ -71,6 +71,7 @@ Client library to build against a mint: @lnurlcash/kit
 ## Library API
 
 createMoneyer(config, deps?) -> {url, port, store, backend, signer, reconcile, close}
+  url is the full origin (http://host:port), port already included
 verifyAnnouncement(content, mintPubkey) -> {valid, document}
   kind 30078 / d=lnurlcash-mint: a mint announcing itself, content = its
   discovery document + sig by the note signing key. MONEYER_ANNOUNCE=true,
@@ -84,12 +85,22 @@ configFromEnv(env?) -> MoneyerConfig     MONEYER_* environment variables
 createFakeBackend() -> LightningBackend with .control test hooks
 createClnBackend({url, rune}) / createLndBackend({url, macaroon})
 createNoteSigner(privHex) -> {pubkey, sign(noteId, amountMsat)}
+  privHex is a secp256k1 private key, as MONEYER_SIGNING_KEY; zero is rejected
 fakeBolt11({amountMsat, paymentHashHex, memo?}) -> decodable, unpayable invoice
 NoteStore - SQLite store; notes by sha256(k1), never secrets
-runMelt(job, deps) / reconcilePendingMelts(deps) -> the melt discipline: burn
-  only on confirmed payment, restore only on confirmed non-payment
-buildStats({liabilities, ...}) / signStats(stats, privHex) / verifyStatsSnapshot(content, pubkey)
-  -> kind 30078 signed liabilities snapshot, for third-party solvency checks
+runMelt(job, deps) -> Promise<void> / reconcilePendingMelts(store, backend, inFlight, log?)
+  the melt discipline: burn only on confirmed payment, restore only on confirmed
+  non-payment. The /w/cb handler drives both; outcomes land in the store, not in a
+  return value. job = {paymentHash, noteId, pr, amountMsat, payAmountMsat?},
+  deps = {store, backend, feeLimitMsat(amountMsat), confirmDelaysMs?, log?}
+buildStats({liabilities, localBalanceMsat?, reconciledAt?, at?, ratioOnly?}) -> MintStats
+  liabilities = store.liabilities() -> {outstandingMsat, outstandingNotes,
+  pendingMsat, pendingMelts, oldestPendingMeltAgeSecs}
+statsSnapshotContent(stats, privHex) -> string   the published content: stats JSON plus sig
+verifyStatsSnapshot(content, pubkey) -> {valid, stats}
+signStats(stats, privHex) -> string   the signature alone, hex r || s || recovery id
+  kind 30078, d = lnurlcash-liabilities: a signed liabilities snapshot for
+  third-party solvency checks
 
 ## Endpoints
 
