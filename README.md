@@ -43,7 +43,11 @@ lesson, that behaviour is kept deliberately and tested.
 
 ## Run
 
-Install the published package and build it:
+```bash
+npm install @forgesworn/moneyer
+```
+
+Or build from source:
 
 ```bash
 git clone https://github.com/forgesworn/moneyer
