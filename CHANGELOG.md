@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.2 - 2026-09-24
+
+Documentation only; no code changes.
+
+- `llms.txt` notes that `verifyStatsSnapshot` returns `stats: null` when the
+  content is not JSON or carries no signature, and returns the parsed stats
+  with `valid: false` for a bad signature, so check `valid` first.
+
 ## 0.16.1 - 2026-09-24
 
 Documentation only; no code changes.
