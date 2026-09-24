@@ -4,6 +4,23 @@
   "description": "An LNURLcash (LUD-25) mint - strikes Lightning bearer notes. Independent implementation, cln/lnd funding sources, SQLite, zero HTTP framework.",
   "author": "TheCryptoDonkey",
   "license": "MIT",
+  "keywords": [
+    "lnurlcash",
+    "lud-25",
+    "lud-12",
+    "lud-03",
+    "lud-06",
+    "lnurl",
+    "lightning-network",
+    "bitcoin",
+    "mint",
+    "bearer-notes",
+    "cln",
+    "lnd",
+    "sqlite",
+    "nostr",
+    "typescript"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/forgesworn/moneyer.git"
