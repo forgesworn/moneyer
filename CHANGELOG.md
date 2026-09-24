@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.16.1 - 2026-09-24
+
+Documentation only; no code changes.
+
+- `llms.txt` gives the real signatures of `buildStats`,
+  `statsSnapshotContent`, `verifyStatsSnapshot`, `signStats`, `runMelt` and
+  `reconcilePendingMelts`, with the melt job and deps shapes, and notes that
+  the `url` `createMoneyer` returns is the full origin, port included.
+- The README carries the npm install command.
+- package.json gains search keywords.
+
 ## 0.16.0 - 2026-09-16
 
 - Bump `@lnurlcash/kit` from 0.14.2 to 0.18.1: the previous pin predated the
