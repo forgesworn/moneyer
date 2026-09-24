@@ -97,7 +97,9 @@ buildStats({liabilities, localBalanceMsat?, reconciledAt?, at?, ratioOnly?}) -> 
   liabilities = store.liabilities() -> {outstandingMsat, outstandingNotes,
   pendingMsat, pendingMelts, oldestPendingMeltAgeSecs}
 statsSnapshotContent(stats, privHex) -> string   the published content: stats JSON plus sig
-verifyStatsSnapshot(content, pubkey) -> {valid, stats}
+verifyStatsSnapshot(content, pubkey) -> {valid, stats: MintStats | null}
+  stats is null when content is not JSON or carries no sig; a bad signature
+  still returns the parsed stats with valid false, so check valid first
 signStats(stats, privHex) -> string   the signature alone, hex r || s || recovery id
   kind 30078, d = lnurlcash-liabilities: a signed liabilities snapshot for
   third-party solvency checks
