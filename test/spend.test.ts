@@ -11,23 +11,27 @@ import {
   checkTimeClaim,
   decodeNote,
   decodeSpend,
+  deriveNotePubkey,
   encodeCk1,
   encodeCp1,
   encodeCw1,
   keyPathSighash,
+  NOTE_PURPOSE_CHANGE,
+  NOTE_PURPOSE_LIGHTNING_ADDRESS,
+  NOTE_PURPOSE_WALLET,
   spendPrevout,
   spendSigMsg,
   verifySpend,
   type Spend
 } from '../src/spend.ts'
 
-// LUD-25's own test vectors 3 and 5, then lnurl-wallet's spends as the
+// LUD-25's own test vectors 1 and 2 (the mint's half), 3 and 5, then lnurl-wallet's spends as the
 // reference mint's kernel checks them.
 
-const SK0 = '944a9631dbda27cf989e27df8be7317a5a9dfb517a6b71358d175f58dd2dc99f'
-const Q0 = 'aad3a0e36c083eb0d2d92ec0860977dc46d10c952f31830e6443b1faa1997634'
+const SK0 = '3616b02290a133da73e758a54dbff1bf6439b4067a820cb51ca873fa4a13a96a'
+const Q0 = '690ac33892c64aa53874b0066ab1332f0ef45cb7c0e017eae0828916f52aa99f'
 const VECTOR3_CK1 =
-  'ck14tf6pcmvpqltp5ke9mqgvzthm3rdzry49uccxrnygwcl4gvewc6g8wlplczy60g4e5wp3dyyz6xr07fpse9flp0fy50cg4a4w64av6eprdctjlan6cu9dt38re9nu08etk5w3dmknlhuxzwcm3ycjysw3c9dpmpy'
+  'ck1dy9vxwyjce922wr5kqrx4vfn9u80gh9hcrsp06hqs2y3daf24x0lcdy378rtefeae4mt8r7xk75z4mc0r7n8yykwkltlvndug8ytlem7pkmqwa3yhughhtdktmlqg30rs2kf7nx4stm6tnpkd3awk3vq6smm20wz'
 const VECTOR5_PREIMAGE = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f'
 const VECTOR5_H = '630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd'
 const VECTOR5_Q = 'd18b619687343df2fc7a47e1daf25260b909bb563fb4b4b11e59e2bd64880982'
@@ -39,13 +43,41 @@ const NOW = 1_800_000_000
 const verified = (spend: Spend, domains: string[], lockedAt = 0, now = NOW) =>
   verifySpend(spend, {outputKey: spend.outputKey, domains, now, lockedAt})
 
+// A cx1 branch's note keys, per purpose. The mint derives these to prove a
+// name's branch (purpose 0, index 0) and to credit its payments (purpose 2).
+describe('test vectors 1 and 2: note keys', () => {
+  const key = (p: string, chain: string, purpose: number, index: number) =>
+    bytesToHex(deriveNotePubkey(hexToBytes(p), hexToBytes(chain), purpose, index))
+  const P1 = 'b783d2930dc053a971f019054ca43e7c9de50e0769de872dd1ddde5d0bf4c9d1'
+  const C1 = 'ab91cc11aea395ea6b62292a6147f51ef4150ebea04e745137b68719e238f904'
+  const P2 = '64885a9cab93ec051761b8a0b80e1854a61865878d58f72a365dfd640850f675'
+  const C2 = '6b95795f9807ada85c8ca50ec93c921483a183abfed4a3b4abe6b95c89880306'
+
+  it('derives vector 1 on every purpose (odd-y branch key)', () => {
+    expect(key(P1, C1, NOTE_PURPOSE_WALLET, 0)).toBe(Q0)
+    expect(key(P1, C1, NOTE_PURPOSE_WALLET, 1)).toBe('3e76b56c1a90bc64c4bf594be91a3cb8861a150232da92705cff6ee3714bb384')
+    expect(key(P1, C1, NOTE_PURPOSE_WALLET, 2)).toBe('20146298f9b6439027ead2b4a15738a10721b26c425b58c634baac6147ee7fc7')
+    expect(key(P1, C1, NOTE_PURPOSE_WALLET, 5)).toBe('c64ed8f1cd0f4d23aba8ddd739d9ae7e1a7ba2719cb54437384498fbc73788b3')
+    expect(key(P1, C1, NOTE_PURPOSE_CHANGE, 0)).toBe('e9a2d71a45a4a5a22d3378bdd761f0b3b2622b6a939d24c779668379352d8274')
+    expect(key(P1, C1, NOTE_PURPOSE_LIGHTNING_ADDRESS, 0)).toBe(
+      'acff3482453b4671e410d2158fd93ab7d4c3e8c1b9554ce1190deb021fd2cd4c'
+    )
+  })
+
+  it('derives vector 2 (even-y branch key)', () => {
+    expect(key(P2, C2, NOTE_PURPOSE_WALLET, 0)).toBe('01fee34e378bf66de6afa1bfa6e30f5c89551fd92bc1b089dca93c52b7ab61bc')
+    expect(key(P2, C2, NOTE_PURPOSE_WALLET, 1)).toBe('7c5434c33d25bc24d98c35b2610dd484cb2a3d4a7854de354f7747e9b10597b8')
+    expect(key(P2, C2, NOTE_PURPOSE_WALLET, 2)).toBe('2517f8221468e33cb7aafdffde313950446da0cf4d790c9b758b373dc67a5686')
+  })
+})
+
 describe('test vector 3: key-path spend', () => {
   it('builds the prevout, SigMsg and sighash the spec shows', () => {
     expect(bytesToHex(spendPrevout('mint.example'))).toBe('d5ac2de3423432e37713bcb133cfea7938ff6b2f8ea4174dfcec84bea705d6b2')
     const sigMsg = spendSigMsg({outputKey: hexToBytes(Q0), domain: 'mint.example', locktime: 0, sequence: 0xffffffff})
     expect(sigMsg.length).toBe(174)
     expect(bytesToHex(keyPathSighash(hexToBytes(Q0), 'mint.example'))).toBe(
-      'b8933a42090297a1f80d7f1fc0023ec1aa2ab36a7df332520f0dacf07f617943'
+      'e97bb6831a916ff83919046f50a39c18ab98bf43079cf68cd364d251f7de527f'
     )
   })
 

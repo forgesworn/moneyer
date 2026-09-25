@@ -1,6 +1,6 @@
 import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
-import {decodeCx1, deriveNotePubkey, encodeCp1, hashK1} from '@lnurlcash/kit'
-import {bearerNoteIdOfPreimage} from './spend.ts'
+import {decodeCx1, encodeCp1, hashK1} from '@lnurlcash/kit'
+import {NOTE_PURPOSE_LIGHTNING_ADDRESS, bearerNoteIdOfPreimage, deriveNotePubkey} from './spend.ts'
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import {finalizeEvent, getPublicKey, type Event, type UnsignedEvent} from 'nostr-tools/pure'
 import {SimplePool} from 'nostr-tools/pool'
@@ -142,7 +142,10 @@ const metadataFor = (
     ['text/plain', `Zap ${name}@${host}: arrives as a Lightning bearer note${feeInWords ? ` (${feeInWords})` : ''}`],
     ['text/identifier', `${name}@${host}`]
   ]
-  if (internalTransfer) metadata.push(['text/xpub', internalTransfer])
+  // `text/cpub`, never the older `text/xpub` as well: a wallet that reads
+  // `text/xpub` derives the index without a purpose, and would transfer to
+  // a key the payee never scans. Without it that wallet pays by Lightning.
+  if (internalTransfer) metadata.push(['text/cpub', internalTransfer])
   if (mintFeeLine) metadata.push(['text/plain', mintFeeLine])
   return JSON.stringify(metadata)
 }
@@ -174,7 +177,7 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
       let index = registered.nextIndex
       for (let tries = 0; tries < 1000; tries++, index++) {
         try {
-          const noteId = bytesToHex(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, index))
+          const noteId = bytesToHex(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, NOTE_PURPOSE_LIGHTNING_ADDRESS, index))
           if (!store.outputIdInUse(noteId)) {
             internalTransfer = `${registered.cx1}:${index}`
             break
@@ -288,7 +291,7 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
     wrap(
       row,
       [...wrapTags(row), ['i', String(index)]],
-      `${origin}/w?p=${encodeCp1(hexToBytes(noteId))}&sig=${deps.certify(noteId, row.netMsat)}&i=${index}`
+      `${origin}/w?p=${encodeCp1(hexToBytes(noteId))}&c=${deps.certify(noteId, row.netMsat)}&i=${index}`
     )
 
   // NIP-57 receipt, without the preimage tag: it is optional there, and
@@ -315,7 +318,7 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
         const receipt = buildReceipt(row)
         const keyAt = (index: number): string | null => {
           try {
-            return bytesToHex(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, index))
+            return bytesToHex(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, NOTE_PURPOSE_LIGHTNING_ADDRESS, index))
           } catch {
             return null
           }

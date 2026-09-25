@@ -378,8 +378,10 @@ mint (or pass a `scriptVerifier` to `createMoneyer`). Without one such a
 spend is refused with a reason and the note stays outstanding; a verifier
 that crashes, errors or stalls refuses too, and never accepts.
 
-Every note gets a certificate, `cs1` over hex(Q) and its amount: `sig` on
-the informational GET, `sig`/`sig2` on every rotate, split and merge. The
+Every note gets a certificate, `cs1` over hex(Q) and its amount: `c` on
+the informational GET, `c`/`c2` on every rotate, split and merge. The same
+value also goes out as the older `sig`/`sig2` until wallets reading only
+those have moved on. The
 informational GET verifies a `k1` in full before answering, so a wallet
 checking a note it was handed learns whether its spend really opens it.
 
@@ -575,19 +577,20 @@ of the holder's note keys in turn, but never spend one.
 
 A `cx1` is public, so pointing a name at one has to be proven by the branch
 itself, as LUD-25 requires: the body also carries `"sig"`, a BIP-340
-signature by the branch's index-0 key over
+signature by the branch's purpose-0 index-0 key over
 `sha256("LNURLcash:register:<domain>:<name>")`, `<domain>` being this mint's
 hostname. Changing the branch later is proven by the branch on file, not the
 new one, and clearing it takes the same signature over
 `LNURLcash:unregister:...` instead. The NIP-98 key still decides who owns
 the name; the proof decides where it may pay.
 
-When a zap to the name settles, the mint takes the next index on the branch
-and credits the note to that key. It skips any key already holding a note,
+When a zap to the name settles, the mint takes the next index on the
+branch's Lightning Address purpose (LUD-25's purpose 2, a counter of its
+own) and credits the note to that key. It skips any key already holding a note,
 and an invoice nobody pays takes no index at all, so a wallet scanning its
 branch never meets a gap it did not make. The gift wrap still goes to the
 owner's npub, but it carries no secret: a lookup URL,
-`https://mint.example/w?p=<cp1>&sig=<amount-bearing-cs1>&i=<index>`, plus an
+`https://mint.example/w?p=<cp1>&c=<amount-bearing-cs1>&i=<index>`, plus an
 `i` tag. The wallet derives the key at that index, checks the certificate,
 and spends with its own `ck1`. A wallet that only knows note URLs sees no
 `k1` and passes the wrap by, and the note waits at the mint for a scan of the
@@ -600,8 +603,10 @@ in `MONEYER_ZAP_NAMES`.
 Sending a new branch starts it at index 0; sending the same one again keeps
 its place. Zap receipts are unchanged.
 
-The name's payRequest also publishes `['text/xpub', '<cx1>:<index>']`, where
-the index is the next key not already present in this mint's ledger. A payer
+The name's payRequest also publishes `['text/cpub', '<cx1>:<index>']`, where
+the index is the next purpose-2 key not already present in this mint's
+ledger. It never publishes the older `text/xpub`: a wallet reading that
+derives without a purpose, so it pays by Lightning instead. A payer
 already holding a note here can therefore rotate, split or merge straight to
 that `cp1` without creating or routing a Lightning invoice. The index is a
 hint: if another payment wins the key first, Moneyer returns LUD-25's

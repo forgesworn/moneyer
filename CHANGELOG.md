@@ -6,6 +6,26 @@ LUD-25's unified taproot model (lnurl/luds 6e865b1). Every note is now a
 BIP-341 taproot output key Q, and that is what the mint stores, burns and
 certifies.
 
+Also LUD-25's derivation purposes and renames (lnurl/luds 1286380..50d740a),
+which change every key a `cx1` derives:
+
+- **Lightning Address payments land on purpose 2.** A name's zaps are
+  credited at `tagged_hash("LNURLcash/derive", P || chaincode || ser32(2) ||
+  ser32(i))`, a counter of their own, and every name's counter restarts at 0
+  once on upgrade. The internal-transfer hint counts the same purpose.
+- **The address proof is by the purpose-0 index-0 key.** A `sig` made with
+  the old unpurposed index-0 key no longer verifies, so a wallet must be
+  upgraded before it can set or clear a name's `cx1`.
+- **`c` and `c2`.** Certificates go out as `c`/`c2`, with the older
+  `sig`/`sig2` alongside carrying the same value for now. A key wrap's
+  lookup URL carries `&c=`.
+- **`text/cpub`, not `text/xpub`.** The payRequest's internal-transfer hint
+  is renamed, and the old name is dropped rather than doubled: a wallet
+  reading `text/xpub` derives without a purpose and would transfer to a key
+  the payee never scans. It pays by Lightning instead.
+- The older `ck1` shapes are still accepted although the reference mint has
+  dropped them: Heartwood firmware still signs the 65-byte one.
+
 - **Notes are keyed by Q.** A comment, `p`, `p1` or `p2` of 64 hex is a
   bearer note's h, credited at the Q of its `OP_SHA256 <h> OP_EQUAL` leaf
   under the NUMS key; a `cp1` is Q itself, and is refused unless Q is on the
@@ -29,8 +49,8 @@ certifies.
   verifier) or a `scriptVerifier` is passed to `createMoneyer`; without one
   it is refused with a reason and the note left outstanding. A verifier
   that crashes, errors or stalls refuses, never accepts.
-- **Every note is certified.** The callback's `sig`/`sig2` and the
-  informational GET's `sig` are a `cs1` over hex(Q) for bearer notes as well
+- **Every note is certified.** The callback's `c`/`c2` and the
+  informational GET's `c` are a `cs1` over hex(Q) for bearer notes as well
   as key notes, reversing 0.14.0's "a plain note is unsigned". The LUD-21
   bound receipt still signs exactly the `h` it repeats.
 - **The informational GET verifies the spend in full.** A `ck1` whose

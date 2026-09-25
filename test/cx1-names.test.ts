@@ -7,17 +7,17 @@ import {bytesToHex, randomBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {schnorr, secp256k1} from '@noble/curves/secp256k1.js'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {
-  deriveNotePubkey,
-  deriveNoteSecretKey,
+  ServiceError,
+  decodeCx1,
   encodeCk1,
   encodeCp1,
   encodeCx1,
   hashK1,
-  parseInternalTransferHint,
-  payInternalTransfer,
+  mergeNotesWithHash,
   signNoteOwnership,
 } from '@lnurlcash/kit'
-import {NIP98_KIND} from '../src/names.ts'
+import {NOTE_PURPOSE_LIGHTNING_ADDRESS, NOTE_PURPOSE_WALLET, deriveNotePubkey} from '../src/spend.ts'
+import {NIP98_KIND, addressProofVerifies} from '../src/names.ts'
 import {NOTE_KIND, type NostrTransport} from '../src/zap.ts'
 import {startMint, waitFor, type TestMint, noteIdOf, certifiesNote} from './helpers.ts'
 
@@ -85,7 +85,7 @@ const proof = (who: Holder, action: 'register' | 'unregister', name: string, dom
   bytesToHex(
     schnorr.sign(
       sha256(utf8ToBytes(`LNURLcash:${action}:${domain}:${name}`)),
-      deriveNoteSecretKey(who.branchPrivateKey, who.chainCode, 0),
+      deriveNoteSecretKey(who, NOTE_PURPOSE_WALLET, 0),
       new Uint8Array(32)
     )
   )
@@ -128,11 +128,29 @@ const holder = (): Holder => {
   }
 }
 
+// The wallet's half of LUD-25's derivation, which the kit pinned here
+// predates: the branch key taken at even y, plus the same tweak the mint
+// adds to derive the public key.
+const N = secp256k1.Point.CURVE().n
+const toBigInt = (bytes: Uint8Array): bigint => BigInt(`0x${bytesToHex(bytes)}`)
+const ser32 = (n: number): Uint8Array => {
+  const bytes = new Uint8Array(4)
+  new DataView(bytes.buffer).setUint32(0, n, false)
+  return bytes
+}
+const deriveNoteSecretKey = (who: Holder, purpose: number, index: number): Uint8Array => {
+  let d = toBigInt(who.branchPrivateKey)
+  if (secp256k1.getPublicKey(who.branchPrivateKey, true)[0] === 3) d = N - d
+  const t = toBigInt(schnorr.utils.taggedHash('LNURLcash/derive', who.branchPubkey, who.chainCode, ser32(purpose), ser32(index))) % N
+  return Uint8Array.from(Buffer.from(((d + t) % N).toString(16).padStart(64, '0'), 'hex'))
+}
+
+// Lightning Address payments land on their own purpose of the branch.
 const keyAt = (who: Holder, index: number): string =>
-  bytesToHex(deriveNotePubkey(who.branchPubkey, who.chainCode, index))
+  bytesToHex(deriveNotePubkey(who.branchPubkey, who.chainCode, NOTE_PURPOSE_LIGHTNING_ADDRESS, index))
 
 const ck1At = (who: Holder, index: number): string => {
-  const {pubkeyXOnly, signature} = signNoteOwnership(deriveNoteSecretKey(who.branchPrivateKey, who.chainCode, index))
+  const {pubkeyXOnly, signature} = signNoteOwnership(deriveNoteSecretKey(who, NOTE_PURPOSE_LIGHTNING_ADDRESS, index))
   return encodeCk1(pubkeyXOnly, signature)
 }
 
@@ -183,7 +201,7 @@ describe('a name with a cx1', () => {
     expect(first.url.searchParams.has('amount')).toBe(false)
     expect(first.rumor.tags).toContainEqual(['i', '0'])
     // the holder checks the certificate, then opens the note with its own key
-    expect(certifiesNote(ck1At(alice, 0), 20_000, first.url.searchParams.get('sig')!, mint.moneyer.signer.pubkey)).toBe(
+    expect(certifiesNote(ck1At(alice, 0), 20_000, first.url.searchParams.get('c')!, mint.moneyer.signer.pubkey)).toBe(
       true
     )
     const opened = (await (await fetch(`${mint.moneyer.url}/w?k1=${ck1At(alice, 0)}`)).json()) as {maxWithdrawable: number}
@@ -211,34 +229,51 @@ describe('a name with a cx1', () => {
     mint.moneyer.store.creditNote(keyAt(alice, 0), 5_000)
 
     const pay = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/alice`)).json()) as {metadata: string}
-    expect(JSON.parse(pay.metadata)).toContainEqual(['text/xpub', `${alice.cx1}:1`])
+    const entries = JSON.parse(pay.metadata) as unknown[][]
+    expect(entries).toContainEqual(['text/cpub', `${alice.cx1}:1`])
+    // Never the older name: a wallet reading it would derive without a purpose.
+    expect(entries.some(entry => entry[0] === 'text/xpub')).toBe(false)
 
     const custodial = holder()
     await claim(mint, custodial.sk, {name: 'bobby'})
     const oldPay = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/bobby`)).json()) as {metadata: string}
-    expect(JSON.parse(oldPay.metadata).some((entry: unknown[]) => entry[0] === 'text/xpub')).toBe(false)
+    expect(JSON.parse(oldPay.metadata).some((entry: unknown[]) => entry[0] === 'text/cpub')).toBe(false)
   })
 
-  it('accepts a reference-kit internal transfer and advances after a raced hint', async () => {
+  it('accepts an internal transfer on the address purpose and advances after a raced hint', async () => {
     const {mint} = await start()
     const alice = holder()
     await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
     const pay = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/alice`)).json()) as {metadata: string}
-    const hint = parseInternalTransferHint(pay.metadata)
-    expect(hint?.startIndex).toBe(0)
+    const hint = (JSON.parse(pay.metadata) as string[][]).find(entry => entry[0] === 'text/cpub')![1]!
+    const sep = hint.lastIndexOf(':')
+    const branch = decodeCx1(hint.slice(0, sep))!
+    expect(Number(hint.slice(sep + 1))).toBe(0)
 
     // The payRequest was honest when read, but another transfer wins index
     // zero before this one lands. The specific collision answer lets the
-    // kit retry at one without risking the input.
+    // payer retry at one without risking the input, as LUD-25's internal
+    // transfer does (the kit pinned here predates purposes, so this walks
+    // the same merge by hand).
     mint.moneyer.store.creditNote(keyAt(alice, 0), 5_000)
     const source = bytesToHex(randomBytes(32))
     mint.moneyer.store.creditNote(noteIdOf(source), 21_000)
-    const paid = await payInternalTransfer(`${mint.moneyer.url}/w/cb`, [source], 21_000, 21_000, hint!)
+    let index = Number(hint.slice(sep + 1))
+    let signature: string | undefined
+    for (;; index++) {
+      const output = encodeCp1(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, NOTE_PURPOSE_LIGHTNING_ADDRESS, index))
+      try {
+        signature = (await mergeNotesWithHash(`${mint.moneyer.url}/w/cb`, [source], output)).signature
+        break
+      } catch (err) {
+        if (!(err instanceof ServiceError && err.reason === 'already in use') || index > 3) throw err
+      }
+    }
 
-    expect(paid).toMatchObject({kind: 'merge', index: 1})
+    expect(index).toBe(1)
     expect(mint.moneyer.store.noteById(noteIdOf(source))?.state).toBe('burned')
     expect(mint.moneyer.store.noteById(keyAt(alice, 1))).toMatchObject({amountMsat: 21_000, state: 'outstanding'})
-    expect(certifiesNote(ck1At(alice, 1), 21_000, paid.signature, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(ck1At(alice, 1), 21_000, signature!, mint.moneyer.signer.pubkey)).toBe(true)
   })
 
   it('skips a key that already names a note', async () => {
@@ -329,5 +364,30 @@ describe('a name with a cx1', () => {
     const bob = holder()
     store.putOperatorZapName('alice', bob.pubkey)
     expect(store.zapName('alice')).toMatchObject({pubkey: bob.pubkey, cx1: null, nextIndex: 0})
+  })
+})
+
+// LUD-25's test vector 2: the address proof, by the branch's purpose-0
+// index-0 key.
+describe('the address proof', () => {
+  const cx1 =
+    'cx1vjy9489tj0kq29mphzstsrsc2jnpsev834v0w23kth7kgzzs7e6kh9tet7vq0tdgtjx22rkf8jfpfqapsw4la49rkj47dw2u3xyqxpspgvxpa'
+  const register =
+    '9169a81db3372d8bb8a080f271f8036192131d4ed02596c0baa181613fdc5d6e17b3230b01f510a759fdb6c46b53671e57678f57ac0a6a3deb6300761225adc7'
+  const unregister =
+    'fcc6a96f560d6505bfc475d8c2d4383047f2ece6593412af9b2834913af60f108b6e194cef31c377a23a051f8c80c1660efc2313b7876a2f80bc1f0f423c7835'
+  const check = (action: 'register' | 'unregister', sig: string, domains = ['cash.example.com'], name = 'alice') =>
+    addressProofVerifies({cx1, action, name, domains, sig})
+
+  it("verifies the spec's register and unregister signatures", () => {
+    expect(check('register', register)).toBe(true)
+    expect(check('unregister', unregister)).toBe(true)
+  })
+
+  it('binds each to its action, name and domain', () => {
+    expect(check('unregister', register)).toBe(false)
+    expect(check('register', register, ['cash.example.com'], 'bob')).toBe(false)
+    expect(check('register', register, ['mint.example'])).toBe(false)
+    expect(check('register', register, ['mint.example', 'cash.example.com'])).toBe(true)
   })
 })

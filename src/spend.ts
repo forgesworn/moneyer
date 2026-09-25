@@ -137,6 +137,40 @@ export const bearerNoteId = (hHex: string): string => bytesToHex(bearerNote(hexT
 export const bearerNoteIdOfPreimage = (k1Hex: string): string =>
   bytesToHex(bearerNote(sha256(hexToBytes(k1Hex.toLowerCase()))).outputKey)
 
+// ---- a cx1 branch's note keys ----
+//
+//   t    = tagged_hash("LNURLcash/derive", P || chaincode || ser32(purpose) || ser32(i)) mod n
+//   pk_i = x(lift_x(P) + t·G)
+//
+// `purpose` splits one branch into independent counters so a wallet's own
+// indices and this mint's auto-minted ones never meet. The mint derives on
+// two: the wallet's index 0 proves a name's cx1, and Lightning Address
+// payments land on their own counter.
+export const NOTE_PURPOSE_WALLET = 0
+export const NOTE_PURPOSE_CHANGE = 1
+export const NOTE_PURPOSE_LIGHTNING_ADDRESS = 2
+
+const ser32 = (n: number): Uint8Array => {
+  const bytes = new Uint8Array(4)
+  new DataView(bytes.buffer).setUint32(0, n, false)
+  return bytes
+}
+
+// Throws for the vanishingly rare tweak that lands on the point at infinity.
+export const deriveNotePubkey = (
+  branchPubkeyXOnly: Uint8Array,
+  chainCode: Uint8Array,
+  purpose: number,
+  index: number
+): Uint8Array => {
+  const p = liftX(branchPubkeyXOnly)
+  if (!p) throw new Error('branch key is not on the curve')
+  const t =
+    BigInt(`0x${bytesToHex(taggedHash('LNURLcash/derive', branchPubkeyXOnly, chainCode, ser32(purpose), ser32(index)))}`) %
+    CURVE_ORDER
+  return schnorr.utils.pointToBytes(p.add(secp256k1.Point.BASE.multiply(t)))
+}
+
 // The `h` inside a leaf, if the leaf is exactly a bearer note's.
 const bearerHashOfLeaf = (script: Uint8Array): Uint8Array | null =>
   script.length === 35 && script[0] === 0xa8 && script[1] === 0x20 && script[34] === 0x87 ? script.subarray(2, 34) : null

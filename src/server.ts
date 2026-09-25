@@ -163,9 +163,13 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   // every note, bearer notes included.
   const certify = (q: string, amountMsat: number): string =>
     encodeCs1WithAmount(amountMsat, hexToBytes(signer.sign(q, amountMsat)))
-  const certified = (field: 'sig' | 'sig2', q: string, amountMsat: number): {sig?: string; sig2?: string} => ({
-    [field]: certify(q, amountMsat)
-  })
+  // LUD-25 names the certificate `c` (and `c2` for split change). The old
+  // `sig`/`sig2` go out alongside it until the wallets that read only those
+  // have moved on.
+  const certified = (field: 'c' | 'c2', q: string, amountMsat: number): Record<string, string> => {
+    const cs1 = certify(q, amountMsat)
+    return field === 'c' ? {c: cs1, sig: cs1} : {c2: cs1, sig2: cs1}
+  }
 
   // Every host this mint answers on. A spend's signature is bound to one
   // domain, and a note travels as a URL naming one host, so a signature
@@ -1080,7 +1084,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // Every note gets its certificate here, so a wallet need not rotate
         // just to obtain one, and a recovery scan probing ?p= gets one free.
         // A certificate is no spend authorisation, so p needs no proof.
-        ...certified('sig', noteQ, note.amountMsat)
+        ...certified('c', noteQ, note.amountMsat)
       })
     }
 
@@ -1167,8 +1171,8 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         if (first) {
           return send({
             status: 'OK',
-            ...certified('sig', o1!.q, first.amountMsat),
-            ...(second ? certified('sig2', o2!.q, second.amountMsat) : {})
+            ...certified('c', o1!.q, first.amountMsat),
+            ...(second ? certified('c2', o2!.q, second.amountMsat) : {})
           })
         }
       }
@@ -1302,8 +1306,8 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         }
         return send({
           status: 'OK',
-          ...certified('sig', o1!.q, amount),
-          ...certified('sig2', o2!.q, changeMsat)
+          ...certified('c', o1!.q, amount),
+          ...certified('c2', o2!.q, changeMsat)
         })
       }
 
@@ -1319,7 +1323,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         if (err instanceof OutputCollisionError) return fail(IN_USE)
         return fail(INVALID_K1)
       }
-      return send({status: 'OK', ...certified('sig', o1!.q, mergedMsat)})
+      return send({status: 'OK', ...certified('c', o1!.q, mergedMsat)})
     }
 
     return fail('Not found.', 404)

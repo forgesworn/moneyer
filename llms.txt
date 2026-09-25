@@ -127,8 +127,8 @@ signStats(stats, privHex) -> string   the signature alone, hex r || s || recover
 POST /names                 claim a name (NIP-98; the signer owns it); body {name, note?, cx1?}.
                             The owner may resend {name, cx1} to set a branch, or cx1: null to clear it
 /z/cb/{name}                zap invoice for a name. With a cx1 the settled note is credited to the
-                            holder's next key, and the kind 2525 gift wrap carries no secret:
-                            /w?p=<cp1>&sig=<amount-bearing-cs1>&i=<index> plus an `i` tag. The index is
+                            holder's next key on the branch's Lightning Address purpose (2), and the kind 2525 gift wrap carries no secret:
+                            /w?p=<cp1>&c=<amount-bearing-cs1>&i=<index> plus an `i` tag. The index is
                             taken at settlement, never at the invoice, and occupied keys are skipped
-                            Its payRequest metadata publishes text/xpub = cx1:<next-free-index> for
+                            Its payRequest metadata publishes text/cpub = cx1:<next-free-purpose-2-index> for
                             same-mint rotate/split/merge transfers; a raced key returns "already in use"

@@ -267,6 +267,16 @@ export class NoteStore {
       .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('unnamed_verify_cutover', ?)")
       .run(String(Date.now()))
     this.indexLegacyIds()
+    // Lightning Address payments now land on their own purpose of a name's
+    // branch, a counter that starts at 0. The indices on file counted the
+    // old single ladder, so restart them once rather than open a gap a
+    // wallet's scan could stop short of.
+    this.tx(() => {
+      const moved = this.db
+        .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('address_purpose_counter', ?)")
+        .run(String(Date.now()))
+      if (moved.changes > 0) this.db.exec('UPDATE zap_names SET next_index = 0')
+    })
   }
 
   // Once per database: the Q each id written before notes were keyed by Q

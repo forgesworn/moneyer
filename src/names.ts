@@ -2,9 +2,9 @@ import {sha256} from '@noble/hashes/sha2.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {verifyEvent, type Event} from 'nostr-tools/pure'
-import {decodeCx1, deriveNotePubkey, noteK1} from '@lnurlcash/kit'
+import {decodeCx1, noteK1} from '@lnurlcash/kit'
 import {NotePendingError, NoteStore, NoteUnavailableError, type NoteRow} from './store.ts'
-import {decodeSpend} from './spend.ts'
+import {NOTE_PURPOSE_WALLET, decodeSpend, deriveNotePubkey} from './spend.ts'
 
 // Self-service lightning addresses.
 //
@@ -112,7 +112,7 @@ export const addressProofVerifies = (args: {
   if (!branch) return false
   let firstKey: Uint8Array
   try {
-    firstKey = deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, 0)
+    firstKey = deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, NOTE_PURPOSE_WALLET, 0)
   } catch {
     return false
   }

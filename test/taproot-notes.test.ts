@@ -337,3 +337,54 @@ describe('a database from before notes were keyed by Q', () => {
     expect(mint.moneyer.store.noteById(hashK1(k1))?.state).toBe('outstanding')
   })
 })
+
+describe('certificates', () => {
+  it('are named c and c2, with the older sig and sig2 alongside', async () => {
+    const mint = await start()
+    const k1 = creditBearer(mint, 50_000)
+    const looked = await info(mint, [['k1', k1]])
+    expect(looked.c).toBeTypeOf('string')
+    expect(looked.sig).toBe(looked.c)
+    expect(certifiesNote(k1, 50_000, looked.c as string, mint.moneyer.signer.pubkey)).toBe(true)
+
+    const [to, change] = [freshK1(), freshK1()]
+    const split = await callback(mint, [
+      ['k1', k1],
+      ['amount', '20000'],
+      ['p1', hashK1(to)],
+      ['p2', hashK1(change)]
+    ])
+    expect(split.status).toBe('OK')
+    expect([split.sig, split.sig2]).toEqual([split.c, split.c2])
+    expect(certifiesNote(to, 20_000, split.c as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(change, 30_000, split.c2 as string, mint.moneyer.signer.pubkey)).toBe(true)
+  })
+})
+
+describe('a database from before address purposes', () => {
+  it("restarts each name's address counter once, and never again", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'moneyer-purpose-'))
+    cleanups.push(() => rmSync(dir, {recursive: true, force: true}))
+    const path = join(dir, 'mint.sqlite')
+    const store = new NoteStore(path)
+    store.putOperatorZapName('alice', 'aa'.repeat(32))
+    store.close()
+    const setIndex = (index: number, forget: boolean) => {
+      const db = new DatabaseSync(path)
+      db.prepare("UPDATE zap_names SET next_index = ? WHERE name = 'alice'").run(index)
+      if (forget) db.exec("DELETE FROM meta WHERE key = 'address_purpose_counter'")
+      db.close()
+    }
+    const indexOnOpen = (): number | undefined => {
+      const reopened = new NoteStore(path)
+      const index = reopened.zapName('alice')?.nextIndex
+      reopened.close()
+      return index
+    }
+
+    setIndex(3, true)
+    expect(indexOnOpen()).toBe(0)
+    setIndex(4, false)
+    expect(indexOnOpen()).toBe(4)
+  })
+})
