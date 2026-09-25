@@ -109,6 +109,20 @@ contact <contact> to exercise them.
 - **Not a regulated financial service**, and not offered as one.
   <The operator is not authorised or registered by <regulator>.>
 
+### Scripts and timelocks
+
+A note may be locked to a script, and this mint checks every script the
+same way: it verifies the spend it is shown and nothing about why the
+note was locked. It runs no oracle, offers no contracts, and takes no
+part in any arrangement between the people a script names. A timelock is
+judged against this mint's own clock: it is the mint's promise, not a
+guarantee enforced by the Bitcoin network.
+
+Do not use this mint to stake bets, run a lottery or offer any other
+gambling, whatever script expresses it. The operator may stop verifying
+script spends at any time; a note that needs one then waits, outstanding,
+until verification returns or the mint winds down.
+
 ### Use
 
 Use this mint lawfully. Do not use it if you are designated under UK, UN,

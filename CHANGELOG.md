@@ -1,5 +1,61 @@
 # Changelog
 
+## Unreleased
+
+LUD-25's unified taproot model (lnurl/luds 6e865b1). Every note is now a
+BIP-341 taproot output key Q, and that is what the mint stores, burns and
+certifies.
+
+- **Notes are keyed by Q.** A comment, `p`, `p1` or `p2` of 64 hex is a
+  bearer note's h, credited at the Q of its `OP_SHA256 <h> OP_EQUAL` leaf
+  under the NUMS key; a `cp1` is Q itself, and is refused unless Q is on the
+  curve. A 64-hex value there never names a key note any more: that is how
+  the spec reads it now.
+- **`ck1` is bound to this mint.** Its signature is over the key-path
+  sighash of the canonical spend transaction, whose prevout commits to the
+  domain, so a `ck1` seen by one mint cannot be spent at another. Any of the
+  mint's own hosts counts: `MONEYER_PUBLIC_ORIGIN`'s and
+  `MONEYER_ONION_URL`'s. The older `ck1`s (Schnorr over `sha256("LNURLcash")`
+  or the raw string, and the 65-byte recoverable shape) are still accepted,
+  as the reference mint accepts them, so notes already handed out stay
+  redeemable.
+- **`cw1` script-path spends.** A bearer note's full `cw1` is the same note
+  as its preimage. Leaf versions other than `0xc0` and `OP_SUCCESSx` leaves
+  are refused, and time claims are checked against the mint's clock: Unix
+  times only, relative locks counted from when the note was credited.
+  Bearer hashlock leaves are evaluated here. Any other leaf goes to Bitcoin
+  Core's interpreter when `MONEYER_SCRIPT_VERIFIER` runs
+  `scripts/kernel-verifier.py` (lnurlcash-kernel, the reference mint's
+  verifier) or a `scriptVerifier` is passed to `createMoneyer`; without one
+  it is refused with a reason and the note left outstanding. A verifier
+  that crashes, errors or stalls refuses, never accepts.
+- **Every note is certified.** The callback's `sig`/`sig2` and the
+  informational GET's `sig` are a `cs1` over hex(Q) for bearer notes as well
+  as key notes, reversing 0.14.0's "a plain note is unsigned". The LUD-21
+  bound receipt still signs exactly the `h` it repeats.
+- **The informational GET verifies the spend in full.** A `ck1` whose
+  signature does not open its note gets `Unknown note.`, and a `cw1`'s own
+  failure reason is passed on. The `k1` is echoed exactly as sent.
+- **`already in use`.** An output, or a mint comment, naming a note that is
+  outstanding, burned, or awaited by an invoice gets LUD-25's exact reason.
+- **Retries match on Q.** A completed rotate, split or merge retried with a
+  different spelling of the same spend (a preimage for its `cw1`, say) is
+  answered as the replay it is. Mutations completed before the upgrade
+  still match under their old fingerprint.
+- **Setting a name's `cx1` needs the address proof.** `POST /names` now
+  requires `sig`, a BIP-340 signature by the branch's index-0 key over
+  `sha256("LNURLcash:register:<domain>:<name>")`, whenever a `cx1` is set,
+  or `:unregister:` whenever one is cleared. The branch on file proves any
+  change to it. NIP-98 still decides who owns the name.
+- A payment hash whose preimage would open a note, this quote's own or any
+  other, is refused before an invoice is handed out, now that notes are
+  keyed by Q rather than by h.
+- **Upgrading.** Rows written before this release keep their old ids.
+  On first start the store records, once, the Q each old id would have as a
+  bearer note (`legacy_ids`), so an old bearer note is found by its
+  preimage, `cw1`, h or `cp1`, and no new note can be credited over it.
+  Nothing is rewritten, and key notes were keyed by Q already.
+
 ## 0.16.2 - 2026-09-24
 
 Documentation only; no code changes.

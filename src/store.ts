@@ -1,29 +1,45 @@
 import {DatabaseSync} from 'node:sqlite'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, utf8ToBytes} from '@noble/hashes/utils.js'
+import {bearerNoteId} from './spend.ts'
 
-// The store holds note IDs - sha256(k1) - and never a secret. A freshly
-// minted note's id is exactly the payment hash of the invoice that funded
-// it, so the spend secret lives only with the payer (and, until claimed,
-// with the funding source, which is why wallets rotate immediately).
+// The store holds note ids and never a secret. Per LUD-25 a note is its
+// taproot output key Q, and is stored under hex(Q): the cp1 a wallet named,
+// or the Q of the bearer note whose h it named.
+//
+// Rows written before notes were keyed by Q are still here under their old
+// ids: a bearer note under h = sha256(k1), a key note under its key (which
+// is already its Q). Nothing on file tells those two apart - both are 32
+// bytes of hex - so they are not renamed. Instead `legacy_ids` maps the Q
+// every old id WOULD have as a bearer note back to that id, once, at the
+// upgrade. A key note's entry there names a note nobody can ever open, so
+// it costs nothing; a bearer note's entry is how it is found by Q.
 //
 // Everything here is synchronous on purpose: a mutation's validate-and-
 // transition happens in one SQLite transaction with no await inside it, so
 // two concurrent callbacks racing for the same note cannot both win.
 
 export type NoteState = 'outstanding' | 'pending' | 'burned'
-export type NoteRow = {id: string; amountMsat: number; state: NoteState}
+// `id` is the row's key: hex(Q), or an old id (see legacy_ids). `createdAt`
+// is when this mint credited the note, in ms - a rotate, split or merge
+// credits a fresh row - so it is where a relative timelock starts.
+export type NoteRow = {id: string; amountMsat: number; state: NoteState; createdAt: number}
 export type MintInvoiceRow = {
   paymentHash: string
   pr: string
   grossMsat: number
   netMsat: number
   settled: boolean
-  // The note id this invoice will credit on settlement, when the payer's
-  // wallet named one with `h`. Null means the old behaviour: the note is
+  // The note id this invoice will credit on settlement: hex(Q) of what the
+  // payer's wallet named. Null means the old behaviour: the note is
   // credited at the invoice's own payment hash, so the payment preimage is
   // the spend secret.
   outputId: string | null
+  // What the wallet actually named, as it named it: a bearer note's h, or
+  // hex(Q) for a cp1. The receipt echoes this, since that is what the
+  // wallet compares against. Null on rows from before notes were keyed by
+  // Q, whose outputId is itself what was named.
+  outputNamed: string | null
   createdAt: number
 }
 export type MeltRow = {
@@ -35,8 +51,8 @@ export type MeltRow = {
 }
 // A zap-to-note invoice (zap.ts). Unlike a mint invoice its payment hash
 // is NOT a note id: the payer learns the preimage on settlement, so the
-// note minted for the recipient gets a secret of its own. `noteId` is
-// sha256 of that secret once minted. The wrap and receipt are kept only
+// note minted for the recipient gets a secret of its own. `noteId` is that
+// note's id once minted. The wrap and receipt are kept only
 // until published: the wrap is ciphertext only the recipient can open,
 // and the receipt is public by design.
 export type ZapInvoiceRow = {
@@ -224,6 +240,16 @@ export class NoteStore {
     if (!nameColumns.includes('next_index')) {
       this.db.exec('ALTER TABLE zap_names ADD COLUMN next_index INTEGER NOT NULL DEFAULT 0')
     }
+    if (!invoiceColumns.includes('output_named')) {
+      this.db.exec('ALTER TABLE mint_invoices ADD COLUMN output_named TEXT')
+    }
+    // The Q of the bearer note the invoice's payment preimage would open.
+    // That preimage reaches the funding source, every hop, and /verify, so
+    // no note may ever be credited there. See outputIdInUse.
+    if (!invoiceColumns.includes('payment_q')) {
+      this.db.exec('ALTER TABLE mint_invoices ADD COLUMN payment_q TEXT')
+    }
+    this.db.exec('CREATE INDEX IF NOT EXISTS mint_invoices_payment_q ON mint_invoices (payment_q)')
 
     this.db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);')
     // The moment this mint stopped publishing preimages for notes nobody
@@ -240,6 +266,57 @@ export class NoteStore {
     this.db
       .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('unnamed_verify_cutover', ?)")
       .run(String(Date.now()))
+    this.indexLegacyIds()
+  }
+
+  // Once per database: the Q each id written before notes were keyed by Q
+  // would have as a bearer note (see the top of this file). Every note row,
+  // every note an invoice was told to credit, and every payment hash that
+  // is itself a note's id. Rows written after this run are keyed by Q
+  // already, apart from notes still to land from invoices indexed here.
+  private indexLegacyIds(): void {
+    this.db.exec('CREATE TABLE IF NOT EXISTS legacy_ids (q TEXT PRIMARY KEY, id TEXT NOT NULL)')
+    const done = this.db.prepare("SELECT 1 FROM meta WHERE key = 'legacy_ids_indexed'").get()
+    if (done) return
+    this.tx(() => {
+      const ids = this.db
+        .prepare(
+          `SELECT id FROM notes
+           UNION SELECT output_id FROM mint_invoices WHERE output_id IS NOT NULL
+           UNION SELECT payment_hash FROM mint_invoices WHERE output_id IS NULL`
+        )
+        .all() as Array<{id: string}>
+      const insert = this.db.prepare('INSERT OR IGNORE INTO legacy_ids (q, id) VALUES (?, ?)')
+      for (const {id} of ids) {
+        if (/^[0-9a-f]{64}$/.test(id)) insert.run(bearerNoteId(id), id)
+      }
+      const unmapped = this.db.prepare('SELECT payment_hash FROM mint_invoices WHERE payment_q IS NULL').all() as Array<{
+        payment_hash: string
+      }>
+      const setQ = this.db.prepare('UPDATE mint_invoices SET payment_q = ? WHERE payment_hash = ?')
+      for (const {payment_hash} of unmapped) setQ.run(bearerNoteId(payment_hash), payment_hash)
+      this.db.prepare("INSERT INTO meta (key, value) VALUES ('legacy_ids_indexed', ?)").run(String(Date.now()))
+    })
+  }
+
+  // The old id a note named by `q` is stored under, if it predates Q ids.
+  // A read-only store opened on a database no upgraded mint has touched
+  // has no index yet, and so no old ids to find.
+  legacyIdOf(q: string): string | null {
+    try {
+      const row = this.db.prepare('SELECT id FROM legacy_ids WHERE q = ?').get(q) as {id: string} | undefined
+      return row?.id ?? null
+    } catch {
+      return null
+    }
+  }
+
+  // The note whose output key is `q`, wherever it is stored.
+  noteByQ(q: string): NoteRow | null {
+    const note = this.noteById(q)
+    if (note) return note
+    const legacy = this.legacyIdOf(q)
+    return legacy ? this.noteById(legacy) : null
   }
 
   // Invoices quoted at or after this instant get no verify if they named no
@@ -263,11 +340,12 @@ export class NoteStore {
     }
   }
 
+  // By the row's own key. A request names notes by Q: see noteByQ.
   noteById(id: string): NoteRow | null {
     const row = this.db
-      .prepare('SELECT id, amount_msat, state FROM notes WHERE id = ?')
-      .get(id) as {id: string; amount_msat: number; state: NoteState} | undefined
-    return row ? {id: row.id, amountMsat: row.amount_msat, state: row.state} : null
+      .prepare('SELECT id, amount_msat, state, created_at FROM notes WHERE id = ?')
+      .get(id) as {id: string; amount_msat: number; state: NoteState; created_at: number} | undefined
+    return row ? {id: row.id, amountMsat: row.amount_msat, state: row.state, createdAt: row.created_at} : null
   }
 
   private insertNote(id: string, amountMsat: number): void {
@@ -294,11 +372,16 @@ export class NoteStore {
   // Public because the pay callback has to answer this before it asks the
   // funding source for an invoice: a wallet must never pay for a quote the
   // mint was always going to refuse.
+  //
+  // A Q that an old id maps to is in use too, burned or not: crediting a
+  // new note there would give one secret two notes.
   outputIdInUse(id: string): boolean {
     const asNote = this.db.prepare('SELECT 1 FROM notes WHERE id = ?').get(id)
     const asInvoice = this.db.prepare('SELECT 1 FROM mint_invoices WHERE payment_hash = ?').get(id)
     const asBoundOutput = this.db.prepare('SELECT 1 FROM mint_invoices WHERE output_id = ?').get(id)
-    return Boolean(asNote || asInvoice || asBoundOutput)
+    const asLegacy = this.db.prepare('SELECT 1 FROM legacy_ids WHERE q = ?').get(id)
+    const asPreimageNote = this.db.prepare('SELECT 1 FROM mint_invoices WHERE payment_q = ?').get(id)
+    return Boolean(asNote || asInvoice || asBoundOutput || asLegacy || asPreimageNote)
   }
 
   private assertOutputIdFree(id: string): void {
@@ -421,31 +504,33 @@ export class NoteStore {
     }))
   }
 
-  // `outputId` is the note id the payer's wallet asked for with `h`. Both
-  // ids are checked in the same transaction that inserts the row, so two
-  // requests racing for one id cannot both be told yes.
+  // `outputId` is hex(Q) of the note the payer's wallet named, and
+  // `outputNamed` the value it named it by. Both ids are checked in the
+  // same transaction that inserts the row, so two requests racing for one
+  // id cannot both be told yes.
   recordMintInvoice(
     paymentHash: string,
     pr: string,
     grossMsat: number,
     netMsat: number,
-    outputId: string | null = null
+    outputId: string | null = null,
+    outputNamed: string | null = outputId
   ): void {
     this.tx(() => {
       this.assertOutputIdFree(paymentHash)
       if (outputId !== null) this.assertOutputIdFree(outputId)
       this.db
         .prepare(
-          'INSERT INTO mint_invoices (payment_hash, pr, gross_msat, net_msat, settled, created_at, output_id) VALUES (?, ?, ?, ?, 0, ?, ?)'
+          'INSERT INTO mint_invoices (payment_hash, pr, gross_msat, net_msat, settled, created_at, output_id, output_named, payment_q) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)'
         )
-        .run(paymentHash, pr, grossMsat, netMsat, Date.now(), outputId)
+        .run(paymentHash, pr, grossMsat, netMsat, Date.now(), outputId, outputNamed, bearerNoteId(paymentHash))
     })
   }
 
   mintInvoiceByHash(paymentHash: string): MintInvoiceRow | null {
     const row = this.db
       .prepare(
-        'SELECT payment_hash, pr, gross_msat, net_msat, settled, output_id, created_at FROM mint_invoices WHERE payment_hash = ?'
+        'SELECT payment_hash, pr, gross_msat, net_msat, settled, output_id, output_named, created_at FROM mint_invoices WHERE payment_hash = ?'
       )
       .get(paymentHash) as
       | {
@@ -455,6 +540,7 @@ export class NoteStore {
           net_msat: number
           settled: number
           output_id: string | null
+          output_named: string | null
           created_at: number
         }
       | undefined
@@ -466,6 +552,7 @@ export class NoteStore {
       netMsat: row.net_msat,
       settled: row.settled === 1,
       outputId: row.output_id,
+      outputNamed: row.output_named,
       createdAt: row.created_at
     }
   }
@@ -487,7 +574,7 @@ export class NoteStore {
   unsettledMintInvoices(): MintInvoiceRow[] {
     const rows = this.db
       .prepare(
-        'SELECT payment_hash, pr, gross_msat, net_msat, settled, output_id, created_at FROM mint_invoices WHERE settled = 0'
+        'SELECT payment_hash, pr, gross_msat, net_msat, settled, output_id, output_named, created_at FROM mint_invoices WHERE settled = 0'
       )
       .all() as Array<{
       payment_hash: string
@@ -496,6 +583,7 @@ export class NoteStore {
       net_msat: number
       settled: number
       output_id: string | null
+      output_named: string | null
       created_at: number
     }>
     return rows.map(row => ({
@@ -505,6 +593,7 @@ export class NoteStore {
       netMsat: row.net_msat,
       settled: false,
       outputId: row.output_id,
+      outputNamed: row.output_named,
       createdAt: row.created_at
     }))
   }

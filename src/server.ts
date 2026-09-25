@@ -1,14 +1,7 @@
 import {createServer, type IncomingMessage, type ServerResponse} from 'node:http'
 import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
 import {finalizeEvent} from 'nostr-tools/pure'
-import {
-  applyMintFee,
-  decodeCp1,
-  encodeCs1WithAmount,
-  grossUpForMintFee,
-  hashK1,
-  recoverNoteOwnershipPubkey
-} from '@lnurlcash/kit'
+import {applyMintFee, encodeCs1WithAmount, grossUpForMintFee, hashK1} from '@lnurlcash/kit'
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import type {MoneyerConfig} from './config.ts'
 import {
@@ -20,6 +13,8 @@ import {
   type NoteRow
 } from './store.ts'
 import {createNoteSigner, type NoteSigner} from './signing.ts'
+import {bearerNoteId, decodeNote, decodeSpend, spendDomainOf, verifySpend, type ScriptVerifier} from './spend.ts'
+import {createKernelVerifier} from './kernel.ts'
 import {describeFee} from './fee-words.ts'
 import {createFakeBackend} from './backends/fake.ts'
 import {createClnBackend} from './backends/cln.ts'
@@ -36,26 +31,20 @@ import {CONFIG_TOKEN, loadWebAssets, type WebAssets} from './web-assets.ts'
 
 const HEX32 = /^[0-9a-f]{64}$/
 
-// A note as the wire names it. The id is 32 bytes of hex either way: a Part 1
-// note's hash, or a Part 2 note's x-only public key. `cp1` decides whether its
-// certificate goes out as cs1 or as plain hex.
-type NoteRef = {id: string; cp1: boolean}
+// A note named where a cp1 goes: a mint comment, p1/p2, ?p=. `q` is its
+// output key, hex, which is what it is stored and certified under; `named`
+// is how the wallet named it - a bearer note's h, or that same Q - which is
+// what a receipt echoes back.
+type NoteRef = {q: string; named: string}
 
-// An output or a lookup: a 64-hex hash, or a cp1 key.
 const namedRef = (value: string): NoteRef | null => {
-  if (HEX32.test(value)) return {id: value, cp1: false}
-  const pubkey = decodeCp1(value)
-  return pubkey ? {id: bytesToHex(pubkey), cp1: true} : null
+  const q = decodeNote(value)
+  return q ? {q, named: HEX32.test(value) ? value : q} : null
 }
 
-// What a k1 spends: sha256(k1) for a Part 1 secret, and for a Part 2 ck1 the
-// key its ownership signature recovers to. Different ck1 strings can recover
-// to the same note, so inputs are compared by ref, never by k1 string.
-const spentRef = (k1: string): NoteRef | null => {
-  if (HEX32.test(k1)) return {id: hashK1(k1), cp1: false}
-  const owner = recoverNoteOwnershipPubkey(k1)
-  return owner ? {id: bytesToHex(owner.pubkeyXOnly), cp1: true} : null
-}
+const INVALID_K1 = 'Invalid or already spent k1.'
+// LUD-25's own reason for an output that names a note already credited.
+const IN_USE = 'already in use'
 
 // LUD-25 renamed `h` to `p` on the lookup and `h`/`h2` to `p1`/`p2` on the
 // callback. The old names stay accepted; sending both spellings must agree.
@@ -71,7 +60,7 @@ const renamedRef = (
   return {
     present: current !== undefined || old !== undefined,
     ref: (fromCurrent !== undefined ? fromCurrent : fromOld) ?? null,
-    conflict: fromCurrent !== undefined && fromOld !== undefined && fromCurrent?.id !== fromOld?.id
+    conflict: fromCurrent !== undefined && fromOld !== undefined && fromCurrent?.q !== fromOld?.q
   }
 }
 
@@ -112,6 +101,9 @@ export type MoneyerDeps = {
   zapPollMs?: number
   // How often a signed liabilities snapshot is published. Tests shrink it.
   statsPublishMs?: number
+  // Judges a script-path spend whose leaf this mint cannot evaluate itself.
+  // Without one, such a spend is refused and its note stays outstanding.
+  scriptVerifier?: ScriptVerifier
 }
 
 // The one request body this mint reads. Capped hard: nothing here needs
@@ -162,18 +154,24 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   const store = deps.store ?? new NoteStore(config.dbPath)
   const backend = deps.backend ?? backendFor(config)
   const signer = createNoteSigner(config.signingKey)
-  // LUD-25 Part 2 signs cp1 notes only, as cs1. A hash output is a plain
-  // Match the reference mint's wire format: legacy hash outputs carry the
-  // compact signature as hex, while public-key outputs carry the same
-  // signature and amount in a cs1 certificate.
-  const certify = (ref: NoteRef, amountMsat: number): string => {
-    const signature = signer.sign(ref.id, amountMsat)
-    return ref.cp1 ? encodeCs1WithAmount(amountMsat, hexToBytes(signature)) : signature
-  }
-  const certified = (field: 'sig' | 'sig2', ref: NoteRef, amountMsat: number): {sig?: string; sig2?: string} => {
-    const sig = certify(ref, amountMsat)
-    return sig ? {[field]: sig} : {}
-  }
+  // Leaves other than a bearer hashlock go to Bitcoin Core's interpreter, in
+  // a child process, when the operator configured one (see src/kernel.ts).
+  const kernel =
+    deps.scriptVerifier === undefined && config.scriptVerifier ? createKernelVerifier({command: config.scriptVerifier, log}) : null
+  const scriptVerifier = deps.scriptVerifier ?? kernel ?? undefined
+  // LUD-25 offline verification: a cs1 over hex(Q) and the amount, for
+  // every note, bearer notes included.
+  const certify = (q: string, amountMsat: number): string =>
+    encodeCs1WithAmount(amountMsat, hexToBytes(signer.sign(q, amountMsat)))
+  const certified = (field: 'sig' | 'sig2', q: string, amountMsat: number): {sig?: string; sig2?: string} => ({
+    [field]: certify(q, amountMsat)
+  })
+
+  // Every host this mint answers on. A spend's signature is bound to one
+  // domain, and a note travels as a URL naming one host, so a signature
+  // bound to any of this mint's own hosts is this mint's. Without a
+  // configured origin (development) the host a request reached is used.
+  const configuredDomains = [...new Set([config.publicOrigin, config.onionUrl].filter(Boolean).map(origin => spendDomainOf(origin!)))]
   const webAssets = deps.webAssets === undefined ? loadWebAssets() : deps.webAssets
 
   // Node identity for the discovery endpoint, fetched once, best-effort: a
@@ -252,7 +250,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           mintFeeLine,
           feeInWords,
           verify: config.verify,
-          certify: (noteId, amountMsat) => certify({id: noteId, cp1: true}, amountMsat)!,
+          certify,
           // configFromEnv guarantees this when zap is set; a caller
           // building the config by hand gets the same rule.
           origin: config.publicOrigin ?? (() => {
@@ -262,27 +260,52 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         })
       : null
 
-  // A note whose id we do not know yet may be a settled mint invoice whose
+  // A note whose Q we do not know yet may be a settled mint invoice whose
   // claim simply has not been observed: settle it lazily against the
   // funding source, which is what makes paying an invoice mint the note.
-  const resolveNoteId = async (id: string): Promise<NoteRow | null> => {
-    const note = store.noteById(id)
+  const resolveNote = async (q: string): Promise<NoteRow | null> => {
+    const note = store.noteByQ(q)
     if (note) return note
-    // Either the invoice whose payment hash is this id - the older
-    // arrangement, where the payment preimage is the spend secret - or the
-    // invoice a payer bound to this id by naming it with `h`. In the bound
-    // case the wallet needs nothing but its own secret to claim: no
-    // /verify poll, no preimage, and so no window in which knowing the
-    // invoice is knowing the money.
-    const invoice = store.mintInvoiceByHash(id) ?? store.mintInvoiceByOutputId(id)
+    // The invoice a payer bound to this note by naming it. The wallet then
+    // needs nothing but its own secret to claim: no /verify poll, no
+    // preimage, and so no window in which knowing the invoice is knowing
+    // the money. A note from before Q ids may instead be waiting on an
+    // invoice under its old id: bound to it, or - the oldest arrangement,
+    // where the payment preimage is the spend secret - paid to it.
+    const legacy = store.legacyIdOf(q)
+    const invoice =
+      store.mintInvoiceByOutputId(q) ??
+      (legacy ? (store.mintInvoiceByOutputId(legacy) ?? store.mintInvoiceByHash(legacy)) : null)
     if (invoice && !invoice.settled && (await backend.isInvoiceSettled(invoice.paymentHash))) {
       store.settleMintInvoice(invoice.paymentHash)
-      // The note lands at the id its payer named. Looking it up by this id
-      // finds it when that id IS the name, and finds nothing when this is
-      // a bound invoice's payment hash - which is the point of binding.
-      return store.noteById(id)
+      return store.noteByQ(q)
     }
     return null
+  }
+
+  // The note a k1 opens, in whatever state, once its spend is verified
+  // against it: a ck1's signature, a cw1's leaf and witness, or a bearer
+  // preimage. A refusal otherwise. A key-path failure and an unknown note
+  // get the same reason, so the answer is no oracle; a script path's own
+  // reason is passed on, since its cw1 already discloses everything.
+  const openNote = async (
+    k1: string,
+    domains: string[]
+  ): Promise<{q: string; note: NoteRow} | {reason: string; specific: boolean}> => {
+    const spend = decodeSpend(k1)
+    if (!spend) return {reason: INVALID_K1, specific: false}
+    const q = bytesToHex(spend.outputKey)
+    const note = await resolveNote(q)
+    if (!note) return {reason: INVALID_K1, specific: false}
+    const verdict = await verifySpend(spend, {
+      outputKey: spend.outputKey,
+      domains,
+      now: Math.floor(Date.now() / 1000),
+      lockedAt: Math.floor(note.createdAt / 1000),
+      ...(scriptVerifier ? {scriptVerifier} : {})
+    })
+    if (!verdict.ok) return verdict.specific ? {reason: verdict.reason, specific: true} : {reason: INVALID_K1, specific: false}
+    return {q, note}
   }
 
   // ---- transparency: what the mint owes, and what the node holds ----
@@ -473,6 +496,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       (candidate): candidate is string => Boolean(candidate) && candidate !== origin
     )
     const host = new URL(origin).host
+    const spendDomains = configuredDomains.length ? configuredDomains : [spendDomainOf(origin)]
 
     const send = (body: unknown, status = 200): void => {
       res.writeHead(status, {
@@ -577,8 +601,12 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       } catch {
         return fail('Body must be JSON.', 400)
       }
-      const result = registerName({
+      const result = await registerName({
         store,
+        openNote: async k1 => {
+          const opened = await openNote(k1, spendDomains)
+          return 'reason' in opened ? null : opened.note
+        },
         // The NIP-98 signer owns the name. No other identity is accepted:
         // a pubkey in the body would let anyone register a name to
         // somebody else's key.
@@ -586,7 +614,8 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         body: parsed,
         priceMsat: config.namePriceMsat,
         reserved: [config.username],
-        host
+        host,
+        domains: spendDomains
       })
       if (isRefusal(result)) return fail(result.reason, result.status)
       log(
@@ -778,31 +807,25 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       // funding source for an invoice. `h` remains an additive compatibility
       // field, but it never substitutes for comment.
       //
-      // LUD-25 Part 2: the comment may instead be `cp1<pk>`, and the note is
-      // keyed by that key, spent later with a ck1 rather than a secret.
+      // The comment is a cp1<Q>, or a bearer note's hex h, and the note is
+      // credited at that Q either way.
       const askedComment = q.get('comment')?.trim().toLowerCase() ?? null
       const commentRef = askedComment === null ? null : namedRef(askedComment)
       if (commentRef === null) {
         return fail(
-          'a mint quote must name its output with a LUD-12 comment carrying hex(sha256(secret)) or a cp1 key'
+          'a mint quote must name its output with a LUD-12 comment carrying a cp1 key or hex(sha256(secret))'
         )
       }
-      const commentOutputId = commentRef.id
       const askedOutputId = q.get('h')?.trim().toLowerCase() ?? null
       if (askedOutputId !== null && !HEX32.test(askedOutputId)) return fail('missing h')
-      // A wallet sending both should send the same hash in both; ours does.
+      // A wallet sending both should name the same note in both; ours does.
       // Disagreement is a bug in the caller, and picking a winner would
-      // mint a note under a hash one half of it is not watching for.
-      if (
-        askedOutputId !== null &&
-        commentOutputId !== askedOutputId
-      ) {
+      // mint a note under a key one half of it is not watching for.
+      if (askedOutputId !== null && decodeNote(askedOutputId) !== commentRef.q) {
         return fail('comment and h name different outputs')
       }
-      const outputId = commentOutputId
-      if (store.outputIdInUse(outputId)) {
-        return fail('Invalid or already spent k1.')
-      }
+      const outputId = commentRef.q
+      if (store.outputIdInUse(outputId)) return fail(IN_USE)
 
       // The preimage is payment proof only; comment names the future note.
       //
@@ -814,11 +837,24 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       // the store keeps hashes only - and either way the bearer note is keyed
       // by the wallet's comment commitment, which is why a node that will not
       // take a preimage can still back a mint.
+      // A payment preimage is also a bearer note's spend: the note whose h
+      // is the payment hash. So a payment hash must not be that for this
+      // quote's own note or any other, or everyone who learns the preimage
+      // - the funding source, the route, /verify - could open it.
+      const opensANote = (paymentHash: string): boolean => {
+        const asBearer = bearerNoteId(paymentHash)
+        return (
+          paymentHash === outputId ||
+          asBearer === outputId ||
+          store.outputIdInUse(paymentHash) ||
+          store.outputIdInUse(asBearer)
+        )
+      }
       let chosen: {preimageHex: string; paymentHash: string} | null = null
       if (backend.acceptsInvoicePreimage) {
         let preimageHex = bytesToHex(randomBytes(32))
         let paymentHash = hashK1(preimageHex)
-        while (store.outputIdInUse(paymentHash) || paymentHash === outputId) {
+        while (opensANote(paymentHash)) {
           preimageHex = bytesToHex(randomBytes(32))
           paymentHash = hashK1(preimageHex)
         }
@@ -859,12 +895,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // mint has already seen, or an invoice the node settled before handing
         // it over, would credit a note against money that never moved on this
         // quote's behalf.
-        if (
-          paymentHash === outputId ||
-          store.outputIdInUse(paymentHash) ||
-          store.mintInvoiceByHash(paymentHash) ||
-          store.meltByHash(paymentHash)
-        ) {
+        if (opensANote(paymentHash) || store.mintInvoiceByHash(paymentHash) || store.meltByHash(paymentHash)) {
           log('funding source returned an invoice whose payment hash is already in use')
           return fail('Temporarily unable to issue an invoice.')
         }
@@ -883,13 +914,13 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         }
       }
       try {
-        store.recordMintInvoice(paymentHash, pr, amount, net, outputId)
+        store.recordMintInvoice(paymentHash, pr, amount, net, outputId, commentRef.named)
       } catch (err) {
         // The read above already refused the collisions it could see; this
         // closes the race where another request claimed the id in between.
         // The invoice exists at the funding source but has been shown to
         // nobody, so nothing can be paid against it.
-        if (err instanceof OutputCollisionError) return fail('Invalid or already spent k1.')
+        if (err instanceof OutputCollisionError) return fail(IN_USE)
         throw err
       }
       return send({
@@ -904,7 +935,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // value this invoice will mint. It is only offered when /verify can
         // later authenticate settlement with this mint's signing key.
         ...(config.verify && signer
-          ? {mint: {h: outputId, amount: net}}
+          ? {mint: {h: commentRef.named, amount: net}}
           : {}),
         // Every current-draft mint quote is comment-bound, so the LUD-21
         // preimage is ordinary settlement proof and safe to disclose after
@@ -945,16 +976,21 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           pr: invoice.pr,
           // Repeating h and amount binds this response to the quote. The
           // ordinary note signature appears only once value exists at h.
+          // The receipt signs exactly the `h` it repeats - what the wallet
+          // named, a bearer note's h or a cp1's Q - since that is what a
+          // receipt validator checks it over. The note's own certificate,
+          // the cs1 over its Q, comes from the withdraw endpoint.
           ...(currentInvoice.outputId !== null && signer
-            ? {
-                mint: {
-                  h: currentInvoice.outputId,
-                  amount: currentInvoice.netMsat,
-                  ...(settled
-                    ? {sig: signer.sign(currentInvoice.outputId, currentInvoice.netMsat)}
-                    : {})
+            ? (() => {
+                const named = currentInvoice.outputNamed ?? currentInvoice.outputId
+                return {
+                  mint: {
+                    h: named,
+                    amount: currentInvoice.netMsat,
+                    ...(settled ? {sig: signer.sign(named, currentInvoice.netMsat)} : {})
+                  }
                 }
-              }
+              })()
             : {})
         })
       }
@@ -979,18 +1015,30 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     // ---- LUD-03 informational GET ----
     if (requestUrl.pathname === '/w') {
       const hasK1 = q.has('k1')
-      const k1 = q.get('k1')?.toLowerCase()
+      const k1 = q.get('k1')?.trim()
       const lookup = renamedRef(q, 'p', 'h')
       if (lookup.conflict) return fail('p and h name different notes')
       if (hasK1 === lookup.present) return fail('Unknown note.')
-      // LUD-25's hash-only check lets a wallet prove that the note it just
-      // bought exists without sending the bearer secret to the service a
-      // second time. `p` (or `h`) is accepted in place of `k1`, never
-      // alongside it, and names a Part 2 note by its cp1 key.
-      const ref = hasK1 ? (k1 ? spentRef(k1) : null) : lookup.ref
-      if (!ref) return fail('Unknown note.')
-      const note = await resolveNoteId(ref.id)
-      if (!note) return fail('Unknown note.')
+      // With a k1, the spend is verified against its note in full, as
+      // LUD-25 requires: a wallet checking a note it was handed learns
+      // whether that spend really opens it, and a script path's own reason
+      // (a timelock not yet due) is passed on. `p` (or `h`) is accepted in
+      // place of k1, never alongside it, so a wallet can check a note
+      // without sending its spend: a cp1, or a bearer note's h.
+      let noteQ: string
+      let note: NoteRow
+      if (hasK1) {
+        const opened = k1 ? await openNote(k1, spendDomains) : null
+        if (!opened || 'reason' in opened) return fail(opened?.specific ? opened.reason : 'Unknown note.')
+        noteQ = opened.q
+        note = opened.note
+      } else {
+        if (!lookup.ref) return fail('Unknown note.')
+        const found = await resolveNote(lookup.ref.q)
+        if (!found) return fail('Unknown note.')
+        noteQ = lookup.ref.q
+        note = found
+      }
       // Hash lookups protect the secret, not the note's spent state.
       // Retained burned rows let a wallet reconcile without revealing k1.
       if (note.state === 'burned') return fail('Note already spent.')
@@ -1011,10 +1059,10 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       return send({
         tag: 'withdrawRequest',
         callback: `${origin}/w/cb`,
-        // A hash-only query deliberately does not echo or invent k1. The
-        // wallet already has the secret; this endpoint only confirms the
-        // mint's record at sha256(k1).
-        ...(k1 ? {k1} : {}),
+        // Echoed verbatim, so a wallet can copy it into a note URL or the
+        // callback. A lookup by p deliberately does not echo or invent one:
+        // the wallet already has its spend.
+        ...(hasK1 && k1 ? {k1} : {}),
         minWithdrawable: wholeSatFloor(note.amountMsat),
         maxWithdrawable: note.amountMsat,
         defaultDescription: config.description,
@@ -1029,16 +1077,16 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // exists.
         ...(mirrors.length ? {mirrors} : {}),
         ...(signer ? {mintPubkey: signer.pubkey} : {}),
-        // Part 2: a note named by cp1 or ck1 gets its certificate here, so
-        // a wallet need not rotate just to obtain one. The reference mint
-        // omits the legacy raw signature from this informational response.
-        ...(ref.cp1 ? certified('sig', ref, note.amountMsat) : {})
+        // Every note gets its certificate here, so a wallet need not rotate
+        // just to obtain one, and a recovery scan probing ?p= gets one free.
+        // A certificate is no spend authorisation, so p needs no proof.
+        ...certified('sig', noteQ, note.amountMsat)
       })
     }
 
     // ---- the mutating callback: melt / rotate / split / merge ----
     if (requestUrl.pathname === '/w/cb') {
-      const k1s = q.getAll('k1').map(value => value.toLowerCase())
+      const k1s = q.getAll('k1').map(value => value.trim())
       const pr = q.get('pr')
       const amountRaw = q.get('amount')
       // One ref per output from here on, so the replay match below treats
@@ -1060,19 +1108,25 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         if (out2.conflict) return fail('p2 and h2 name different outputs')
         if (!o1) return fail('missing p1')
         if (amountRaw !== null && !o2) return fail('missing p2')
-        if (o2 && o2.id === o1.id) return fail('p1 and p2 must differ.')
+        if (o2 && o2.q === o1.q) return fail('p1 and p2 must differ.')
       }
       if (config.sunset && amountRaw !== null) {
         return fail('This mint is sunsetting - splitting is disabled.')
       }
+      // Every k1 is verified against its note first, spent or not, so a
+      // retry of a completed mutation can still be recognised below. One
+      // failure fails the whole request: nothing burns, nothing mints.
+      const opened: Array<{q: string; note: NoteRow}> = []
+      for (const k1 of k1s) {
+        const result = await openNote(k1, spendDomains)
+        if ('reason' in result) return fail(result.reason)
+        opened.push(result)
+      }
       // A note named twice would count its value twice on the way into a
-      // merge or split. Compared by the note each k1 spends, since two
-      // different ck1 strings can spend the same one. Atomic refusal, same
-      // as an invalid k1.
-      const spent = k1s.map(spentRef)
-      if (spent.some(ref => ref === null)) return fail('Invalid or already spent k1.')
-      const spentIds = spent.map(ref => ref!.id)
-      if (new Set(spentIds).size !== spentIds.length) return fail('Invalid or already spent k1.')
+      // merge or split. Compared by Q, since one note can be opened by more
+      // than one valid spend. Atomic refusal, same as an invalid k1.
+      const spentQs = opened.map(input => input.q)
+      if (new Set(spentQs).size !== spentQs.length) return fail(INVALID_K1)
 
       // ---- the retried mutation ----
       //
@@ -1087,39 +1141,43 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       // So a request that already minted its outputs is answered with the
       // same reply. This branch burns nothing, mints nothing and moves no
       // balance: it is a read. The signature is deterministic over the
-      // output id and its amount, so it is recomputed rather than stored.
+      // output and its amount, so it is recomputed rather than stored.
       // Anything else naming a burned input is a double-spend attempt and
       // still gets today's reason string, unchanged. The fingerprint is
-      // over note ids, so a hex request fingerprints exactly as it did
-      // before Part 2 and replays from before an upgrade still match.
+      // over the notes' Qs, never the k1 strings, so any valid spend of the
+      // same notes is the same request. A mutation completed before notes
+      // were keyed by Q was fingerprinted over the ids it was stored and
+      // named by, so that is tried as well.
+      const amountPart = amountRaw !== null ? {amountMsat: Number(amountRaw)} : {}
       const fingerprint = pr !== null
         ? null
-        : swapFingerprint({
-            inputIds: spentIds,
-            h: o1!.id,
-            h2: o2?.id,
-            ...(amountRaw !== null ? {amountMsat: Number(amountRaw)} : {})
-          })
-      const alreadyMinted = fingerprint === null ? null : store.swapByFingerprint(fingerprint)
+        : swapFingerprint({inputIds: spentQs, h: o1!.q, h2: o2?.q, ...amountPart})
+      const earlierFingerprint = pr !== null
+        ? null
+        : swapFingerprint({inputIds: opened.map(input => input.note.id), h: o1!.named, h2: o2?.named, ...amountPart})
+      const alreadyMinted =
+        fingerprint === null
+          ? null
+          : (store.swapByFingerprint(fingerprint) ??
+            (earlierFingerprint !== fingerprint ? store.swapByFingerprint(earlierFingerprint!) : null))
       if (alreadyMinted) {
-        const first = alreadyMinted.find(output => output.id === o1!.id)
-        const second = o2 ? alreadyMinted.find(output => output.id === o2.id) : undefined
+        const recorded = (ref: NoteRef) => alreadyMinted.find(output => output.id === ref.q || output.id === ref.named)
+        const first = recorded(o1!)
+        const second = o2 ? recorded(o2) : undefined
         if (first) {
           return send({
             status: 'OK',
-            ...certified('sig', o1!, first.amountMsat),
-            ...(second ? certified('sig2', o2!, second.amountMsat) : {})
+            ...certified('sig', o1!.q, first.amountMsat),
+            ...(second ? certified('sig2', o2!.q, second.amountMsat) : {})
           })
         }
       }
 
-      const found: NoteRow[] = []
-      for (const id of spentIds) {
-        const note = await resolveNoteId(id)
-        if (!note || note.state === 'burned') return fail('Invalid or already spent k1.')
+      for (const {note} of opened) {
+        if (note.state === 'burned') return fail(INVALID_K1)
         if (note.state === 'pending') return fail('pending')
-        found.push(note)
       }
+      const found = opened.map(input => input.note)
       const totalMsat = found.reduce((sum, note) => sum + note.amountMsat, 0)
       const inputIds = found.map(note => note.id)
 
@@ -1184,7 +1242,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           store.markPending(inputIds[0]!, paymentHash, pr.trim(), totalMsat)
         } catch (err) {
           if (err instanceof NotePendingError) return fail('pending')
-          if (err instanceof NoteUnavailableError) return fail('Invalid or already spent k1.')
+          if (err instanceof NoteUnavailableError) return fail(INVALID_K1)
           return fail('Invoice already used by an earlier melt - use a fresh one.')
         }
         inFlight.add(paymentHash)
@@ -1230,22 +1288,22 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           store.swap(
             inputIds,
             [
-              {id: o1!.id, amountMsat: amount},
-              {id: o2!.id, amountMsat: changeMsat}
+              {id: o1!.q, amountMsat: amount},
+              {id: o2!.q, amountMsat: changeMsat}
             ],
             fingerprint ?? undefined
           )
         } catch (err) {
           if (err instanceof NotePendingError) return fail('pending')
-          if (err instanceof OutputCollisionError && (o1!.cp1 || o2!.cp1)) return fail('Output already in use.')
-          // OutputCollisionError shares the dead-k1 reason on purpose:
-          // which table the id collided with is an oracle nobody is owed.
-          return fail('Invalid or already spent k1.')
+          // LUD-25 names this one: an output already credited, outstanding
+          // or burned. A wallet deriving keys retries at the next index.
+          if (err instanceof OutputCollisionError) return fail(IN_USE)
+          return fail(INVALID_K1)
         }
         return send({
           status: 'OK',
-          ...certified('sig', o1!, amount),
-          ...certified('sig2', o2!, changeMsat)
+          ...certified('sig', o1!.q, amount),
+          ...certified('sig2', o2!.q, changeMsat)
         })
       }
 
@@ -1255,14 +1313,13 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       // of one - the refund is exactly 0.
       const mergedMsat = totalMsat + (inputIds.length - 1) * baseFeeMsat
       try {
-        store.swap(inputIds, [{id: o1!.id, amountMsat: mergedMsat}], fingerprint ?? undefined)
+        store.swap(inputIds, [{id: o1!.q, amountMsat: mergedMsat}], fingerprint ?? undefined)
       } catch (err) {
         if (err instanceof NotePendingError) return fail('pending')
-        if (err instanceof OutputCollisionError && o1!.cp1) return fail('Output already in use.')
-        // same oracle-free reason for a collision as for a dead k1
-        return fail('Invalid or already spent k1.')
+        if (err instanceof OutputCollisionError) return fail(IN_USE)
+        return fail(INVALID_K1)
       }
-      return send({status: 'OK', ...certified('sig', o1!, mergedMsat)})
+      return send({status: 'OK', ...certified('sig', o1!.q, mergedMsat)})
     }
 
     return fail('Not found.', 404)
@@ -1358,6 +1415,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       if (zapTimer) clearInterval(zapTimer)
       if (statsTimer) clearInterval(statsTimer)
       nostr?.close()
+      kernel?.close()
       await new Promise<void>((resolve, reject) => server.close(err => (err ? reject(err) : resolve())))
       await backend.close?.()
       store.close()

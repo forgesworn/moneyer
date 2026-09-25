@@ -1,5 +1,6 @@
 import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
 import {decodeCx1, deriveNotePubkey, encodeCp1, hashK1} from '@lnurlcash/kit'
+import {bearerNoteIdOfPreimage} from './spend.ts'
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import {finalizeEvent, getPublicKey, type Event, type UnsignedEvent} from 'nostr-tools/pure'
 import {SimplePool} from 'nostr-tools/pool'
@@ -330,7 +331,8 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
         continue
       }
       const k1 = bytesToHex(randomBytes(32))
-      const noteId = hashK1(k1)
+      // The bearer note whose preimage is k1, stored under its Q.
+      const noteId = bearerNoteIdOfPreimage(k1)
       const wrap = buildWrap(row, k1)
       const receipt = buildReceipt(row)
       if (store.settleZapInvoice(row.paymentHash, noteId, JSON.stringify(wrap), receipt ? JSON.stringify(receipt) : null)) {

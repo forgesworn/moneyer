@@ -50,6 +50,7 @@
     "dist",
     "web/dist",
     "scripts/live-bound-mint-check.mjs",
+    "scripts/kernel-verifier.py",
     "LICENSE",
     "README.md",
     "CHANGELOG.md",

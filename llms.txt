@@ -29,11 +29,16 @@ Client library to build against a mint: @lnurlcash/kit
    inside the invoice. `h` is an additive alias for the same commitment and
    never replaces the comment. Because the note is not keyed by the
    preimage, a funding source whose node chooses its own preimages
-   (phoenixd, NIP-47 make_invoice) can back a mint. LUD-25 Part 2: the
-   comment may instead be `cp1<pk>`, and the note is keyed by that key.
+   (phoenixd, NIP-47 make_invoice) can back a mint. Every note is a LUD-25
+   taproot output key Q: a 64-hex comment is a bearer note's h (Q follows
+   from it), and `cp1<Q>` names any note directly.
 2. Mutations are atomic: all named k1 burn and all outputs mint, or
    nothing happens. A note named twice in one request is refused, compared
-   by the note each k1 spends: one Part 2 note has many valid ck1 strings.
+   by the Q each k1 spends: one note has many valid spends (preimage, cw1,
+   ck1). Every k1 is verified first: a ck1 is bound to this mint's domains
+   (clearnet and onion), a cw1 is checked for leaf version, OP_SUCCESSx and
+   Unix-time claims, and only bearer hashlock leaves are evaluated in
+   process; other leaves need MoneyerDeps.scriptVerifier.
 3. p1/p2 (older names h/h2, still accepted; both spellings of one output
    must agree) are WALLET-supplied hashes or cp1 keys; the mint never generates a
    replacement secret, and refuses output ids that already exist as
@@ -84,10 +89,17 @@ configFromEnv(env?) -> MoneyerConfig     MONEYER_* environment variables
   operator configured - it never builds one.
 createFakeBackend() -> LightningBackend with .control test hooks
 createClnBackend({url, rune}) / createLndBackend({url, macaroon})
+decodeSpend(k1) -> Spend | null        a preimage, ck1 or cw1, with the Q it opens
+decodeNote(value) -> hex(Q) | null     a cp1, or a bearer note's 64-hex h
+verifySpend(spend, {outputKey, domains, now, lockedAt, scriptVerifier?}) -> Promise<SpendVerdict>
+bearerNoteId(hHex) / bearerNoteIdOfPreimage(k1Hex) -> hex(Q)
+keyPathSighash(Q, domain) / scriptPathSighash(Q, domain, leaf, locktime, sequence) -> 32 bytes
+ScriptVerifier = ({outputKey, domain, spend, now, lockedAt}) => Promise<reason | null>
+  pass as MoneyerDeps.scriptVerifier to judge leaves moneyer cannot evaluate itself
 createNoteSigner(privHex) -> {pubkey, sign(noteId, amountMsat)}
   privHex is a secp256k1 private key, as MONEYER_SIGNING_KEY; zero is rejected
 fakeBolt11({amountMsat, paymentHashHex, memo?}) -> decodable, unpayable invoice
-NoteStore - SQLite store; notes by sha256(k1), never secrets
+NoteStore - SQLite store; notes by hex(Q), never spends; pre-Q rows found via legacy_ids
 runMelt(job, deps) -> Promise<void> / reconcilePendingMelts(store, backend, inFlight, log?)
   the melt discipline: burn only on confirmed payment, restore only on confirmed
   non-payment. The /w/cb handler drives both; outcomes land in the store, not in a
@@ -108,10 +120,10 @@ signStats(stats, privHex) -> string   the signature alone, hex r || s || recover
 
 /.well-known/lnurlp/{user}  LUD-16 payRequest (mints)
 /.well-known/lnurlw/{user}  LUD-25 mint address (experimental)
-/p/cb                       LUD-06 pay callback (comment names the note: hash or cp1)
+/p/cb                       LUD-06 pay callback (comment names the note: a bearer h or a cp1)
 /verify/{payment_hash}      LUD-21 verify (mint invoices AND melt payments)
-/w                          LUD-03 informational GET by k1 (secret or ck1) or p (hash or cp1, older h); a cp1 note carries its cs1 as sig
-/w/cb                       melt / rotate / split / merge; inputs secrets or ck1, outputs p1/p2 hashes or cp1 (or older h/h2); cp1 outputs certified as cs1
+/w                          LUD-03 informational GET by k1 (preimage, ck1 or cw1, verified in full) or p (a bearer h or a cp1, older h); every note carries its cs1 over Q as sig
+/w/cb                       melt / rotate / split / merge; inputs preimages, ck1 or cw1, outputs p1/p2 as a bearer h or cp1 (or older h/h2); every output certified as cs1 over Q; a taken output is `already in use`
 POST /names                 claim a name (NIP-98; the signer owns it); body {name, note?, cx1?}.
                             The owner may resend {name, cx1} to set a branch, or cx1: null to clear it
 /z/cb/{name}                zap invoice for a name. With a cx1 the settled note is credited to the

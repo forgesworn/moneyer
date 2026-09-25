@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import {parseArgs} from 'node:util'
 import {bytesToHex, randomBytes} from '@noble/hashes/utils.js'
-import {buildNoteUrl, hashK1} from '@lnurlcash/kit'
+import {buildNoteUrl} from '@lnurlcash/kit'
+import {bearerNoteIdOfPreimage} from './spend.ts'
 import {configFromEnv} from './config.ts'
 import {createMoneyer} from './server.ts'
 
@@ -82,7 +83,7 @@ console.log(`  funding source:    ${moneyer.backend.name}`)
 
 if (values.dev) {
   const k1 = bytesToHex(randomBytes(32))
-  moneyer.store.creditNote(hashK1(k1), 21_000)
+  moneyer.store.creditNote(bearerNoteIdOfPreimage(k1), 21_000)
   console.log(`  a 21 sat note:     ${buildNoteUrl(`${moneyer.url}/w`, k1, 21_000)}`)
   console.log(
     '\nDEV MINT - the fake funding source invents its invoices and treats every one\nof them as paid the moment it is issued, so minting here costs nothing and\nthe notes it hands out are worth nothing. Melts always succeed and send no\nsats anywhere. Never point a wallet holding real money at this.'

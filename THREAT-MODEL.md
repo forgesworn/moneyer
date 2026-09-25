@@ -24,20 +24,47 @@ request carrying a callback's query string cannot mutate anything.
 **A holder inflating a merge or split with a repeated k1.** Duplicated k1
 parameters in one request are refused outright; they would otherwise count
 one note's value twice into the output. The check is on the note each k1
-spends, not on the k1 string: a Part 2 note's `ck1` is a signature, and one
-note has many valid ones (anyone holding a `ck1` can flip it to `(r, n-s)`,
-and the key's owner can sign again). The store refuses a note named twice
+spends, its Q, not on the k1 string: one note has many valid spends (a
+bearer note's preimage and its full `cw1`, the key owner's fresh `ck1`s,
+the deprecated `ck1` shapes a wallet may still hold). The store refuses a note named twice
 among a swap's inputs as well, so the rule does not rest on the handler
 alone.
 
-**A holder claiming an output id that already exists.** `h`/`h2` may not
-collide with any existing note, any mint invoice's payment hash, settled
-or not, or any note a payer has bought by naming it. The invoice cases are
-the subtle ones: `/verify` hands a settled mint invoice's preimage to its
-payer, and that preimage is the k1 of whatever note carries the hash as
-its id - minting "over" such an id would point a future payer's money at a
-stranger's note. A named note is the same hazard one step earlier, since
-it is spoken for before it exists.
+**A holder claiming an output id that already exists.** An output (`p1`,
+`p2`, or a mint comment) may not name a Q that is already a note, spent or
+not, or that a payer has bought by naming it, and gets LUD-25's
+`already in use`. Nor may it name the bearer note a mint invoice's payment
+preimage would open: `/verify` hands that preimage out, so minting there
+would point money at a note anyone who saw the invoice can spend. A note
+written before notes were keyed by Q is protected the same way through
+`legacy_ids`, so its preimage never opens two notes.
+
+**A payment preimage that opens a note.** Every preimage is also the spend
+of the bearer note whose h is its payment hash, and a preimage reaches the
+funding source, every hop and `/verify`. So a quote is refused, before any
+invoice is shown, if its payment hash is the h of this quote's own note or
+of any note on file, whoever chose the preimage.
+
+**A spend replayed at another mint.** A `ck1` signs the sighash of LUD-25's
+canonical spend transaction, whose prevout commits to the mint's domain,
+so a key-path spend one mint has seen cannot be used at another. Moneyer
+accepts a signature bound to any of its own hosts, clearnet or onion, and
+nothing else. The deprecated `ck1` shapes are not bound to any mint; they
+are still accepted, as the reference mint accepts them, so that notes
+already handed out stay redeemable, and they should be retired once none
+are expected to remain.
+
+**A leaf that succeeds for anyone.** Tapscript keeps upgrade hooks that
+consensus accepts unconditionally: unknown leaf versions and `OP_SUCCESSx`
+opcodes. A `cw1` using either is refused before anything runs, as LUD-25
+requires; otherwise a note locked to such a leaf would be spendable by
+whoever saw it.
+
+**Timelocks.** A `cw1` carries a signed `nLockTime`/`nSequence`, and the
+mint checks them against its own clock: Unix times only, relative locks
+counted from when it credited the note. That is the mint asserting its
+clock, a custodial policy and not a consensus guarantee, and must never be
+described as trustless.
 
 **A holder melting into the mint's own invoice.** Refused synchronously:
 paying it would route the funding source's money at itself, which real
@@ -109,6 +136,11 @@ is what notecase and lnurl-wallet do.
 
 ## Known limitations
 
+- A script-path spend whose leaf is not a bearer hashlock can only be
+  judged by a tapscript interpreter, which moneyer does not contain. Without
+  a `scriptVerifier` such spends are refused and the note waits; a mint
+  cannot tell a script note from a key note when it is credited, since Q
+  is opaque, so it cannot refuse one up front either.
 - The cln and lnd backends are unexercised against live nodes (direct
   ports of the reference mint's logic). Run `--dev` traffic and the
   conformance grader against a staging deployment before taking real money.

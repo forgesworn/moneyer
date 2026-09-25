@@ -1,7 +1,7 @@
 import {afterEach, describe, expect, it} from 'vitest'
-import {hashK1, verifyNoteSignature} from '@lnurlcash/kit'
+import {hashK1} from '@lnurlcash/kit'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
-import {freshK1, startMint, type TestMint} from './helpers.ts'
+import {freshK1, startMint, type TestMint, noteIdOf, certifiesNote} from './helpers.ts'
 
 // LUD-25 renamed the hash lookup `h` to `p` and the callback outputs `h`/`h2`
 // to `p1`/`p2`. Wallets in the field send either, so both are accepted. The
@@ -29,7 +29,7 @@ const callback = (mint: TestMint, params: Array<[string, string]>) => call(mint,
 
 const creditNote = (mint: TestMint, amountMsat: number): string => {
   const k1 = freshK1()
-  mint.moneyer.store.creditNote(hashK1(k1), amountMsat)
+  mint.moneyer.store.creditNote(noteIdOf(k1), amountMsat)
   return k1
 }
 
@@ -66,7 +66,7 @@ describe('the informational GET by p', () => {
     const melting = creditNote(mint, 21_000)
     const paymentHash = freshK1()
     mint.moneyer.store.markPending(
-      hashK1(melting),
+      noteIdOf(melting),
       paymentHash,
       fakeBolt11({amountMsat: 21_000, paymentHashHex: paymentHash}),
       21_000
@@ -101,7 +101,7 @@ describe('the callback under p1 and p2', () => {
     const fresh = freshK1()
     const body = await callback(mint, [['k1', k1], ['p1', hashK1(fresh)]])
     expect(body.status).toBe('OK')
-    expect(verifyNoteSignature(fresh, 21_000, body.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(fresh, 21_000, body.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
     expect(await worth(mint, fresh)).toBe(21_000)
     expect((await info(mint, [['k1', k1]])).reason).toBe('Note already spent.')
   })
@@ -118,8 +118,8 @@ describe('the callback under p1 and p2', () => {
       ['p2', hashK1(change)]
     ])
     expect(body.status).toBe('OK')
-    expect(verifyNoteSignature(keep, 5_000, body.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
-    expect(verifyNoteSignature(change, 16_000, body.sig2 as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(keep, 5_000, body.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(change, 16_000, body.sig2 as string, mint.moneyer.signer.pubkey)).toBe(true)
     expect(await worth(mint, keep)).toBe(5_000)
     expect(await worth(mint, change)).toBe(16_000)
   })

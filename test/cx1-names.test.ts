@@ -4,7 +4,7 @@ import {unwrapEvent} from 'nostr-tools/nip59'
 import {matchFilter, type Filter} from 'nostr-tools/filter'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, randomBytes, utf8ToBytes} from '@noble/hashes/utils.js'
-import {secp256k1} from '@noble/curves/secp256k1.js'
+import {schnorr, secp256k1} from '@noble/curves/secp256k1.js'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {
   deriveNotePubkey,
@@ -16,11 +16,10 @@ import {
   parseInternalTransferHint,
   payInternalTransfer,
   signNoteOwnership,
-  verifyNoteSignature
 } from '@lnurlcash/kit'
 import {NIP98_KIND} from '../src/names.ts'
 import {NOTE_KIND, type NostrTransport} from '../src/zap.ts'
-import {startMint, waitFor, type TestMint} from './helpers.ts'
+import {startMint, waitFor, type TestMint, noteIdOf, certifiesNote} from './helpers.ts'
 
 // A name with a cx1 is paid to the holder's own keys: the mint derives the
 // next one from the watch-only branch, and the gift wrap says only where to
@@ -81,7 +80,21 @@ const token = (secret: Uint8Array, body: string): string => {
   return `Nostr ${Buffer.from(JSON.stringify(finalizeEvent(template, secret))).toString('base64')}`
 }
 
-const claim = async (mint: TestMint, secret: Uint8Array, body: Record<string, unknown>) => {
+// LUD-25's address proof, by the branch's index-0 key, bound to this mint.
+const proof = (who: Holder, action: 'register' | 'unregister', name: string, domain = HOST): string =>
+  bytesToHex(
+    schnorr.sign(
+      sha256(utf8ToBytes(`LNURLcash:${action}:${domain}:${name}`)),
+      deriveNoteSecretKey(who.branchPrivateKey, who.chainCode, 0),
+      new Uint8Array(32)
+    )
+  )
+
+// `prover`, when given, signs the address proof a cx1 change needs.
+const claim = async (mint: TestMint, secret: Uint8Array, body: Record<string, unknown>, prover?: Holder) => {
+  if (prover && body.cx1 !== undefined && typeof body.name === 'string') {
+    body = {...body, sig: proof(prover, body.cx1 === null ? 'unregister' : 'register', body.name)}
+  }
   const payload = JSON.stringify(body)
   const res = await fetch(`${mint.moneyer.url}/names`, {
     method: 'POST',
@@ -144,7 +157,7 @@ describe('a name with a cx1', () => {
   it('is registered by its owner, who alone may change or clear the branch', async () => {
     const {mint} = await start()
     const alice = holder()
-    const granted = await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})
+    const granted = await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
     expect(granted.status).toBe(200)
     expect(granted.body.cx1).toBe(alice.cx1)
     expect(mint.moneyer.store.zapName('alice')).toMatchObject({cx1: alice.cx1, nextIndex: 0})
@@ -152,7 +165,7 @@ describe('a name with a cx1', () => {
     expect((await claim(mint, holder().sk, {name: 'alice', cx1: holder().cx1})).status).toBe(409)
     expect((await claim(mint, alice.sk, {name: 'alice', cx1: 'cx1nonsense'})).status).toBe(400)
 
-    const cleared = await claim(mint, alice.sk, {name: 'alice', cx1: null})
+    const cleared = await claim(mint, alice.sk, {name: 'alice', cx1: null}, alice)
     expect(cleared.status).toBe(200)
     expect(mint.moneyer.store.zapName('alice')?.cx1).toBeNull()
   })
@@ -160,7 +173,7 @@ describe('a name with a cx1', () => {
   it('pays each zap to the next key, wrapping only where to look', async () => {
     const {mint, relay} = await start()
     const alice = holder()
-    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
 
     const first = await settle(mint, relay, alice, await invoice(mint, 'alice', 21_000))
     expect(first.rumor.kind).toBe(NOTE_KIND)
@@ -170,7 +183,7 @@ describe('a name with a cx1', () => {
     expect(first.url.searchParams.has('amount')).toBe(false)
     expect(first.rumor.tags).toContainEqual(['i', '0'])
     // the holder checks the certificate, then opens the note with its own key
-    expect(verifyNoteSignature(ck1At(alice, 0), 20_000, first.url.searchParams.get('sig')!, mint.moneyer.signer.pubkey)).toBe(
+    expect(certifiesNote(ck1At(alice, 0), 20_000, first.url.searchParams.get('sig')!, mint.moneyer.signer.pubkey)).toBe(
       true
     )
     const opened = (await (await fetch(`${mint.moneyer.url}/w?k1=${ck1At(alice, 0)}`)).json()) as {maxWithdrawable: number}
@@ -184,7 +197,7 @@ describe('a name with a cx1', () => {
   it('takes no index for an invoice nobody pays', async () => {
     const {mint, relay} = await start()
     const alice = holder()
-    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
     await invoice(mint, 'alice', 21_000)
     await invoice(mint, 'alice', 21_000)
     const paid = await settle(mint, relay, alice, await invoice(mint, 'alice', 21_000))
@@ -194,7 +207,7 @@ describe('a name with a cx1', () => {
   it('publishes the next free branch key as an internal-transfer hint', async () => {
     const {mint} = await start()
     const alice = holder()
-    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
     mint.moneyer.store.creditNote(keyAt(alice, 0), 5_000)
 
     const pay = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/alice`)).json()) as {metadata: string}
@@ -209,7 +222,7 @@ describe('a name with a cx1', () => {
   it('accepts a reference-kit internal transfer and advances after a raced hint', async () => {
     const {mint} = await start()
     const alice = holder()
-    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
     const pay = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/alice`)).json()) as {metadata: string}
     const hint = parseInternalTransferHint(pay.metadata)
     expect(hint?.startIndex).toBe(0)
@@ -219,19 +232,19 @@ describe('a name with a cx1', () => {
     // kit retry at one without risking the input.
     mint.moneyer.store.creditNote(keyAt(alice, 0), 5_000)
     const source = bytesToHex(randomBytes(32))
-    mint.moneyer.store.creditNote(hashK1(source), 21_000)
+    mint.moneyer.store.creditNote(noteIdOf(source), 21_000)
     const paid = await payInternalTransfer(`${mint.moneyer.url}/w/cb`, [source], 21_000, 21_000, hint!)
 
     expect(paid).toMatchObject({kind: 'merge', index: 1})
-    expect(mint.moneyer.store.noteById(hashK1(source))?.state).toBe('burned')
+    expect(mint.moneyer.store.noteById(noteIdOf(source))?.state).toBe('burned')
     expect(mint.moneyer.store.noteById(keyAt(alice, 1))).toMatchObject({amountMsat: 21_000, state: 'outstanding'})
-    expect(verifyNoteSignature(ck1At(alice, 1), 21_000, paid.signature, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(ck1At(alice, 1), 21_000, paid.signature, mint.moneyer.signer.pubkey)).toBe(true)
   })
 
   it('skips a key that already names a note', async () => {
     const {mint, relay} = await start()
     const alice = holder()
-    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
     mint.moneyer.store.creditNote(keyAt(alice, 0), 5_000)
     const paid = await settle(mint, relay, alice, await invoice(mint, 'alice', 21_000))
     expect(paid.url.searchParams.get('i')).toBe('1')
@@ -242,11 +255,11 @@ describe('a name with a cx1', () => {
   it('starts a new branch at index 0, and keeps its place when the same one is sent again', async () => {
     const {mint, relay} = await start()
     const alice = holder()
-    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
     await settle(mint, relay, alice, await invoice(mint, 'alice', 21_000))
-    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
     expect(mint.moneyer.store.zapName('alice')?.nextIndex).toBe(1)
-    await claim(mint, alice.sk, {name: 'alice', cx1: holder().cx1})
+    await claim(mint, alice.sk, {name: 'alice', cx1: holder().cx1}, alice)
     expect(mint.moneyer.store.zapName('alice')?.nextIndex).toBe(0)
   })
 
@@ -265,12 +278,37 @@ describe('a name with a cx1', () => {
       namePriceMsat: undefined,
       zap: {nostrKey: MINT_NOSTR_KEY, relays: ['wss://mint-relay.example'], names: {alice: alice.pubkey}}
     })
-    const set = await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})
+    const set = await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
     expect(set.status).toBe(200)
     expect(mint.moneyer.store.zapName('alice')?.cx1).toBe(alice.cx1)
     // still closed to anyone wanting a new name, and still not a stranger's
     expect((await claim(mint, holder().sk, {name: 'bobby', cx1: holder().cx1})).status).toBe(404)
     expect((await claim(mint, holder().sk, {name: 'alice', cx1: holder().cx1})).status).toBe(409)
+  })
+
+  it('needs the address proof to point a name at a branch, or away from one', async () => {
+    const {mint} = await start()
+    const alice = holder()
+    const stranger = holder()
+    // No proof, a proof by some other branch, one bound to another mint,
+    // and one for the other action are all refused, and nothing is set.
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})).status).toBe(403)
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, stranger)).status).toBe(403)
+    const elsewhere = proof(alice, 'register', 'alice', 'other.example')
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1, sig: elsewhere})).status).toBe(403)
+    const wrongAction = proof(alice, 'unregister', 'alice')
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1, sig: wrongAction})).status).toBe(403)
+    expect(mint.moneyer.store.zapName('alice')).toBeNull()
+
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)).status).toBe(200)
+    // Switching is proven by the branch on file, not the one switched to.
+    const next = holder()
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: next.cx1}, next)).status).toBe(403)
+    expect(mint.moneyer.store.zapName('alice')?.cx1).toBe(alice.cx1)
+    // Clearing is an unregister by the branch on file.
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: null}, next)).status).toBe(403)
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: null}, alice)).status).toBe(200)
+    expect(mint.moneyer.store.zapName('alice')?.cx1).toBeNull()
   })
 
   it("keeps an operator name's branch across a restart, and drops it when the operator gives the name away", async () => {
@@ -279,7 +317,7 @@ describe('a name with a cx1', () => {
       namePriceMsat: undefined,
       zap: {nostrKey: MINT_NOSTR_KEY, relays: ['wss://mint-relay.example'], names: {alice: alice.pubkey}}
     })
-    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
     await settle(mint, relay, alice, await invoice(mint, 'alice', 21_000))
     const store = mint.moneyer.store
     expect(store.zapName('alice')).toMatchObject({cx1: alice.cx1, nextIndex: 1})
