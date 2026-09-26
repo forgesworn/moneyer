@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.17.0 - 2026-09-26
 
 LUD-25's unified taproot model (lnurl/luds 6e865b1). Every note is now a
 BIP-341 taproot output key Q, and that is what the mint stores, burns and
