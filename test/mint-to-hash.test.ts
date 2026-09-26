@@ -19,7 +19,7 @@ import {mkdtempSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {NoteStore} from '../src/store.ts'
-import {freshK1, mintFeeBand, startMint, type TestMint} from './helpers.ts'
+import {freshK1, mintFeeBand, startMint, type TestMint, noteIdOf, certifiesNote} from './helpers.ts'
 
 // Naming the note you are buying.
 //
@@ -160,7 +160,7 @@ describe('minting to a named note', () => {
     const rotated = await rotateNote(after.callback, secret)
     // The rotated note holds the full 21,000 msat, and carries the
     // reference format's legacy raw signature over its hash and value.
-    expect(verifyNoteSignature(rotated.k1, 21_000, rotated.signature!, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(rotated.k1, 21_000, rotated.signature!, mint.moneyer.signer.pubkey)).toBe(true)
     const held = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, rotated.k1))
     expect(held.maxWithdrawable).toBe(21_000)
   })
@@ -242,15 +242,15 @@ describe('minting to a named note', () => {
     expect(mint.moneyer.store.unsettledMintInvoices()).toHaveLength(0)
   })
 
-  it('refuses an h that already names something, without saying what', async () => {
+  it('refuses an h that already names something, in the one sentence LUD-25 gives', async () => {
     const mint = await start()
 
     // An outstanding note.
     const existing = freshK1()
-    mint.moneyer.store.creditNote(hashK1(existing), 5_000)
+    mint.moneyer.store.creditNote(noteIdOf(existing), 5_000)
     const overNote = await payCallback(mint, namedQuote('21000', hashK1(existing)))
     expect(overNote.status).toBe('ERROR')
-    expect(overNote.reason).toBe('Invalid or already spent k1.')
+    expect(overNote.reason).toBe('already in use')
     expect(overNote.pr).toBeUndefined()
 
     // An unsettled invoice's own payment hash must not be sold as an output.
@@ -261,14 +261,14 @@ describe('minting to a named note', () => {
     )
     const invoiceHash = decodeBolt11(firstInvoice.pr!).paymentHashHex
     const overInvoice = await payCallback(mint, namedQuote('21000', invoiceHash))
-    expect(overInvoice.reason).toBe('Invalid or already spent k1.')
+    expect(overInvoice.reason).toBe('already in use')
 
     // A note somebody else has already bought but not yet claimed.
     const theirs = freshK1()
     const first = await payCallback(mint, namedQuote('21000', hashK1(theirs)))
     expect(first.mintToHash).toBe(true)
     const second = await payCallback(mint, namedQuote('21000', hashK1(theirs)))
-    expect(second.reason).toBe('Invalid or already spent k1.')
+    expect(second.reason).toBe('already in use')
     expect(second.pr).toBeUndefined()
 
     // The refusal is the same sentence every time: which table an id sits
@@ -283,8 +283,8 @@ describe('minting to a named note', () => {
     expect(reply.mintToHash).toBe(true)
 
     const mine = freshK1()
-    mint.moneyer.store.creditNote(hashK1(mine), 5_000)
-    await expect(rotateNoteWithHash(`${mint.moneyer.url}/w/cb`, mine, hashK1(bought))).rejects.toThrow(NoteSpentError)
+    mint.moneyer.store.creditNote(noteIdOf(mine), 5_000)
+    await expect(rotateNoteWithHash(`${mint.moneyer.url}/w/cb`, mine, hashK1(bought))).rejects.toThrow(/already in use/)
 
     // The rotation was refused whole: the input note is still spendable.
     expect((await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, mine))).maxWithdrawable).toBe(5_000)

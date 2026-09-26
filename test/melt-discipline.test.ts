@@ -4,7 +4,7 @@ import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
 import {NoteStore} from '../src/store.ts'
 import {createMoneyer} from '../src/server.ts'
 import {claimMintedNote} from '../src/claim.ts'
-import {freshK1, startMint, testConfig, waitFor, type TestMint} from './helpers.ts'
+import {freshK1, startMint, testConfig, waitFor, type TestMint, noteIdOf} from './helpers.ts'
 import {mkdtempSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -23,12 +23,12 @@ afterEach(async () => {
 
 const meltOnce = async (mint: TestMint, amountMsat = 21_000) => {
   const k1 = freshK1()
-  mint.moneyer.store.creditNote(hashK1(k1), amountMsat)
+  mint.moneyer.store.creditNote(noteIdOf(k1), amountMsat)
   const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, k1, amountMsat))
   const paymentHash = freshK1()
   const pr = fakeBolt11({amountMsat, paymentHashHex: hashK1(paymentHash)})
   await meltNote(info.callback, k1, pr)
-  return {k1, noteId: hashK1(k1), paymentHash: hashK1(paymentHash)}
+  return {k1, noteId: noteIdOf(k1), paymentHash: hashK1(paymentHash)}
 }
 
 const noteState = (mint: TestMint, noteId: string) => mint.moneyer.store.noteById(noteId)?.state
@@ -39,7 +39,7 @@ describe('a note that is not a whole sat', () => {
   it('advertises its whole-sat floor as the minimum and melts for it, keeping the dust', async () => {
     active = await startMint()
     const k1 = freshK1()
-    active.moneyer.store.creditNote(hashK1(k1), 94_900)
+    active.moneyer.store.creditNote(noteIdOf(k1), 94_900)
     const info = await fetchNoteInfo(buildNoteUrl(`${active.moneyer.url}/w`, k1, 94_900))
     expect(info.maxWithdrawable).toBe(94_900)
     expect(info.minWithdrawable).toBe(94_000)
@@ -51,19 +51,19 @@ describe('a note that is not a whole sat', () => {
       expect(body.status).toBe('ERROR')
       expect(body.reason).toMatch(/94900 msat, or 94000 msat/)
     }
-    expect(noteState(active, hashK1(k1))).toBe('outstanding')
+    expect(noteState(active, noteIdOf(k1))).toBe('outstanding')
 
     // The whole-sat floor pays out; the 900 msat of dust stays with the mint.
     const paymentHash = hashK1(freshK1())
     await meltNote(info.callback, k1, fakeBolt11({amountMsat: 94_000, paymentHashHex: paymentHash}))
-    await waitFor(() => noteState(active!, hashK1(k1)) === 'burned')
+    await waitFor(() => noteState(active!, noteIdOf(k1)) === 'burned')
     expect(active.moneyer.store.meltByHash(paymentHash)).toMatchObject({amountMsat: 94_900, outcome: 'paid'})
   })
 
   it('still demands the exact amount for a whole-sat note', async () => {
     active = await startMint()
     const k1 = freshK1()
-    active.moneyer.store.creditNote(hashK1(k1), 21_000)
+    active.moneyer.store.creditNote(noteIdOf(k1), 21_000)
     const info = await fetchNoteInfo(buildNoteUrl(`${active.moneyer.url}/w`, k1, 21_000))
     expect(info.minWithdrawable).toBe(21_000)
     const res = await fetch(`${info.callback}?k1=${k1}&pr=${fakeBolt11({amountMsat: 20_000, paymentHashHex: hashK1(freshK1())})}`)
@@ -81,9 +81,9 @@ describe('melt discipline', () => {
   it('restores the note on a clean, confirmed failure', async () => {
     const mint = (active = await startMint())
     mint.backend.control.setPayMode('fail-clean')
-    const {noteId} = await meltOnce(mint)
+    const {k1, noteId} = await meltOnce(mint)
     await waitFor(() => noteState(mint, noteId) === 'outstanding')
-    const restored = await fetch(`${mint.moneyer.url}/w?h=${noteId}`).then(r => r.json())
+    const restored = await fetch(`${mint.moneyer.url}/w?h=${hashK1(k1)}`).then(r => r.json())
     expect(restored).toMatchObject({tag: 'withdrawRequest', maxWithdrawable: 21_000})
     expect(restored).not.toHaveProperty('k1')
   })
@@ -96,7 +96,7 @@ describe('melt discipline', () => {
     mint.backend.control.setPayMode('ambiguous-pending')
     const {k1, noteId, paymentHash} = await meltOnce(mint, 3000)
     await waitFor(() => noteState(mint, noteId) === 'pending')
-    for (const lookup of [`h=${noteId}`, `k1=${k1}`]) {
+    for (const lookup of [`h=${hashK1(k1)}`, `k1=${k1}`]) {
       expect(await fetch(`${mint.moneyer.url}/w?${lookup}`).then(r => r.json()))
         .toEqual({status: 'ERROR', reason: 'pending'})
     }
@@ -107,7 +107,7 @@ describe('melt discipline', () => {
       if (noteState(mint, noteId) !== 'burned') await new Promise(resolve => setTimeout(resolve, 25))
     }
     expect(noteState(mint, noteId)).toBe('burned')
-    for (const lookup of [`h=${noteId}`, `k1=${k1}`]) {
+    for (const lookup of [`h=${hashK1(k1)}`, `k1=${k1}`]) {
       expect(await fetch(`${mint.moneyer.url}/w?${lookup}`).then(r => r.json()))
         .toEqual({status: 'ERROR', reason: 'Note already spent.'})
     }
@@ -115,7 +115,7 @@ describe('melt discipline', () => {
     await mint.moneyer.close()
     active = null
     const reborn = (active = await startMint({dbPath}, {backend: mint.backend}))
-    expect(await fetch(`${reborn.moneyer.url}/w?h=${noteId}`).then(r => r.json()))
+    expect(await fetch(`${reborn.moneyer.url}/w?h=${hashK1(k1)}`).then(r => r.json()))
       .toEqual({status: 'ERROR', reason: 'Note already spent.'})
     expect(await fetch(`${reborn.moneyer.url}/w?h=${hashK1(freshK1())}`).then(r => r.json()))
       .toEqual({status: 'ERROR', reason: 'Unknown note.'})
@@ -178,7 +178,7 @@ describe('melt discipline', () => {
     const mint = (active = await startMint())
     mint.backend.control.setPayMode('ambiguous-pending')
     const k1 = freshK1()
-    mint.moneyer.store.creditNote(hashK1(k1), 21_000)
+    mint.moneyer.store.creditNote(noteIdOf(k1), 21_000)
     const url = buildNoteUrl(`${mint.moneyer.url}/w`, k1, 21_000)
 
     // Healthy before the melt.
@@ -186,7 +186,7 @@ describe('melt discipline', () => {
 
     const pr = fakeBolt11({amountMsat: 21_000, paymentHashHex: hashK1(freshK1())})
     await meltNote((await fetchNoteInfo(url)).callback, k1, pr)
-    await waitFor(() => noteState(mint, hashK1(k1)) === 'pending')
+    await waitFor(() => noteState(mint, noteIdOf(k1)) === 'pending')
 
     // Informational pending is the reference mint's literal service reason;
     // the kit itself now classifies it as PendingNoteError (2026-09,
@@ -203,12 +203,12 @@ describe('melt discipline', () => {
     const mint = (active = await startMint())
     mint.backend.control.setPayMode('ambiguous-pending')
     const k1 = freshK1()
-    mint.moneyer.store.creditNote(hashK1(k1), 21_000)
+    mint.moneyer.store.creditNote(noteIdOf(k1), 21_000)
     const url = buildNoteUrl(`${mint.moneyer.url}/w`, k1, 21_000)
 
     const pr = fakeBolt11({amountMsat: 21_000, paymentHashHex: hashK1(freshK1())})
     await meltNote((await fetchNoteInfo(url)).callback, k1, pr)
-    await waitFor(() => noteState(mint, hashK1(k1)) === 'pending')
+    await waitFor(() => noteState(mint, noteIdOf(k1)) === 'pending')
 
     const claim = await claimMintedNote(`${mint.moneyer.url}/w`, k1)
     expect(claim.state).toBe('pending')
@@ -219,7 +219,7 @@ describe('melt discipline', () => {
     // this invoice; confirming by hash would burn our note for nothing.
     const mint = (active = await startMint())
     const k1 = freshK1()
-    mint.moneyer.store.creditNote(hashK1(k1), 21_000)
+    mint.moneyer.store.creditNote(noteIdOf(k1), 21_000)
     const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, k1, 21_000))
 
     const foreignHash = hashK1(freshK1())
@@ -228,7 +228,7 @@ describe('melt discipline', () => {
       meltNote(info.callback, k1, fakeBolt11({amountMsat: 21_000, paymentHashHex: foreignHash}))
     ).rejects.toThrow(/already used/)
     // refused before the note was ever reserved
-    expect(noteState(mint, hashK1(k1))).toBe('outstanding')
+    expect(noteState(mint, noteIdOf(k1))).toBe('outstanding')
 
     // a foreign payment still IN FLIGHT is just as refusable
     const pendingHash = hashK1(freshK1())
@@ -236,7 +236,7 @@ describe('melt discipline', () => {
     await expect(
       meltNote(info.callback, k1, fakeBolt11({amountMsat: 21_000, paymentHashHex: pendingHash}))
     ).rejects.toThrow(/already used/)
-    expect(noteState(mint, hashK1(k1))).toBe('outstanding')
+    expect(noteState(mint, noteIdOf(k1))).toBe('outstanding')
   })
 
   it('restores the note when the foreign payment lands between pre-check and send', async () => {
@@ -245,7 +245,7 @@ describe('melt discipline', () => {
     // "already exists" - nothing went out for us, so the note restores.
     const mint = (active = await startMint())
     const k1 = freshK1()
-    mint.moneyer.store.creditNote(hashK1(k1), 21_000)
+    mint.moneyer.store.creditNote(noteIdOf(k1), 21_000)
     const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, k1, 21_000))
 
     const hash = hashK1(freshK1())
@@ -261,7 +261,7 @@ describe('melt discipline', () => {
       return realIsComplete(paymentHash)
     }
     await meltNote(info.callback, k1, fakeBolt11({amountMsat: 21_000, paymentHashHex: hash}))
-    await waitFor(() => noteState(mint, hashK1(k1)) === 'outstanding')
+    await waitFor(() => noteState(mint, noteIdOf(k1)) === 'outstanding')
     expect(mint.moneyer.store.meltByHash(hash)?.outcome).toBe('restored')
   })
 

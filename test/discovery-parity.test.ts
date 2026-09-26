@@ -3,7 +3,7 @@ import {hashK1} from '@lnurlcash/kit'
 import {createFakeBackend} from '../src/backends/fake.ts'
 import {createMoneyer} from '../src/server.ts'
 import {configFromEnv} from '../src/config.ts'
-import {freshK1, startMint, testConfig, type TestMint} from './helpers.ts'
+import {freshK1, startMint, testConfig, type TestMint, noteIdOf} from './helpers.ts'
 
 // Three fields the reference mint publishes on its discovery document that
 // moneyer did not. Each answers a question a wallet cannot otherwise ask:
@@ -99,7 +99,7 @@ describe('sunsetDate', () => {
 
 describe('outstandingNotesMsat', () => {
   const credit = (mint: TestMint, amountMsat: number): void => {
-    mint.moneyer.store.creditNote(hashK1(freshK1()), amountMsat)
+    mint.moneyer.store.creditNote(noteIdOf(freshK1()), amountMsat)
   }
 
   it('states what the mint owes, even with the funding source unreachable', async () => {

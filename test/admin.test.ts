@@ -11,7 +11,7 @@ import {NoteStore} from '../src/store.ts'
 import {createFakeBackend, FAKE_LOCAL_BALANCE_MSAT} from '../src/backends/fake.ts'
 import {createNoteSigner} from '../src/signing.ts'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
-import {TEST_SIGNING_KEY, freshK1} from './helpers.ts'
+import {TEST_SIGNING_KEY, freshK1, noteIdOf} from './helpers.ts'
 
 // The operator CLI, driven with the argv an operator would type and a
 // :memory: store standing in for the mint's database. No server, no
@@ -43,8 +43,8 @@ afterEach(() => {
 describe('moneyer admin', () => {
   it('reports the same figures /stats would', async () => {
     const store = new NoteStore(':memory:')
-    store.creditNote(hashK1(freshK1()), 40_000)
-    store.creditNote(hashK1(freshK1()), 8_000)
+    store.creditNote(noteIdOf(freshK1()), 40_000)
+    store.creditNote(noteIdOf(freshK1()), 8_000)
     const {code, out} = await run(['status'], {store})
     expect(code).toBe(0)
     expect(out).toContain('48 sat over 2 notes')
@@ -59,7 +59,7 @@ describe('moneyer admin', () => {
     const dead = hashK1(freshK1())
     store.creditNote(live, 40_000)
     store.creditNote(dead, 1_000)
-    store.swap([dead], [{id: hashK1(freshK1()), amountMsat: 1_000}])
+    store.swap([dead], [{id: noteIdOf(freshK1()), amountMsat: 1_000}])
     const all = await run(['notes'], {store})
     expect(all.out.split('\n')).toHaveLength(3)
     const burned = await run(['notes', '--state', 'burned'], {store})
@@ -72,11 +72,13 @@ describe('moneyer admin', () => {
   it('finds a note by its secret as well as by its id', async () => {
     const store = new NoteStore(':memory:')
     const k1 = freshK1()
-    store.creditNote(hashK1(k1), 21_000)
-    const byId = await run(['note', hashK1(k1)], {store})
+    store.creditNote(noteIdOf(k1), 21_000)
+    const byId = await run(['note', noteIdOf(k1)], {store})
     expect(byId.out).toContain('21 sat')
+    const byHash = await run(['note', hashK1(k1)], {store})
+    expect(byHash.out).toContain('that names the note')
     const bySecret = await run(['note', k1], {store})
-    expect(bySecret.out).toContain('that is a secret')
+    expect(bySecret.out).toContain('that spends the note')
     expect(bySecret.out).toContain('21 sat')
     const missing = await run(['note', 'ab'.repeat(32)], {store})
     expect(missing.code).toBe(1)
@@ -116,7 +118,7 @@ describe('moneyer admin', () => {
     temp = mkdtempSync(join(tmpdir(), 'moneyer-admin-'))
     const path = join(temp, 'snapshot.sqlite')
     const store = new NoteStore(join(temp, 'live.sqlite'))
-    store.creditNote(hashK1(freshK1()), 21_000)
+    store.creditNote(noteIdOf(freshK1()), 21_000)
     const first = await run(['snapshot', path], {store})
     expect(first.code).toBe(0)
     const copy = new NoteStore(path, {readOnly: true})
@@ -149,7 +151,7 @@ describe('moneyer admin', () => {
     const store = new NoteStore(':memory:')
     const signer = createNoteSigner(TEST_SIGNING_KEY)
     const k1 = freshK1()
-    store.creditNote(hashK1(k1), 21_000)
+    store.creditNote(noteIdOf(k1), 21_000)
     const url = withNewK1('https://mint.example/w', k1, 21_000, signer.sign(hashK1(k1), 21_000))
     const good = await run(['verify-note', url], {store})
     expect(good.code).toBe(0)
@@ -212,7 +214,7 @@ describe('moneyer admin', () => {
     temp = mkdtempSync(join(tmpdir(), 'moneyer-admin-'))
     const path = join(temp, 'live.sqlite')
     const live = new NoteStore(path)
-    live.creditNote(hashK1(freshK1()), 21_000)
+    live.creditNote(noteIdOf(freshK1()), 21_000)
     live.close()
     const out: string[] = []
     const code = await runAdmin(['notes'], {

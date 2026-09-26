@@ -1,8 +1,10 @@
 import {sha256} from '@noble/hashes/sha2.js'
-import {bytesToHex, utf8ToBytes} from '@noble/hashes/utils.js'
+import {schnorr} from '@noble/curves/secp256k1.js'
+import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {verifyEvent, type Event} from 'nostr-tools/pure'
-import {decodeCx1, hashK1, noteK1} from '@lnurlcash/kit'
-import {NotePendingError, NoteStore, NoteUnavailableError} from './store.ts'
+import {decodeCx1, noteK1} from '@lnurlcash/kit'
+import {NotePendingError, NoteStore, NoteUnavailableError, type NoteRow} from './store.ts'
+import {NOTE_PURPOSE_WALLET, decodeSpend, deriveNotePubkey} from './spend.ts'
 
 // Self-service lightning addresses.
 //
@@ -92,6 +94,38 @@ export const validateNip98 = (
   return {pubkey: event.pubkey}
 }
 
+// LUD-25's address proof. A cx1 is public, so pointing a name at one, or
+// away from one, has to be proven by the branch itself: a BIP-340
+// signature by its index-0 key over sha256("LNURLcash:<action>:<domain>:
+// <name>"). The domain is this mint's own, so a proof one mint has seen
+// cannot be replayed at another; the action and name are in it so a
+// register cannot be replayed as an unregister, or for another name.
+export const addressProofVerifies = (args: {
+  cx1: string
+  action: 'register' | 'unregister'
+  name: string
+  domains: string[]
+  sig: unknown
+}): boolean => {
+  if (typeof args.sig !== 'string' || !/^[0-9a-f]{128}$/i.test(args.sig)) return false
+  const branch = decodeCx1(args.cx1)
+  if (!branch) return false
+  let firstKey: Uint8Array
+  try {
+    firstKey = deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, NOTE_PURPOSE_WALLET, 0)
+  } catch {
+    return false
+  }
+  const signature = hexToBytes(args.sig.toLowerCase())
+  return args.domains.some(domain => {
+    try {
+      return schnorr.verify(signature, sha256(utf8ToBytes(`LNURLcash:${args.action}:${domain}:${args.name}`)), firstKey)
+    } catch {
+      return false
+    }
+  })
+}
+
 export type NameRefusal = {reason: string; status: number}
 export type NameGranted = {name: string; pubkey: string; paidMsat: number; cx1: string | null; updated: boolean}
 
@@ -104,16 +138,21 @@ export const isRefusal = (result: NameGranted | NameRefusal): result is NameRefu
 // exists without payment is worse than a note burned without a name,
 // and the INSERT is what settles a race between two people asking for
 // the same name at once.
-export const registerName = (args: {
+export const registerName = async (args: {
   store: NoteStore
   pubkey: string
-  body: {name?: unknown; note?: unknown; cx1?: unknown}
+  body: {name?: unknown; note?: unknown; cx1?: unknown; sig?: unknown}
   priceMsat: number | undefined
   // The mint's own username, plus anything else it will not give away.
   reserved: string[]
   // Notes offered in payment must belong to this host.
   host: string
-}): NameGranted | NameRefusal => {
+  // This mint's own domains, any of which an address proof may be bound to.
+  domains: string[]
+  // The note a k1 verifiably opens, in any state, or null: the same check
+  // the withdraw callback makes, so a name is paid for exactly as a melt is.
+  openNote: (k1: string) => Promise<NoteRow | null>
+}): Promise<NameGranted | NameRefusal> => {
   const {store, pubkey, priceMsat} = args
   const raw = typeof args.body.name === 'string' ? args.body.name.trim().toLowerCase() : ''
   if (!NAME_RULE.test(raw)) {
@@ -133,10 +172,22 @@ export const registerName = (args: {
     cx1 = given
   }
 
+  const proven = (branch: string, action: 'register' | 'unregister'): boolean =>
+    addressProofVerifies({cx1: branch, action, name: raw, domains: args.domains, sig: args.body.sig})
+  const unproven = refuse(
+    'Setting or clearing a cx1 needs "sig": the branch\'s index-0 key signing sha256("LNURLcash:register:<domain>:<name>"), or :unregister: to clear.',
+    403
+  )
+
   const existing = store.zapName(raw)
   if (existing) {
-    // Its owner may set or clear the branch; nobody else may touch it.
+    // Its owner may set or clear the branch; nobody else may touch it. The
+    // NIP-98 key owns the name, and the branch on file must agree to any
+    // change of where it pays: LUD-25 has an overwrite proven by the
+    // branch currently registered, not the one being switched to.
     if (existing.pubkey === pubkey && cx1 !== undefined) {
+      if (cx1 === null && existing.cx1 && !proven(existing.cx1, 'unregister')) return unproven
+      if (cx1 !== null && !proven(existing.cx1 ?? cx1, 'register')) return unproven
       store.setZapNameCx1(raw, cx1)
       return {name: raw, pubkey, paidMsat: 0, cx1, updated: true}
     }
@@ -145,6 +196,8 @@ export const registerName = (args: {
   // Checked after the owner's update above: closing registration stops new
   // names, not a holder choosing where their own name pays.
   if (priceMsat === undefined) return refuse('This mint is not registering names.', 404)
+  // A fresh name pointed at a branch proves control of that branch.
+  if (typeof cx1 === 'string' && !proven(cx1, 'register')) return unproven
 
   let paidMsat = 0
   let noteId: string | undefined
@@ -163,8 +216,8 @@ export const registerName = (args: {
     // plain-http service - correct for a wallet reaching a stranger, and
     // wrong for a mint reading a note it minted itself.
     let k1: string | null = null
-    if (/^[0-9a-f]{64}$/i.test(offered)) {
-      k1 = offered.toLowerCase()
+    if (decodeSpend(offered)) {
+      k1 = offered
     } else {
       let url: URL
       try {
@@ -176,7 +229,7 @@ export const registerName = (args: {
       k1 = noteK1(url.toString())
     }
     if (!k1) return refuse('That is not a note.', 400)
-    const note = store.noteById(hashK1(k1))
+    const note = await args.openNote(k1)
     if (!note || note.state === 'burned') return refuse('That note is spent or was never minted here.', 400)
     if (note.state === 'pending') return refuse('That note has a melt in flight.', 409)
     if (note.amountMsat < priceMsat) {

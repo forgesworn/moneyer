@@ -104,6 +104,22 @@ small caps, a prohibited-use clause in the terms (TERMS-TEMPLATE.md
 carries one), and no pretence, to yourself or to holders, that the risk
 is closed.
 
+**A script note can be a bet, and the mint would hold the stake.** Once
+script-path spends are verified (below), a note can be locked to an
+oracle's outcome, as lnurl-wallet's betlocker add-on does, and the mint
+then holds both sides' value and pays the winner. In Great Britain the
+Gambling Act 2005 licenses anyone who provides facilities for gambling
+(s5: inviting others to gamble on arrangements you make, or providing,
+operating or administering them) or acts as a betting intermediary (s13:
+a service designed to help others make or accept bets). A mint checking
+every script alike, with no way to tell a bet from any other lock, is not
+designed for betting and makes no arrangements. It becomes one the moment
+the operator invites that use: advertising contract or bet support, running
+or linking an oracle, or building bets into a wallet served alongside it.
+Keep verification generic, run no oracle, market nothing about contracts,
+and keep the prohibited-use clause in the terms (TERMS-TEMPLATE.md carries
+one).
+
 **The perimeter is moving towards the mint.** The Financial Services and
 Markets Act 2023 brings cryptoassets into the fold, and the draft
 secondary legislation published under it in 2025 makes safeguarding
@@ -190,6 +206,31 @@ channel balance on every melt, and nothing stops a griefer cycling
 mint-and-melt at minimum amounts to bleed it - each round trip returns
 their sats and costs the mint up to the floor in routing. Set
 MONEYER_BASE_FEE_MSAT to at least cover it.
+
+### Script-path spends
+
+LUD-25 lets a note be locked to any tapscript leaf, and a mint must accept
+any spend Bitcoin Core would. moneyer evaluates the plain bearer note's
+hashlock itself; every other leaf needs Bitcoin Core's interpreter, which
+it runs in a child process through
+[lnurlcash-kernel](https://pypi.org/project/lnurlcash-kernel/), the
+reference mint's verifier (wheels for Linux x86_64 and aarch64):
+
+```bash
+sudo python3 -m venv /opt/moneyer/kernel
+sudo /opt/moneyer/kernel/bin/pip install lnurlcash-kernel
+sudo cp node_modules/@forgesworn/moneyer/scripts/kernel-verifier.py /opt/moneyer/
+# then, in the environment above:
+MONEYER_SCRIPT_VERIFIER="/opt/moneyer/kernel/bin/python /opt/moneyer/kernel-verifier.py"
+```
+
+Leave it unset and such spends are refused with a reason, their notes left
+outstanding until a verifier is configured. A mint cannot refuse a script
+note when it is credited, since its key does not show whether it has a
+script tree, so unset means waiting, not losing.
+
+Turning it on changes what the mint can be used for; read the gambling
+paragraph under "Before you run this" first.
 
 ## 4. systemd
 

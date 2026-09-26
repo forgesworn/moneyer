@@ -6,7 +6,7 @@ import {bytesToHex} from '@noble/hashes/utils.js'
 import {fetchNoteInfo, hashK1, rotateNote} from '@lnurlcash/kit'
 import {configFromEnv} from '../src/config.ts'
 import {INBOX_RELAYS_KIND, NOTE_KIND, type NostrTransport} from '../src/zap.ts'
-import {startMint, waitFor, type TestMint} from './helpers.ts'
+import {startMint, waitFor, type TestMint, noteIdOf} from './helpers.ts'
 
 // Zap-to-note end to end against the fake funding source and a fake relay:
 // a NIP-57 zap to alice@<mint> settles, alice's wallet opens a gift wrap
@@ -155,7 +155,7 @@ describe('a zap name', () => {
     expect(k1).not.toBe(zapperPreimage)
     expect(hashK1(zapperPreimage)).toBe(paymentHash)
     expect(mint.moneyer.store.noteById(paymentHash)).toBeNull()
-    const note = mint.moneyer.store.noteById(hashK1(k1))!
+    const note = mint.moneyer.store.noteById(noteIdOf(k1))!
     expect(note).toMatchObject({amountMsat: 20_000, state: 'outstanding'})
 
     // alice's wallet rotates it onto her own secret, as any note.
@@ -163,8 +163,8 @@ describe('a zap name', () => {
     const info = await fetchNoteInfo(liveUrl)
     expect(info.maxWithdrawable).toBe(20_000)
     const rotated = await rotateNote(info.callback.replace('http://mint.test', mint.moneyer.url), k1)
-    expect(mint.moneyer.store.noteById(hashK1(k1))!.state).toBe('burned')
-    expect(mint.moneyer.store.noteById(hashK1(rotated.k1))).toMatchObject({amountMsat: 20_000, state: 'outstanding'})
+    expect(mint.moneyer.store.noteById(noteIdOf(k1))!.state).toBe('burned')
+    expect(mint.moneyer.store.noteById(noteIdOf(rotated.k1))).toMatchObject({amountMsat: 20_000, state: 'outstanding'})
 
     // The receipt: signed by the mint's nostrPubkey, on the zapper's relays
     // and the mint's, carrying the zap request and no preimage.
@@ -184,7 +184,7 @@ describe('a zap name', () => {
     expect(row.settled).toBe(true)
     expect(row.wrapJson).toBeNull()
     expect(row.receiptJson).toBeNull()
-    expect(row.noteId).toBe(hashK1(k1))
+    expect(row.noteId).toBe(noteIdOf(k1))
 
     // A second settle pass mints nothing more.
     await mint.moneyer.reconcile()

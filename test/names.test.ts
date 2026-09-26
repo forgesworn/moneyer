@@ -4,7 +4,7 @@ import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, utf8ToBytes} from '@noble/hashes/utils.js'
 import {buildNoteUrl, hashK1} from '@lnurlcash/kit'
 import {NIP98_KIND} from '../src/names.ts'
-import {freshK1, startMint, type TestMint} from './helpers.ts'
+import {freshK1, startMint, type TestMint, noteIdOf} from './helpers.ts'
 
 // Self-service lightning addresses: anyone with an npub can claim one,
 // paying with a note of this mint. The key that signs the NIP-98
@@ -69,7 +69,7 @@ const claim = async (
 
 const fund = (mint: TestMint, amountMsat: number): string => {
   const k1 = freshK1()
-  mint.moneyer.store.creditNote(hashK1(k1), amountMsat)
+  mint.moneyer.store.creditNote(noteIdOf(k1), amountMsat)
   return k1
 }
 
@@ -82,7 +82,7 @@ describe('claiming a lightning address', () => {
     expect(status).toBe(200)
     expect(body).toMatchObject({status: 'OK', name: 'donkey', address: 'donkey@mint.test', pubkey: getPublicKey(secret)})
     // The sats are revenue, so the liability goes with the note.
-    expect(mint.moneyer.store.noteById(hashK1(note))!.state).toBe('burned')
+    expect(mint.moneyer.store.noteById(noteIdOf(note))!.state).toBe('burned')
     expect(mint.moneyer.store.liabilities().outstandingMsat).toBe(0)
     // And the name is live on both rails at once.
     const nip05 = (await (await fetch(`${mint.moneyer.url}/.well-known/nostr.json?name=donkey`)).json()) as {
@@ -133,7 +133,7 @@ describe('claiming a lightning address', () => {
     const naked = await fetch(`${mint.moneyer.url}/names`, {method: 'POST', body: JSON.stringify(body)})
     expect(naked.status).toBe(401)
     // Nothing was burned by any of that.
-    expect(mint.moneyer.store.noteById(hashK1(note))!.state).toBe('outstanding')
+    expect(mint.moneyer.store.noteById(noteIdOf(note))!.state).toBe('outstanding')
   })
 
   it('refuses a forged signature outright', async () => {
@@ -188,7 +188,7 @@ describe('claiming a lightning address', () => {
       const {status} = await claim(mint, secret, {name, note})
       expect([400, 403]).toContain(status)
       // A refused name never costs anything.
-      expect(mint.moneyer.store.noteById(hashK1(note))!.state).toBe('outstanding')
+      expect(mint.moneyer.store.noteById(noteIdOf(note))!.state).toBe('outstanding')
     }
     const first = await claim(mint, secret, {name: 'donkey', note: fund(mint, PRICE)})
     expect(first.status).toBe(200)
