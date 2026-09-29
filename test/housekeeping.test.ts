@@ -7,7 +7,7 @@ import {sweepExpiredMintInvoices} from '../src/server.ts'
 import {STATS_D_TAG, STATS_KIND, verifyStatsSnapshot} from '../src/stats.ts'
 import {ANNOUNCE_D_TAG, ANNOUNCE_KIND, verifyAnnouncement} from '../src/announce.ts'
 import type {NostrTransport} from '../src/zap.ts'
-import {TEST_SIGNING_KEY, freshK1, startMint, waitFor, type TestMint} from './helpers.ts'
+import {TEST_SIGNING_KEY, freshK1, startMint, waitFor, type TestMint, noteIdOf} from './helpers.ts'
 
 // The expiry sweep deletes unsettled mint invoices whose bolt11 expiry is
 // provably past - "provably" being the whole game, since deleting a row
@@ -113,7 +113,7 @@ describe('the signed liabilities snapshot', () => {
   it('publishes a snapshot anyone can check against the mint pubkey', async () => {
     const relay = recordingRelay()
     const mint = await startPublishingMint(relay)
-    mint.moneyer.store.creditNote(hashK1(freshK1()), 40_000)
+    mint.moneyer.store.creditNote(noteIdOf(freshK1()), 40_000)
     await mint.moneyer.publishStats()
 
     const event = relay.published.at(-1)!

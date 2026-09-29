@@ -29,6 +29,10 @@ export type MoneyerConfig = {
   // request arrives on that host, every URL this mint hands back is built
   // from it instead of publicOrigin.
   onionUrl?: string
+  // A command that judges script-path spends this mint cannot evaluate
+  // itself, speaking scripts/kernel-verifier.py's line protocol. Unset, such
+  // spends are refused and their notes wait.
+  scriptVerifier?: string[]
   username: string
   description: string
   // The human layer on the discovery endpoint: who this is, how to reach
@@ -342,11 +346,15 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
     throw new Error('Zap-to-note needs MONEYER_PUBLIC_ORIGIN.')
   }
 
+  // Split on whitespace: a path with spaces in it belongs in a wrapper script.
+  const scriptVerifier = env.MONEYER_SCRIPT_VERIFIER?.trim().split(/\s+/).filter(Boolean)
+
   return {
     host: env.MONEYER_HOST ?? DEFAULTS.host,
     port: int(env.MONEYER_PORT, DEFAULTS.port),
     ...(publicOrigin ? {publicOrigin} : {}),
     ...(onionUrl ? {onionUrl} : {}),
+    ...(scriptVerifier?.length ? {scriptVerifier} : {}),
     username: env.MONEYER_USERNAME ?? DEFAULTS.username,
     description: env.MONEYER_DESCRIPTION ?? DEFAULTS.description,
     ...(name ? {name} : {}),

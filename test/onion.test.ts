@@ -2,7 +2,7 @@ import {afterEach, describe, expect, it} from 'vitest'
 import {request} from 'node:http'
 import {configFromEnv} from '../src/config.ts'
 import {hashK1} from '@lnurlcash/kit'
-import {freshK1, startMint, type TestMint} from './helpers.ts'
+import {freshK1, startMint, type TestMint, noteIdOf} from './helpers.ts'
 
 // The same mint, reached over Tor.
 //
@@ -67,7 +67,7 @@ describe('a mint reached over Tor', () => {
       onionUrl: ONION
     }))
     const k1 = freshK1()
-    mint.moneyer.store.creditNote(hashK1(k1), 21_000)
+    mint.moneyer.store.creditNote(noteIdOf(k1), 21_000)
 
     const overTor = await asHost(mint, `/w?k1=${k1}`, new URL(ONION).host)
     expect(overTor.callback).toBe(`${ONION}/w/cb`)
@@ -94,7 +94,7 @@ describe('a mint reached over Tor', () => {
       onionUrl: ONION
     }))
     const k1 = freshK1()
-    mint.moneyer.store.creditNote(hashK1(k1), 21_000)
+    mint.moneyer.store.creditNote(noteIdOf(k1), 21_000)
 
     const overTor = await asHost(mint, `/w?k1=${k1}`, new URL(ONION).host)
     expect(overTor.mirrors).toEqual(['https://mint.example'])
@@ -110,7 +110,7 @@ describe('a mint reached over Tor', () => {
   it('names no mirror when there is only one door', async () => {
     const mint = (active = await startMint({publicOrigin: 'https://mint.example'}))
     const k1 = freshK1()
-    mint.moneyer.store.creditNote(hashK1(k1), 21_000)
+    mint.moneyer.store.creditNote(noteIdOf(k1), 21_000)
     const answer = await asHost(mint, `/w?k1=${k1}`, 'mint.example')
     expect(answer.mirrors).toBeUndefined()
     // absent, not an empty array: a wallet reading [] would think it had

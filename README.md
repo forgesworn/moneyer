@@ -31,9 +31,10 @@ lesson, that behaviour is kept deliberately and tested.
   too - it just gets the after-the-fact checks instead. A backend declares
   which it is with `acceptsInvoicePreimage`. A **fake** backend exists for
   development and tests and refuses to run outside `--dev`.
-- Notes are stored by id, `sha256(k1)` - the store never holds a spend
-  secret. The buyer names the note they are buying with a mandatory LUD-12
-  comment, so the secret is theirs alone from the start.
+- Notes are stored by their taproot output key Q, as LUD-25 now defines
+  every note - the store never holds a spend. The buyer names the note they
+  are buying with a mandatory LUD-12 comment, so the spend is theirs alone
+  from the start.
 - Signs every note it mints with its own mint key (secp256k1, the standard
   `Lightning Signed Message` construction) for LUD-25 offline verification.
 - The melt discipline: reply OK when the note is reserved, pay in the
@@ -95,6 +96,7 @@ default, and a variable set to an empty string counts as unset.
 | `MONEYER_PORT` | `3737` | listen port |
 | `MONEYER_PUBLIC_ORIGIN` | derived from `Host` | the origin wallets are told to call back on. Required behind a reverse proxy, and required for zap-to-note |
 | `MONEYER_ONION_URL` | | this mint as a Tor hidden service, e.g. `http://<v3>.onion`. A request arriving on that host gets its URLs built from it (see below) |
+| `MONEYER_SCRIPT_VERIFIER` | | a command that judges script-path spends moneyer cannot evaluate itself, e.g. `python3 /opt/moneyer/kernel-verifier.py` (see DEPLOY.md). Unset, such spends are refused and their notes wait |
 | `MONEYER_USERNAME` | `mint` | the local part of the mint's own lightning address |
 | `MONEYER_DESCRIPTION` | `an LNURLcash note` | what a note is called on the wire (`defaultDescription`, and `description` on discovery) |
 | `MONEYER_DB` | `moneyer.sqlite` | SQLite path; `:memory:` allowed |
@@ -344,21 +346,44 @@ preimage then buys nothing: it is an ordinary payment proof, which is why
 there is no race left to run, and no window in which holding the invoice
 is nearly holding the money.
 
-### Or name it by a key (LUD-25 Part 2)
+### Every note is a taproot output key
 
-The comment can instead be `cp1<pk>`, a public key. The note is keyed by
-that key and spent with `ck1`, a recoverable signature by its private key,
-so the mint never sees anything that could spend it. Everywhere a note is
-named or spent, the two kinds mix freely:
+LUD-25 makes every note a BIP-341 output key Q, written `cp1<Q>`, and that
+is what this mint stores, burns and certifies. The 64-hex secret above is
+the short form of the simplest kind, a bearer note: an
+`OP_SHA256 <h> OP_EQUAL` leaf under BIP-341's NUMS key, so its Q follows
+from h alone. Wherever a note is named (a comment, `p`, `p1`, `p2`), 64 hex
+is that h, and `cp1<Q>` names any note directly. Wherever one is spent
+(`k1`), it can be:
 
-- `GET /w?k1=<ck1>` or `GET /w?p=<cp1>` looks a Part 2 note up, and the
-  answer carries `sig`, the mint's certificate for it as `cs1`.
-- `p1`/`p2` on the callback may be `cp1` keys, and the matching `sig`/`sig2`
-  come back as amount-bearing `cs1`. A legacy hash output instead receives
-  the raw 65-byte Part 1 signature used by the reference mint.
-- A merge may combine Part 1 secrets and Part 2 `ck1`s in one request.
+- the 64-hex preimage of a bearer note;
+- `ck1<Q || sig>`, a key-path spend: a BIP-340 signature by Q over the
+  sighash of LUD-25's canonical spend transaction, whose prevout commits to
+  this mint's domain, so it cannot be replayed at another mint. Any of the
+  mint's own hosts counts, clearnet or onion. The older `ck1` shapes are
+  still accepted, as the reference mint accepts them;
+- `cw1<...>`, a script-path spend: a leaf of Q's tree, its control block and
+  the witness that satisfies it. A bearer note's full `cw1` is the same note
+  as its preimage. Leaf versions other than `0xc0` and `OP_SUCCESSx` leaves
+  are refused, and time claims are checked against the mint's own clock:
+  Unix times only, relative locks counted from when the note was credited.
+  That is the mint asserting its clock, a custodial policy and not a
+  consensus proof.
 
-A recipient checks a Part 2 note offline from its `ck1` and `cs1` alone.
+Bearer hashlock leaves are evaluated in process. LUD-25 has a mint accept
+any consensus-valid leaf, and moneyer is not a tapscript interpreter, so
+any other leaf goes to Bitcoin Core's own, the one the reference mint uses:
+set `MONEYER_SCRIPT_VERIFIER` to run `scripts/kernel-verifier.py` beside the
+mint (or pass a `scriptVerifier` to `createMoneyer`). Without one such a
+spend is refused with a reason and the note stays outstanding; a verifier
+that crashes, errors or stalls refuses too, and never accepts.
+
+Every note gets a certificate, `cs1` over hex(Q) and its amount: `c` on
+the informational GET, `c`/`c2` on every rotate, split and merge. The same
+value also goes out as the older `sig`/`sig2` until wallets reading only
+those have moved on. The
+informational GET verifies a `k1` in full before answering, so a wallet
+checking a note it was handed learns whether its spend really opens it.
 
 Moneyer's earlier `mintToHash` extension remains additive. A compatible
 wallet repeats the same commitment as `h`; it does not replace `comment`:
@@ -543,19 +568,29 @@ A registered name resolves on both rails at once:
 The discovery endpoint advertises `namePriceMsat` while registration is
 open, so a wallet can offer the flow without asking.
 
-### A name that pays to your own keys (LUD-25 Part 2)
+### A name that pays to your own keys (LUD-25 auto-mint)
 
 Add `"cx1": "cx1..."` to the registration body, or send `{"name", "cx1"}`
 again later from the key that owns the name, and payments to it stop being
 custodial. A `cx1` is a watch-only branch: from it the mint can work out each
 of the holder's note keys in turn, but never spend one.
 
-When a zap to the name settles, the mint takes the next index on the branch
-and credits the note to that key. It skips any key already holding a note,
+A `cx1` is public, so pointing a name at one has to be proven by the branch
+itself, as LUD-25 requires: the body also carries `"sig"`, a BIP-340
+signature by the branch's purpose-0 index-0 key over
+`sha256("LNURLcash:register:<domain>:<name>")`, `<domain>` being this mint's
+hostname. Changing the branch later is proven by the branch on file, not the
+new one, and clearing it takes the same signature over
+`LNURLcash:unregister:...` instead. The NIP-98 key still decides who owns
+the name; the proof decides where it may pay.
+
+When a zap to the name settles, the mint takes the next index on the
+branch's Lightning Address purpose (LUD-25's purpose 2, a counter of its
+own) and credits the note to that key. It skips any key already holding a note,
 and an invoice nobody pays takes no index at all, so a wallet scanning its
 branch never meets a gap it did not make. The gift wrap still goes to the
 owner's npub, but it carries no secret: a lookup URL,
-`https://mint.example/w?p=<cp1>&sig=<amount-bearing-cs1>&i=<index>`, plus an
+`https://mint.example/w?p=<cp1>&c=<amount-bearing-cs1>&i=<index>`, plus an
 `i` tag. The wallet derives the key at that index, checks the certificate,
 and spends with its own `ck1`. A wallet that only knows note URLs sees no
 `k1` and passes the wrap by, and the note waits at the mint for a scan of the
@@ -568,12 +603,14 @@ in `MONEYER_ZAP_NAMES`.
 Sending a new branch starts it at index 0; sending the same one again keeps
 its place. Zap receipts are unchanged.
 
-The name's payRequest also publishes `['text/xpub', '<cx1>:<index>']`, where
-the index is the next key not already present in this mint's ledger. A payer
+The name's payRequest also publishes `['text/cpub', '<cx1>:<index>']`, where
+the index is the next purpose-2 key not already present in this mint's
+ledger. It never publishes the older `text/xpub`: a wallet reading that
+derives without a purpose, so it pays by Lightning instead. A payer
 already holding a note here can therefore rotate, split or merge straight to
 that `cp1` without creating or routing a Lightning invoice. The index is a
-hint: if another payment wins the key first, Moneyer returns `Output already
-in use.` so the reference kit advances and retries.
+hint: if another payment wins the key first, Moneyer returns LUD-25's
+`already in use`, so the reference kit advances and retries.
 
 ## Reaching the mint over Tor
 
@@ -594,9 +631,10 @@ configured both. Anything else falls through to `MONEYER_PUBLIC_ORIGIN`.
 
 ### Serving both audiences at once
 
-Both doors serve the **same notes**. A note is keyed by `sha256(k1)` and
-not by host, so a k1 struck on the onion is valid at the clearnet host and
-the other way round. What is bound to a host is only the URL a note
+Both doors serve the **same notes**. A note is keyed by its Q and not by
+host, so a k1 struck on the onion is valid at the clearnet host and the
+other way round. A `ck1` is bound to a domain, and both of this mint's
+domains are its own, so one signed for either host is accepted at both. What is bound to a host is only the URL a note
 travels as - and an onion note handed to somebody without Tor is
 unspendable to them, while a clearnet note redeemed over Tor is private
 only if their wallet proxies.
@@ -638,8 +676,8 @@ clearnet.
 | `/p/cb` | LUD-06 pay callback; issues the mint invoice for the note the `comment` names, a hash or a `cp1` key (`h` is an older spelling for a hash) |
 | `/z/cb/<zap name>` | the zap callback; validates the kind 9734 and issues the invoice |
 | `/verify/<hash>` | LUD-21 verify, for mint invoices and melt payments |
-| `/w` | LUD-03 informational GET; accepts `k1` (a secret or a `ck1`) or the non-disclosing LUD-25 `p` check (`sha256(k1)` or a `cp1` key; `h` is its older name, still accepted); a live note also carries `payLink`, and a Part 2 note its `cs1` as `sig` |
-| `/w/cb` | the mutating callback: melt, rotate, split, merge; inputs as secrets or `ck1`s, outputs as `p1`/`p2` hashes or `cp1` keys, or their older names `h`/`h2` |
+| `/w` | LUD-03 informational GET; accepts `k1` (a preimage, `ck1` or `cw1`, verified in full) or the non-disclosing LUD-25 `p` check (a bearer note's h or any `cp1`; `h` is its older name, still accepted); a live note carries `payLink` and its `cs1` as `sig` |
+| `/w/cb` | the mutating callback: melt, rotate, split, merge; inputs as preimages, `ck1`s or `cw1`s, outputs as `p1`/`p2` (a bearer note's h or a `cp1`), or their older names `h`/`h2` |
 | `POST /names` | claim a lightning address, authenticated by NIP-98 |
 | `/.well-known/nostr.json` | NIP-05 for the names this mint serves |
 | `/stats` | what the mint owes, what the node holds, and the coverage between them |

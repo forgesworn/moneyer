@@ -26,6 +26,7 @@ import {
   rotateNote,
   toBech32Lnurl,
   verifyNoteSignature,
+  verifyNoteSignatureHash,
   withinMintFeeBand,
   withNewK1,
   AmbiguousMutationError,
@@ -38,10 +39,23 @@ import {
   type PayRequestInfo
 } from '@lnurlcash/kit'
 import {MINT_KNOWS, MINT_KNOWS_HEADING} from '../../src/privacy.ts'
+import {decodeSpend} from '../../src/spend.ts'
 import {icons} from './icons.ts'
 import {rosette} from './guilloche.ts'
 import {banknote} from './banknote.ts'
 import {noteImage} from './note-image.ts'
+
+// Does this certificate cover the note `k1` spends? LUD-25 certifies every
+// note over hex(Q), read here off the spend itself; a note certified
+// before that was signed over sha256(k1), which the kit still checks.
+const certifiesNote = (k1: string, amountMsat: number, signature: string, mintPubkey: string): boolean => {
+  const spend = decodeSpend(k1)
+  const q = spend ? Array.from(spend.outputKey, byte => byte.toString(16).padStart(2, '0')).join('') : null
+  return Boolean(
+    (q && verifyNoteSignatureHash(q, amountMsat, signature, mintPubkey)) ||
+      verifyNoteSignature(k1, amountMsat, signature, mintPubkey)
+  )
+}
 
 // The mint's own website: mint a note right here, check one, read the
 // terms. Every protocol step goes through @lnurlcash/kit against the same
@@ -620,7 +634,7 @@ const viewHome = (): void => {
       <div class="hero">
         <span class="medallion"><span class="mark" data-rosette>${rosette(176)}</span></span>
         <p class="promise">Pay a Lightning invoice, and its payment preimage <em>is</em> your note - <em>money as a secret you hold</em>.</p>
-        <div class="fineline">No account · no custodian's ledger · whoever holds the string holds the money</div>
+        <div class="fineline">No account · no name on the ledger · whoever holds the string holds the money</div>
       </div>
       ${addr?.motd ? `<div class="notice"><b>notice</b>${esc(addr.motd)}</div>` : ''}
       <button class="plate" data-copy-address>${icons.bolt}<span>${esc(address)}</span></button>
@@ -1042,7 +1056,7 @@ const claimNote = async (preimage: string, grossMsat: number): Promise<void> => 
     const verified = Boolean(
       rotated.signature &&
         info.mintPubkey &&
-        verifyNoteSignature(rotated.k1, info.maxWithdrawable, rotated.signature, info.mintPubkey)
+        certifiesNote(rotated.k1, info.maxWithdrawable, rotated.signature, info.mintPubkey)
     )
     viewNote({url: finalUrl, amountMsat: info.maxWithdrawable, verified, secured: true})
   } catch (err) {
@@ -1235,7 +1249,7 @@ const viewCheck = (): void => {
           const k1 = noteK1(url)!
           const signature = noteSignature(url)
           const verified = Boolean(
-            signature && info.mintPubkey && verifyNoteSignature(k1, info.maxWithdrawable, signature, info.mintPubkey)
+            signature && info.mintPubkey && certifiesNote(k1, info.maxWithdrawable, signature, info.mintPubkey)
           )
           const node = renderResult(
             'good',

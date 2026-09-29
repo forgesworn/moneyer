@@ -1,6 +1,6 @@
 import {afterEach, describe, expect, it} from 'vitest'
 import {hashK1, mintAddressUrl} from '@lnurlcash/kit'
-import {freshK1, startMint, type TestMint} from './helpers.ts'
+import {freshK1, startMint, type TestMint, noteIdOf} from './helpers.ts'
 
 // A note is often all a holder ever has of a mint: handed one over Nostr or
 // on a tag, they never went near a Lightning Address. `payLink` is the route
@@ -17,7 +17,7 @@ describe('a note points back at the mint', () => {
   it('carries a payLink that resolves to this mint discovery document', async () => {
     const mint = (active = await startMint())
     const k1 = freshK1()
-    mint.moneyer.store.creditNote(hashK1(k1), 21_000)
+    mint.moneyer.store.creditNote(noteIdOf(k1), 21_000)
 
     const note = (await (await fetch(`${mint.moneyer.url}/w?k1=${k1}`)).json()) as {payLink?: string}
     expect(typeof note.payLink).toBe('string')
@@ -45,8 +45,8 @@ describe('a note points back at the mint', () => {
   it('says nothing about the mint on a spent note', async () => {
     const mint = (active = await startMint())
     const k1 = freshK1()
-    mint.moneyer.store.creditNote(hashK1(k1), 21_000)
-    mint.moneyer.store.swap([hashK1(k1)], [{id: hashK1(freshK1()), amountMsat: 21_000}])
+    mint.moneyer.store.creditNote(noteIdOf(k1), 21_000)
+    mint.moneyer.store.swap([noteIdOf(k1)], [{id: noteIdOf(freshK1()), amountMsat: 21_000}])
     const spent = (await (await fetch(`${mint.moneyer.url}/w?k1=${k1}`)).json()) as Record<string, unknown>
     expect(spent.status).toBe('ERROR')
     expect(spent.payLink).toBeUndefined()

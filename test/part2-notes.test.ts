@@ -4,7 +4,6 @@ import {
   encodeCp1,
   hashK1,
   signNoteOwnership,
-  verifyNoteSignature,
   verifyNoteSignatureHash
 } from '@lnurlcash/kit'
 import {schnorr, secp256k1} from '@noble/curves/secp256k1.js'
@@ -13,7 +12,7 @@ import {bytesToHex, hexToBytes, randomBytes, utf8ToBytes} from '@noble/hashes/ut
 import {bech32m} from '@scure/base'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
-import {freshK1, startMint, type TestMint} from './helpers.ts'
+import {freshK1, startMint, type TestMint, noteIdOf, certifiesNote} from './helpers.ts'
 
 // LUD-25 Part 2: a note keyed by a public key (cp1), spent with a recoverable
 // ownership signature (ck1), certified by the mint as cs1.
@@ -57,7 +56,7 @@ const creditKey = (mint: TestMint, amountMsat: number): NoteKey => {
 
 const creditSecret = (mint: TestMint, amountMsat: number): string => {
   const k1 = freshK1()
-  mint.moneyer.store.creditNote(hashK1(k1), amountMsat)
+  mint.moneyer.store.creditNote(noteIdOf(k1), amountMsat)
   return k1
 }
 
@@ -97,7 +96,7 @@ const resigned = (key: NoteKey): string => {
 
 const certifies = (mint: TestMint, key: NoteKey, amountMsat: number, sig: unknown): boolean =>
   typeof sig === 'string' &&
-  verifyNoteSignature(key.ck1, amountMsat, sig, mint.moneyer.signer.pubkey)
+  certifiesNote(key.ck1, amountMsat, sig, mint.moneyer.signer.pubkey)
 
 describe('minting to a cp1 key', () => {
   it('credits the note at the key named in the comment', async () => {
@@ -131,18 +130,19 @@ describe('looking a cp1 note up', () => {
     expect(verifyNoteSignatureHash(key.id, 42_000, byKey.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
   })
 
-  it('by its id as hex, which names it as a hash and gets no certificate', async () => {
+  it('not by its key as bare hex, which LUD-25 reads as a bearer note h', async () => {
     const mint = await start()
     const key = creditKey(mint, 42_000)
-    const byHex = await info(mint, [['p', key.id]])
-    expect(byHex.maxWithdrawable).toBe(42_000)
-    expect(byHex).not.toHaveProperty('sig')
+    // 64 hex where a cp1 goes is always an h: the bearer note locked to it,
+    // which is a different note and not one this mint holds.
+    expect((await info(mint, [['p', key.id]])).reason).toBe('Unknown note.')
+    expect((await info(mint, [['p', key.cp1], ['h', key.id]])).reason).toBe('p and h name different notes')
   })
 
-  it('by both spellings of the same key at once', async () => {
+  it('by both spellings of the same bearer note at once', async () => {
     const mint = await start()
-    const key = creditKey(mint, 42_000)
-    const both = await info(mint, [['p', key.cp1], ['h', key.id]])
+    const k1 = creditSecret(mint, 42_000)
+    const both = await info(mint, [['p', encodeCp1(hexToBytes(noteIdOf(k1)))], ['h', hashK1(k1)]])
     expect(both.maxWithdrawable).toBe(42_000)
   })
 
@@ -179,7 +179,7 @@ describe('spending with a ck1', () => {
     const next = freshK1()
     const toHash = await callback(mint, [['k1', key.ck1], ['p1', hashK1(next)]])
     expect(toHash.status).toBe('OK')
-    expect(verifyNoteSignature(next, 20_000, toHash.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(next, 20_000, toHash.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
     expect(await worth(mint, next)).toBe(20_000)
   })
 
@@ -188,7 +188,7 @@ describe('spending with a ck1', () => {
     const from = creditSecret(mint, 20_000)
     const occupied = creditKey(mint, 5_000)
     const reply = await callback(mint, [['k1', from], ['p1', occupied.cp1]])
-    expect(reply).toEqual({status: 'ERROR', reason: 'Output already in use.'})
+    expect(reply).toEqual({status: 'ERROR', reason: 'already in use'})
     expect(await worth(mint, from)).toBe(20_000)
   })
 
@@ -205,7 +205,7 @@ describe('spending with a ck1', () => {
     ])
     expect(reply.status).toBe('OK')
     expect(certifies(mint, key, 20_000, reply.sig)).toBe(true)
-    expect(verifyNoteSignature(change, 30_000, reply.sig2 as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(change, 30_000, reply.sig2 as string, mint.moneyer.signer.pubkey)).toBe(true)
     expect(await worth(mint, change)).toBe(30_000)
   })
 
@@ -248,8 +248,9 @@ describe('spending with a ck1', () => {
   it('refuses p1 and p2 that name one note in two spellings', async () => {
     const mint = await start()
     const from = creditKey(mint, 50_000)
-    const key = freshKey()
-    const reply = await callback(mint, [['k1', from.ck1], ['amount', '1000'], ['p1', key.cp1], ['p2', key.id]])
+    const secret = freshK1()
+    const asCp1 = encodeCp1(hexToBytes(noteIdOf(secret)))
+    const reply = await callback(mint, [['k1', from.ck1], ['amount', '1000'], ['p1', asCp1], ['p2', hashK1(secret)]])
     expect(reply.reason).toBe('p1 and p2 must differ.')
   })
 })

@@ -7,10 +7,9 @@ import {
   mergeNotesWithHash,
   rotateNoteWithHash,
   splitNoteWithHash,
-  verifyNoteSignature
 } from '@lnurlcash/kit'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
-import {freshK1, startMint, type TestMint} from './helpers.ts'
+import {freshK1, startMint, type TestMint, noteIdOf, certifiesNote} from './helpers.ts'
 
 // A rotate, split or merge is a GET, and transports retry GETs. Go's
 // net/http retries one that failed on a reused idle connection; the JDK's
@@ -35,7 +34,7 @@ afterEach(async () => {
 
 const creditNote = (mint: TestMint, amountMsat: number): {k1: string; url: string} => {
   const k1 = freshK1()
-  mint.moneyer.store.creditNote(hashK1(k1), amountMsat)
+  mint.moneyer.store.creditNote(noteIdOf(k1), amountMsat)
   return {k1, url: buildNoteUrl(`${mint.moneyer.url}/w`, k1, amountMsat)}
 }
 
@@ -48,7 +47,7 @@ describe('a retried mutation', () => {
 
     const first = await rotateNoteWithHash(callback, note.k1, hashK1(fresh))
     const retry = await rotateNoteWithHash(callback, note.k1, hashK1(fresh))
-    expect(verifyNoteSignature(fresh, 21_000, first.signature!, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(fresh, 21_000, first.signature!, mint.moneyer.signer.pubkey)).toBe(true)
     expect(retry.signature).toBe(first.signature)
 
     // The note at the staged secret is untouched: still one note, still
@@ -116,7 +115,7 @@ describe('a retried mutation', () => {
     const callback = `${mint.moneyer.url}/w/cb`
     const paymentHash = freshK1()
     mint.moneyer.store.markPending(
-      hashK1(note.k1),
+      noteIdOf(note.k1),
       paymentHash,
       fakeBolt11({amountMsat: 21_000, paymentHashHex: paymentHash}),
       21_000
@@ -136,6 +135,6 @@ describe('a retried mutation', () => {
     // rather than inferred, so "a note exists at h" proves nothing.
     const other = creditNote(mint, 3_000)
     await expect(rotateNoteWithHash(callback, victim.k1, hashK1(other.k1))).rejects.toThrow(NoteSpentError)
-    expect(mint.moneyer.store.noteById(hashK1(other.k1))!.amountMsat).toBe(3_000)
+    expect(mint.moneyer.store.noteById(noteIdOf(other.k1))!.amountMsat).toBe(3_000)
   })
 })

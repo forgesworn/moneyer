@@ -18,7 +18,6 @@ import {
   rotateNote,
   settleNote,
   splitNote,
-  verifyNoteSignature
 } from '@lnurlcash/kit'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {readFileSync} from 'node:fs'
@@ -27,7 +26,7 @@ import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
 import {createFakeBackend, FAKE_LOCAL_BALANCE_MSAT} from '../src/backends/fake.ts'
 import {createMoneyer} from '../src/server.ts'
 import {MINT_KNOWS, MINT_KNOWS_HEADING} from '../src/privacy.ts'
-import {freshK1, mintFeeBand, startMint, testConfig, waitFor, type TestMint} from './helpers.ts'
+import {freshK1, mintFeeBand, startMint, testConfig, waitFor, type TestMint, noteIdOf, certifiesNote} from './helpers.ts'
 
 // moneyer driven end to end by @lnurlcash/kit - the same client every
 // wallet built on the kit would bring. The kit's own strictness (k1 echo,
@@ -61,7 +60,7 @@ const NPUB = npubEncode('22'.repeat(32))
 
 const creditNote = (mint: TestMint, amountMsat: number): {k1: string; url: string} => {
   const k1 = freshK1()
-  mint.moneyer.store.creditNote(hashK1(k1), amountMsat)
+  mint.moneyer.store.creditNote(noteIdOf(k1), amountMsat)
   return {k1, url: buildNoteUrl(`${mint.moneyer.url}/w`, k1, amountMsat)}
 }
 
@@ -337,7 +336,7 @@ describe('minting', () => {
     const info = await fetchNoteInfoByHash(pay.withdrawLink!, hashK1(secret))
     expect(info.maxWithdrawable).toBe(21_000)
     expect(info).not.toHaveProperty('k1')
-    expect(mint.moneyer.store.noteById(hashK1(secret))?.state).toBe('outstanding')
+    expect(mint.moneyer.store.noteById(noteIdOf(secret))?.state).toBe('outstanding')
   })
 
   it('withholds the advertised fee and reports the net value as authoritative', async () => {
@@ -426,14 +425,14 @@ describe('mutations', () => {
     const info = await fetchNoteInfo(note.url)
 
     const rotated = await rotateNote(info.callback, note.k1)
-    expect(verifyNoteSignature(rotated.k1, 100_000, rotated.signature!, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(rotated.k1, 100_000, rotated.signature!, mint.moneyer.signer.pubkey)).toBe(true)
 
     const split = await splitNote(info.callback, [rotated.k1], 30_000)
-    expect(verifyNoteSignature(split.k1, 30_000, split.signature!, mint.moneyer.signer.pubkey)).toBe(true)
-    expect(verifyNoteSignature(split.change, 70_000, split.changeSignature!, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(split.k1, 30_000, split.signature!, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(split.change, 70_000, split.changeSignature!, mint.moneyer.signer.pubkey)).toBe(true)
 
     const merged = await mergeNotes(info.callback, [split.k1, split.change])
-    expect(verifyNoteSignature(merged.k1, 100_000, merged.signature!, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(merged.k1, 100_000, merged.signature!, mint.moneyer.signer.pubkey)).toBe(true)
 
     const finalInfo = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, merged.k1))
     expect(finalInfo.maxWithdrawable).toBe(100_000)
@@ -472,7 +471,8 @@ describe('mutations', () => {
     const b = creditNote(mint, 5_000)
     const info = await fetchNoteInfo(a.url)
     const {rotateNoteWithHash} = await import('@lnurlcash/kit')
-    await expect(rotateNoteWithHash(info.callback, a.k1, hashK1(b.k1))).rejects.toThrow(NoteSpentError)
+    // LUD-25 names this reason: an output already credited is `already in use`.
+    await expect(rotateNoteWithHash(info.callback, a.k1, hashK1(b.k1))).rejects.toThrow(/already in use/)
     expect((await fetchNoteInfo(a.url)).maxWithdrawable).toBe(10_000)
   })
 })
@@ -534,7 +534,7 @@ describe('melting', () => {
     expect(melt.pr).toBe(pr)
     expect(melt.verify).toBeDefined()
 
-    await waitFor(() => mint.moneyer.store.noteById(hashK1(note.k1))?.state === 'burned')
+    await waitFor(() => mint.moneyer.store.noteById(noteIdOf(note.k1))?.state === 'burned')
     const verification = await fetchInvoiceVerification(melt.verify!)
     expect(verification.settled).toBe(true)
     expect(verification.preimage).toBe(preimage)
@@ -548,7 +548,7 @@ describe('melting', () => {
     mint.backend.control.setPayMode('ambiguous-pending')
 
     await meltNote(info.callback, note.k1, fakeBolt11({amountMsat: 21_000, paymentHashHex: freshK1()}))
-    await waitFor(() => mint.moneyer.store.noteById(hashK1(note.k1))?.state === 'pending')
+    await waitFor(() => mint.moneyer.store.noteById(noteIdOf(note.k1))?.state === 'pending')
     await expect(rotateNote(info.callback, note.k1)).rejects.toThrow(PendingNoteError)
     await expect(
       meltNote(info.callback, note.k1, fakeBolt11({amountMsat: 21_000, paymentHashHex: freshK1()}))
@@ -567,7 +567,7 @@ describe('melting', () => {
     const melt = await meltNote(info.callback, note.k1, fakeBolt11({paymentHashHex: paymentHash}))
     expect(melt.verify).toBeDefined()
 
-    await waitFor(() => mint.moneyer.store.noteById(hashK1(note.k1))?.state === 'burned')
+    await waitFor(() => mint.moneyer.store.noteById(noteIdOf(note.k1))?.state === 'burned')
     expect(mint.backend.control.sentAmountMsat(paymentHash)).toBe(21_000)
     expect(mint.moneyer.store.outstandingLiabilityMsat()).toBe(0)
   })
@@ -579,7 +579,7 @@ describe('melting', () => {
 
     const paymentHash = freshK1()
     await meltNote(info.callback, note.k1, fakeBolt11({paymentHashHex: paymentHash}))
-    await waitFor(() => mint.moneyer.store.noteById(hashK1(note.k1))?.state === 'burned')
+    await waitFor(() => mint.moneyer.store.noteById(noteIdOf(note.k1))?.state === 'burned')
     // The same 900 msat of dust the mint keeps when a wallet invoices the
     // floor itself, because most wallets can only invoice whole sats.
     expect(mint.backend.control.sentAmountMsat(paymentHash)).toBe(94_000)
@@ -592,7 +592,7 @@ describe('melting', () => {
 
     const paymentHash = freshK1()
     await meltNote(info.callback, note.k1, fakeBolt11({amountMsat: 21_000, paymentHashHex: paymentHash}))
-    await waitFor(() => mint.moneyer.store.noteById(hashK1(note.k1))?.state === 'burned')
+    await waitFor(() => mint.moneyer.store.noteById(noteIdOf(note.k1))?.state === 'burned')
     // A funding source refuses an amount alongside an invoice that carries
     // one, so the mint must not send it.
     expect(mint.backend.control.sentAmountMsat(paymentHash)).toBeNull()
@@ -608,10 +608,10 @@ describe('melting', () => {
     )
     // Refused whole: the note is untouched and can still be melted by a
     // wallet that invoices its exact value.
-    expect(mint.moneyer.store.noteById(hashK1(note.k1))?.state).toBe('outstanding')
+    expect(mint.moneyer.store.noteById(noteIdOf(note.k1))?.state).toBe('outstanding')
     const exact = freshK1()
     await meltNote(info.callback, note.k1, fakeBolt11({amountMsat: 900, paymentHashHex: hashK1(exact)}))
-    await waitFor(() => mint.moneyer.store.noteById(hashK1(note.k1))?.state === 'burned')
+    await waitFor(() => mint.moneyer.store.noteById(noteIdOf(note.k1))?.state === 'burned')
   })
 
   it('refuses the wrong amount, its own invoices, and a reused invoice', async () => {
@@ -632,7 +632,7 @@ describe('melting', () => {
     const other = creditNote(mint, 21_000)
     const pr = fakeBolt11({amountMsat: 21_000, paymentHashHex: freshK1()})
     await meltNote(info.callback, other.k1, pr)
-    await waitFor(() => mint.moneyer.store.noteById(hashK1(other.k1))?.state === 'burned')
+    await waitFor(() => mint.moneyer.store.noteById(noteIdOf(other.k1))?.state === 'burned')
     await expect(meltNote(info.callback, note.k1, pr)).rejects.toThrow(ServiceError)
   })
 })

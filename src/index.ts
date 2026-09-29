@@ -27,6 +27,25 @@ export {
 } from './store.ts'
 export {createNoteSigner, noteIdSignatureDigest, recoversToPubkey, signDigestRecoverable, type NoteSigner} from './signing.ts'
 export {
+  bearerNoteId,
+  bearerNoteIdOfPreimage,
+  decodeNote,
+  decodeSpend,
+  deriveNotePubkey,
+  keyPathSighash,
+  NOTE_PURPOSE_CHANGE,
+  NOTE_PURPOSE_LIGHTNING_ADDRESS,
+  NOTE_PURPOSE_WALLET,
+  scriptPathSighash,
+  spendDomainOf,
+  verifySpend,
+  type ScriptSpend,
+  type ScriptVerifier,
+  type Spend,
+  type SpendVerdict
+} from './spend.ts'
+export {createKernelVerifier, type KernelVerifier} from './kernel.ts'
+export {
   STATS_D_TAG,
   STATS_KIND,
   buildStats,

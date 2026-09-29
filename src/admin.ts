@@ -1,7 +1,8 @@
 import {existsSync} from 'node:fs'
 import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
-import {hashK1, noteDeclaredAmount, noteK1, noteSignature, verifyNoteSignature} from '@lnurlcash/kit'
+import {noteDeclaredAmount, noteK1, noteSignature, verifyNoteSignature, verifyNoteSignatureHash} from '@lnurlcash/kit'
+import {decodeNote, decodeSpend} from './spend.ts'
 import {configFromEnv, pubkeyHex, type MoneyerConfig} from './config.ts'
 import {NoteStore, type NoteState} from './store.ts'
 import {buildStats} from './stats.ts'
@@ -241,16 +242,17 @@ export const runAdmin = async (argv: string[], deps: AdminDeps = {}): Promise<nu
           err('Usage: moneyer admin note <id|k1>')
           return 2
         }
-        const asked = wanted.toLowerCase()
-        let note = store.noteById(asked)
-        let id = asked
-        // 64 hex that names no note is very likely the secret itself,
-        // which an operator has in front of them far more often than an
-        // id. Hash it and look again rather than say "unknown".
-        if (!note && /^[0-9a-f]{64}$/.test(asked)) {
-          id = hashK1(asked)
-          note = store.noteById(id)
-          if (note) out(`(that is a secret; its note id is ${id})`)
+        const asked = wanted.trim().toLowerCase()
+        let note = store.noteById(asked) ?? store.noteByQ(asked)
+        // Whatever else an operator is likely to have in front of them: a
+        // bearer note's h or a cp1, or a spend - a preimage, a ck1, a cw1.
+        // Each names a Q; look again by it rather than say "unknown".
+        if (!note) {
+          const named = decodeNote(asked)
+          const spend = decodeSpend(asked)
+          const q = named && store.noteByQ(named) ? named : spend ? bytesToHex(spend.outputKey) : null
+          note = q ? store.noteByQ(q) : null
+          if (note) out(`(that ${named === q ? 'names' : 'spends'} the note at Q ${q}${note.id === q ? '' : `, stored under ${note.id}`})`)
         }
         if (!note) {
           const invoice = store.mintInvoiceByHash(asked)
@@ -262,6 +264,7 @@ export const runAdmin = async (argv: string[], deps: AdminDeps = {}): Promise<nu
           out(`no note, and no mint invoice, at ${asked}`)
           return 1
         }
+        const id = note.id
         out(`${id}`)
         out(`  value    ${sats(note.amountMsat)}`)
         out(`  state    ${note.state}`)
@@ -403,7 +406,12 @@ export const runAdmin = async (argv: string[], deps: AdminDeps = {}): Promise<nu
           err('That is not a note URL - no k1 in it.')
           return 2
         }
-        const id = hashK1(k1)
+        const spend = decodeSpend(k1)
+        if (!spend) {
+          err('That note URL carries no spend this mint could read.')
+          return 2
+        }
+        const id = bytesToHex(spend.outputKey)
         const declared = noteDeclaredAmount(url)
         const signature = noteSignature(url)
         const current = signingPubkey(config)
@@ -415,14 +423,18 @@ export const runAdmin = async (argv: string[], deps: AdminDeps = {}): Promise<nu
         } else if (declared === null) {
           out('signature present, but the URL declares no amount to check it against')
         } else {
-          const signedBy = keys.find(pubkey => verifyNoteSignature(k1, declared, signature, pubkey))
+          // Over Q, as LUD-25 certifies every note now, or over the note's
+          // old id for a certificate issued before that.
+          const signedBy = keys.find(
+            pubkey => verifyNoteSignatureHash(id, declared, signature, pubkey) || verifyNoteSignature(k1, declared, signature, pubkey)
+          )
           out(
             signedBy === undefined
               ? 'signature DOES NOT verify against this mint'
               : `signature verifies against ${signedBy === current ? 'the current key' : `a previous key (${signedBy})`}`
           )
         }
-        const note = store.noteById(id)
+        const note = store.noteByQ(id)
         out(`mint     ${note ? `holds ${sats(note.amountMsat)}, state ${note.state}` : 'has no note at this id'}`)
         // A note the mint does not know, or one already burned, is the
         // answer the operator came for; say it in the exit code too.
