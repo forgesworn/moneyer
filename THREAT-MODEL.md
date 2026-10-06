@@ -147,9 +147,9 @@ is what notecase and lnurl-wallet do.
 - No rate limiting is built in; put it at the proxy. This matters most for
   `/p/cb`: each unauthenticated call creates a real invoice at the funding
   source. moneyer sweeps its own unsettled invoices once their bolt11
-  expiry has passed, but the node's side of that growth is the operator's
-  to bound (cln's autoclean, or an equivalent cron) - and a proxy limit is
-  what keeps the RPC pile-up and the node database from growing at all.
+  expiry has passed and the funding source confirms them unpaid, but the
+  node's side of that growth is the operator's to bound (cln's autoclean,
+  or an equivalent cron) - and a proxy limit is what keeps the RPC pile-up and the node database from growing at all.
 - A fee-free configuration pays the melt routing-fee floor (0.5% of the
   amount or 5000 msat) out of its own channel balance, and mint-and-melt
   cycling costs a griefer nothing. Set `MONEYER_BASE_FEE_MSAT` to cover the

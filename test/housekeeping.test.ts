@@ -10,9 +10,9 @@ import type {NostrTransport} from '../src/zap.ts'
 import {TEST_SIGNING_KEY, freshK1, startMint, waitFor, type TestMint, noteIdOf} from './helpers.ts'
 
 // The expiry sweep deletes unsettled mint invoices whose bolt11 expiry is
-// provably past - "provably" being the whole game, since deleting a row
-// whose invoice could still settle would take a payer's money without
-// minting the note. fakeBolt11 writes no x tag, so the decoder's default
+// provably past and the funding source confirms unpaid - both halves being
+// the whole game, since deleting a row whose invoice could still settle, or
+// already has, would take a payer's money without minting the note. fakeBolt11 writes no x tag, so the decoder's default
 // one-hour expiry applies to every invoice below.
 
 let active: TestMint | null = null
@@ -40,14 +40,14 @@ describe('the mint-invoice expiry sweep', () => {
   it('deletes an unsettled invoice well past its expiry', async () => {
     const mint = await start()
     const paymentHash = recordInvoice(mint, 3 * 3600)
-    expect(sweepExpiredMintInvoices(mint.moneyer.store)).toBe(1)
+    expect(await sweepExpiredMintInvoices(mint.moneyer.store, mint.backend)).toEqual({swept: 1, settled: 0})
     expect(mint.moneyer.store.mintInvoiceByHash(paymentHash)).toBeNull()
   })
 
   it('keeps a fresh unsettled invoice', async () => {
     const mint = await start()
     const paymentHash = recordInvoice(mint)
-    expect(sweepExpiredMintInvoices(mint.moneyer.store)).toBe(0)
+    expect(await sweepExpiredMintInvoices(mint.moneyer.store, mint.backend)).toEqual({swept: 0, settled: 0})
     expect(mint.moneyer.store.mintInvoiceByHash(paymentHash)).not.toBeNull()
   })
 
@@ -55,7 +55,7 @@ describe('the mint-invoice expiry sweep', () => {
     const mint = await start()
     // expired by ten minutes; the margin is an hour
     const paymentHash = recordInvoice(mint, 3600 + 600)
-    expect(sweepExpiredMintInvoices(mint.moneyer.store)).toBe(0)
+    expect(await sweepExpiredMintInvoices(mint.moneyer.store, mint.backend)).toEqual({swept: 0, settled: 0})
     expect(mint.moneyer.store.mintInvoiceByHash(paymentHash)).not.toBeNull()
   })
 
@@ -63,7 +63,36 @@ describe('the mint-invoice expiry sweep', () => {
     const mint = await start()
     const paymentHash = recordInvoice(mint, 30 * 24 * 3600)
     mint.moneyer.store.settleMintInvoice(paymentHash)
-    expect(sweepExpiredMintInvoices(mint.moneyer.store)).toBe(0)
+    expect(await sweepExpiredMintInvoices(mint.moneyer.store, mint.backend)).toEqual({swept: 0, settled: 0})
+    expect(mint.moneyer.store.mintInvoiceByHash(paymentHash)).not.toBeNull()
+  })
+
+  it('settles an expired invoice the funding source says was paid, and mints its note', async () => {
+    // The payer paid, and their wallet never came back to /verify.
+    const mint = await start()
+    const paymentHash = freshK1()
+    const outputId = noteIdOf(freshK1())
+    const pr = fakeBolt11({
+      amountMsat: 22_000,
+      paymentHashHex: paymentHash,
+      timestamp: Math.floor(Date.now() / 1000) - 3 * 3600
+    })
+    mint.moneyer.store.recordMintInvoice(paymentHash, pr, 22_000, 21_000, outputId)
+    const paid = {isInvoiceSettled: async () => true}
+    expect(await sweepExpiredMintInvoices(mint.moneyer.store, paid)).toEqual({swept: 0, settled: 1})
+    expect(mint.moneyer.store.mintInvoiceByHash(paymentHash)?.settled).toBe(true)
+    expect(mint.moneyer.store.noteById(outputId)).toMatchObject({amountMsat: 21_000, state: 'outstanding'})
+  })
+
+  it('keeps an expired invoice when the funding source cannot answer', async () => {
+    const mint = await start()
+    const paymentHash = recordInvoice(mint, 3 * 3600)
+    const down = {
+      isInvoiceSettled: async (): Promise<boolean> => {
+        throw new Error('connection refused')
+      }
+    }
+    expect(await sweepExpiredMintInvoices(mint.moneyer.store, down)).toEqual({swept: 0, settled: 0})
     expect(mint.moneyer.store.mintInvoiceByHash(paymentHash)).not.toBeNull()
   })
 
@@ -71,7 +100,7 @@ describe('the mint-invoice expiry sweep', () => {
     const mint = await start()
     const paymentHash = freshK1()
     mint.moneyer.store.recordMintInvoice(paymentHash, 'not-an-invoice', 22_000, 22_000)
-    expect(sweepExpiredMintInvoices(mint.moneyer.store)).toBe(0)
+    expect(await sweepExpiredMintInvoices(mint.moneyer.store, mint.backend)).toEqual({swept: 0, settled: 0})
     expect(mint.moneyer.store.mintInvoiceByHash(paymentHash)).not.toBeNull()
   })
 })

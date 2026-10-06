@@ -703,7 +703,7 @@ path should not silently create an empty database to answer from.
 | `note <id\|k1>` | one note; 64 hex that names no note is hashed and looked up as the secret |
 | `melts [--pending]` | list melts |
 | `reconcile` | one pending-melt reconcile pass, printing what changed |
-| `sweep` | delete mint invoices whose expiry is provably past |
+| `sweep` | delete expired mint invoices the funding source confirms unpaid, and mint the notes of any it finds paid |
 | `snapshot <path>` | a consistent copy of the database, taken live, refusing to overwrite |
 | `names list\|add <name> <npub>\|rm <name>` | the lightning addresses this mint pays out as notes |
 | `keys rotate` | generate a signing key and print the two environment lines; writes nothing |
@@ -735,8 +735,9 @@ is not.
   Whether that is a channel imbalance or something worse, it is the one
   number a custodial mint must never be relaxed about.
 - **unsettled invoices growing.** Invoices are issued and never paid all
-  day, and the sweep clears the expired ones. A count that climbs through
-  a sweep means invoices are being issued that nobody can pay.
+  day, and the sweep clears the expired ones the funding source confirms
+  unpaid. A count that climbs through a sweep means invoices are being
+  issued that nobody can pay, or that the funding source is not answering.
 
 ## Testing
 

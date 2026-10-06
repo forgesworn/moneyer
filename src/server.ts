@@ -1354,8 +1354,10 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   // otherwise grow by one dead row per /p/cb call forever. The timer is
   // unref'd so it never keeps the process alive.
   const housekeeping = async (): Promise<void> => {
-    const swept = sweepExpiredMintInvoices(store) + (zap?.sweep() ?? 0)
+    const {swept: mintSwept, settled} = await sweepExpiredMintInvoices(store, backend)
+    const swept = mintSwept + (zap?.sweep() ?? 0)
     if (swept > 0) log(`swept ${swept} expired mint invoice${swept === 1 ? '' : 's'}`)
+    if (settled > 0) log(`found ${settled} expired mint invoice${settled === 1 ? '' : 's'} paid after all - note${settled === 1 ? '' : 's'} minted`)
     await reconcilePendingMelts(store, backend, inFlight, log)
     reconciledAt = Date.now()
   }
@@ -1427,15 +1429,29 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   }
 }
 
-// Deletes unsettled mint invoices whose bolt11 expiry is comfortably past,
-// returning the count swept. The invoice's own timestamp + expiry are the
-// proof - a funding source refuses to settle an expired invoice, so the
-// row can never mint a note again. The hour's margin keeps the delete
-// unambiguously behind every implementation's reading of that expiry, and
-// an undecodable invoice is kept: no proof, no delete. The delete itself is
-// conditional on the row still being unsettled, so a settle racing the
-// sweep always wins.
-export const sweepExpiredMintInvoices = (store: NoteStore, nowMs: number = Date.now()): number => {
+// Clears mint invoices this mint has not seen paid once their bolt11 expiry
+// is comfortably past, returning how many it deleted and how many it found
+// paid after all.
+//
+// "Unsettled" here is only this mint's record. A payment is recorded when a
+// wallet comes back to /verify or to claim its note, so a payer whose wallet
+// never comes back - a closed tab, an invoice paid from another app - leaves
+// a row that reads unsettled while the funding source holds the money.
+// Deleting that row would strand the payment for good: the note's id lives
+// only here. So the funding source is asked first. Paid, the invoice is
+// settled and its note minted, exactly as a /verify would have. Unpaid, the
+// expiry is the proof it never can be, and the row goes. No answer, no
+// delete.
+//
+// The hour's margin keeps the delete unambiguously behind every
+// implementation's reading of that expiry, an undecodable invoice is kept,
+// and the delete is conditional on the row still being unsettled, so a
+// settle racing the sweep always wins.
+export const sweepExpiredMintInvoices = async (
+  store: NoteStore,
+  backend: Pick<LightningBackend, 'isInvoiceSettled'>,
+  nowMs: number = Date.now()
+): Promise<{swept: number; settled: number}> => {
   const stale: string[] = []
   for (const invoice of store.unsettledMintInvoices()) {
     const decoded = tryDecodeBolt11(invoice.pr)
@@ -1443,6 +1459,22 @@ export const sweepExpiredMintInvoices = (store: NoteStore, nowMs: number = Date.
     const expiresAtMs = (decoded.timestamp + decoded.expirySeconds) * 1000
     if (nowMs > expiresAtMs + 3_600_000) stale.push(invoice.paymentHash)
   }
-  for (const paymentHash of stale) store.deleteUnsettledMintInvoice(paymentHash)
-  return stale.length
+  let swept = 0
+  let settled = 0
+  for (const paymentHash of stale) {
+    let paid: boolean
+    try {
+      paid = await backend.isInvoiceSettled(paymentHash)
+    } catch {
+      continue
+    }
+    if (paid) {
+      store.settleMintInvoice(paymentHash)
+      settled++
+    } else {
+      store.deleteUnsettledMintInvoice(paymentHash)
+      swept++
+    }
+  }
+  return {swept, settled}
 }

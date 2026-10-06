@@ -271,9 +271,9 @@ misconfigure.
 
 **Rate limit at this layer.** Every unauthenticated GET to `/p/cb` creates
 a real invoice on the funding node. moneyer sweeps its own unsettled rows
-once their bolt11 expiry has passed, but the node keeps its side of every
-invoice until you clean it (cln's autoclean plugin, or a cron), and an
-unthrottled loop can still pile up concurrent RPCs against the node. A few
+once their bolt11 expiry has passed and the node confirms them unpaid, but
+the node keeps its side of every invoice until you clean it (cln's
+autoclean plugin, or a cron), and an unthrottled loop can still pile up concurrent RPCs against the node. A few
 requests per second per IP on `/p/cb` (and a generous ceiling on the rest)
 is enough - wallets call it once per mint.
 
