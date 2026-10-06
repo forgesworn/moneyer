@@ -170,9 +170,14 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
       return result
     },
 
+    // 404 is lnd's answer for an invoice it does not hold, which can never
+    // settle. Any other refusal is no answer at all, and reading it as
+    // "unpaid" would let the expiry sweep delete a paid invoice's row.
     async isInvoiceSettled(paymentHashHex) {
       const res = await json(`/v1/invoice/${paymentHashHex}`)
-      return res.ok && Boolean(res.json?.settled)
+      if (res.status === 404) return false
+      if (!res.ok) throw new Error(`lnd invoice lookup failed: HTTP ${res.status}`)
+      return Boolean(res.json?.settled)
     },
 
     async invoicePreimage(paymentHashHex) {

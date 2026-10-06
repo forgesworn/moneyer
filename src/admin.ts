@@ -43,7 +43,7 @@ const COMMANDS = [
   ['note <id|k1>', 'one note, by id or by the secret itself'],
   ['melts [--pending]', 'list melts, newest first'],
   ['reconcile', 'resolve melts left in flight, and say what changed'],
-  ['sweep', 'delete mint invoices whose expiry is provably past'],
+  ['sweep', 'delete expired mint invoices the funding source confirms unpaid'],
   ['snapshot <path>', 'a consistent copy of the database, taken live'],
   ['names list|add <name> <npub>|rm <name>', 'the lightning addresses this mint pays out as notes'],
   ['keys rotate', 'generate a signing key and print the two env lines'],
@@ -310,8 +310,9 @@ export const runAdmin = async (argv: string[], deps: AdminDeps = {}): Promise<nu
       }
 
       case 'sweep': {
-        const swept = sweepExpiredMintInvoices(store, now())
+        const {swept, settled} = await sweepExpiredMintInvoices(store, fundingSource(), now())
         out(`swept ${swept} expired mint invoice${swept === 1 ? '' : 's'}`)
+        if (settled > 0) out(`found ${settled} paid after all - note${settled === 1 ? '' : 's'} minted`)
         return 0
       }
 
