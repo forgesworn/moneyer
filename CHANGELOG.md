@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.17.1 - 2026-10-06
+
+- **The expiry sweep no longer deletes paid mint invoices.** A mint invoice
+  was recorded as paid only when a wallet came back to `/verify` or to
+  claim its note, and the sweep deleted every unrecorded one an hour past
+  its expiry. A payer whose wallet never came back lost the payment: the
+  funding source kept the money and the note's id went with the row. The
+  sweep, and `moneyer admin sweep`, now ask the funding source first. Paid,
+  the invoice is settled and its note minted; unpaid, the row goes; no
+  answer, the row stays.
+- **lnd: a refused invoice lookup is no longer read as unpaid.** Only a 404
+  (an invoice lnd does not hold) now means unpaid; any other non-2xx throws.
+  A transient lnd error on `/verify` now returns an error instead of "not
+  paid yet".
+
 ## 0.17.0 - 2026-09-26
 
 LUD-25's unified taproot model (lnurl/luds 6e865b1). Every note is now a
