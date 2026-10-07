@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.0 - 2026-10-07
 
 - **A failed melt's invoice can be tried again.** Once the funding source
   confirms a melt never paid, the note is restored as before, and now the
