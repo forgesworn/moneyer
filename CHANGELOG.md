@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- **Bound mint receipts verify in current wallets again.** Since
+  `@lnurlcash/kit` moved to taproot notes, a wallet checks a settled
+  `/verify` receipt's `mint.sig` as a `cs1` over the note's Q. moneyer still
+  sent a bare hex signature over the bearer `h`, which the kit drops as
+  unreadable, so a sealed signer could not confirm a note minted here. The
+  receipt now carries the note's ordinary certificate, and a quote or
+  receipt for a note named by its `cp1` repeats that `cp1` rather than the
+  hex of its Q, which a wallet would read as a bearer `h`.
+- `@lnurlcash/kit` 0.20.2. `moneyer admin verify-note` checks a certificate
+  over the note's Q, or over `sha256(k1)` for a bearer note certified before
+  that, and still reads a pre-`cs1` signature from a note URL's `sig`. The
+  mint page and the live bound-mint check name a quote by its bare `h`.
+
 ## 0.18.0 - 2026-10-07
 
 - **A melt that cannot leave is answered with its reason.** The callback
