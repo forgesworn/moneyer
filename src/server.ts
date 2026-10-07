@@ -20,7 +20,7 @@ import {createFakeBackend} from './backends/fake.ts'
 import {createClnBackend} from './backends/cln.ts'
 import {createLndBackend} from './backends/lnd.ts'
 import {PaymentPendingError, type LightningBackend, type NodeInfo} from './backends/types.ts'
-import {reconcilePendingMelts, runMelt} from './melt.ts'
+import {reconcilePendingMelts, runMelt, type MeltOutcome} from './melt.ts'
 import {landingPage} from './landing.ts'
 import {packageVersion} from './version.ts'
 import {createZapBridge, poolTransport, type NostrTransport, type ZapBridge} from './zap.ts'
@@ -92,6 +92,9 @@ export type MoneyerDeps = {
   log?: (message: string) => void
   // See melt.ts - tests shrink these.
   confirmDelaysMs?: number[]
+  // How long a melt callback waits for the payment's outcome before it
+  // answers OK anyway. Tests stretch or shrink it.
+  meltAnswerWindowMs?: number
   // The built website to serve at GET /. Omitted means load web/dist from
   // disk; null means serve the self-contained landing page instead.
   webAssets?: WebAssets | null
@@ -110,6 +113,9 @@ export type MoneyerDeps = {
 // more than a name and a note, and an unbounded read on a public endpoint
 // is a way to run a mint out of memory.
 const MAX_BODY_BYTES = 8 * 1024
+// How long a melt callback waits for the payment's outcome before answering
+// OK. Long enough for a no-route failure, short against a wallet's timeout.
+const MELT_ANSWER_WINDOW_MS = 2_000
 
 const readBody = async (req: IncomingMessage, limit = MAX_BODY_BYTES): Promise<string | null> => {
   const chunks: Buffer[] = []
@@ -1250,7 +1256,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           return fail('Invoice already used by an earlier melt - use a fresh one.')
         }
         inFlight.add(paymentHash)
-        void runMelt(
+        const melt = runMelt(
           {
             paymentHash,
             noteId: inputIds[0]!,
@@ -1260,10 +1266,26 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           },
           {store, backend, feeLimitMsat: meltFeeLimitMsat, log, ...(deps.confirmDelaysMs ? {confirmDelaysMs: deps.confirmDelaysMs} : {})}
         )
-          .catch(err => log(`melt ${inputIds[0]}: ${(err as Error).message}`))
+          .catch((err): MeltOutcome => {
+            log(`melt ${inputIds[0]}: ${(err as Error).message}`)
+            return {kind: 'unresolved'}
+          })
           .finally(() => inFlight.delete(paymentHash))
-        // Replied before the payment resolves, per LUD-03: OK means the
-        // melt is requested and the note reserved, never that it settled.
+        // A payment that cannot leave usually says so within a second (lnd
+        // answers no-route before sending any HTLC), so wait briefly: a
+        // melt the funding source has confirmed never went out is answered
+        // with its reason, and the note is already outstanding again. Any
+        // other outcome, or none yet, is OK as LUD-03 has it: the melt is
+        // requested and the note reserved, never that it settled.
+        let windowTimer: NodeJS.Timeout | undefined
+        const outcome = await Promise.race([
+          melt,
+          new Promise<null>(resolve => {
+            windowTimer = setTimeout(() => resolve(null), deps.meltAnswerWindowMs ?? MELT_ANSWER_WINDOW_MS)
+          })
+        ])
+        clearTimeout(windowTimer)
+        if (outcome?.kind === 'restored') return fail(outcome.reason)
         return send({
           status: 'OK',
           ...(config.verify ? {pr: pr.trim(), verify: `${origin}/verify/${paymentHash}`} : {})

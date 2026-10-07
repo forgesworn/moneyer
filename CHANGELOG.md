@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **A melt that cannot leave is answered with its reason.** The callback
+  used to reply `OK` the moment the note was reserved, so a melt with no
+  route looked like success until the wallet checked again. It now waits up
+  to two seconds for the payment: if the funding source confirms nothing
+  went out, the note is restored first and the answer is `ERROR` with the
+  reason (for lnd, "Could not find a route to pay this invoice."). A
+  payment still in flight, or one that settles, is `OK` as before. The
+  hodl-invoice rule stands: a failure report is acted on only once the
+  funding source confirms it. The invoice itself is still refused if tried
+  again, as it was after a background restore.
+
 ## 0.17.1 - 2026-10-06
 
 - **The expiry sweep no longer deletes paid mint invoices.** A mint invoice

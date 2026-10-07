@@ -7,10 +7,11 @@ import {
 } from './backends/types.ts'
 import type {NoteStore} from './store.ts'
 
-// A melt replies OK the moment the note is reserved; everything here
-// happens after that reply, and the note's fate hangs on it. The rules,
-// carried over from the reference mint because each one closes a way to
-// lose somebody's money:
+// The callback waits a short while for runMelt's outcome so it can answer a
+// payment that cleanly failed with its reason; past that window it replies
+// OK and everything here carries on after the reply, the note's fate hanging
+// on it. The rules, carried over from the reference mint because each one
+// closes a way to lose somebody's money:
 //
 // - The note burns only once the payment POSITIVELY completed.
 // - The note restores only once the funding source gives a terminal "not
@@ -33,6 +34,11 @@ export type MeltJob = {
   payAmountMsat?: number
 }
 
+// What a melt came to. `restored` means the funding source confirmed the
+// payment never went out and the note is outstanding again; `reason` is
+// what a wallet can be told. `unresolved` leaves the note pending.
+export type MeltOutcome = {kind: 'paid'} | {kind: 'restored'; reason: string} | {kind: 'unresolved'}
+
 export type MeltDeps = {
   store: NoteStore
   backend: LightningBackend
@@ -47,7 +53,7 @@ const DEFAULT_CONFIRM_DELAYS_MS = [0, 2_000, 4_000, 9_000, 16_000]
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-const confirmThenSettle = async (job: MeltJob, deps: MeltDeps): Promise<void> => {
+const confirmThenSettle = async (job: MeltJob, deps: MeltDeps, reason: string): Promise<MeltOutcome> => {
   const log = deps.log ?? (() => {})
   for (const delay of deps.confirmDelaysMs ?? DEFAULT_CONFIRM_DELAYS_MS) {
     if (delay > 0) await sleep(delay)
@@ -55,11 +61,11 @@ const confirmThenSettle = async (job: MeltJob, deps: MeltDeps): Promise<void> =>
       const complete = await deps.backend.isPaymentComplete(job.paymentHash)
       if (complete) {
         deps.store.finalizeMelt(job.paymentHash)
-      } else {
-        log(`melt ${job.noteId}: confirmed not paid - restoring`)
-        deps.store.restoreMelt(job.paymentHash)
+        return {kind: 'paid'}
       }
-      return
+      log(`melt ${job.noteId}: confirmed not paid - restoring`)
+      deps.store.restoreMelt(job.paymentHash)
+      return {kind: 'restored', reason}
     } catch (err) {
       if (!(err instanceof PaymentPendingError)) {
         log(`melt ${job.noteId}: could not confirm payment status (${(err as Error).message})`)
@@ -67,9 +73,10 @@ const confirmThenSettle = async (job: MeltJob, deps: MeltDeps): Promise<void> =>
     }
   }
   log(`melt ${job.noteId}: payment status unconfirmable - note left pending for reconciliation`)
+  return {kind: 'unresolved'}
 }
 
-export const runMelt = async (job: MeltJob, deps: MeltDeps): Promise<void> => {
+export const runMelt = async (job: MeltJob, deps: MeltDeps): Promise<MeltOutcome> => {
   const log = deps.log ?? (() => {})
   let outcome
   try {
@@ -89,23 +96,26 @@ export const runMelt = async (job: MeltJob, deps: MeltDeps): Promise<void> => {
       // lands between that check and the send.
       log(`melt ${job.noteId}: the funding source already knew this hash - restored (shared-node replay?)`)
       deps.store.restoreMelt(job.paymentHash)
-      return
+      return {kind: 'restored', reason: 'Invoice already used by an earlier melt - use a fresh one.'}
     }
-    if (!(err instanceof PaymentFailedError)) {
+    // A clean failure's message is the backend's reason, written for a
+    // wallet ("Could not find a route..."); an ambiguous one is transport
+    // detail, so a wallet gets a plain sentence instead.
+    const clean = err instanceof PaymentFailedError
+    if (!clean) {
       log(`melt ${job.noteId}: payment attempt failed ambiguously (${(err as Error).message})`)
     }
-    await confirmThenSettle(job, deps)
-    return
+    return confirmThenSettle(job, deps, clean ? (err as Error).message : 'Payment failed.')
   }
   if (outcome.preimageHex !== null && !verifyPreimage(outcome.preimageHex, job.paymentHash)) {
     // The backend claims success with a preimage that does not settle this
     // invoice. That is a statement about the evidence, not the money - fall
     // back to the tracker rather than trusting either way.
     log(`melt ${job.noteId}: backend preimage does not settle this invoice - reconfirming`)
-    await confirmThenSettle(job, deps)
-    return
+    return confirmThenSettle(job, deps, 'Payment failed.')
   }
   deps.store.finalizeMelt(job.paymentHash)
+  return {kind: 'paid'}
 }
 
 // Resolves melts an earlier process left pending - a crash mid-melt, or an
