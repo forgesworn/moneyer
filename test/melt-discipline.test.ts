@@ -31,6 +31,17 @@ const meltOnce = async (mint: TestMint, amountMsat = 21_000) => {
   return {k1, noteId: noteIdOf(k1), paymentHash: hashK1(paymentHash)}
 }
 
+// The callback's raw answer, for melts the mint refuses outright.
+const meltAnswer = async (mint: TestMint, amountMsat = 21_000) => {
+  const k1 = freshK1()
+  mint.moneyer.store.creditNote(noteIdOf(k1), amountMsat)
+  const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, k1, amountMsat))
+  const paymentHash = hashK1(freshK1())
+  const pr = fakeBolt11({amountMsat, paymentHashHex: paymentHash})
+  const body = (await fetch(`${info.callback}?k1=${k1}&pr=${pr}`).then(r => r.json())) as {status: string; reason?: string}
+  return {k1, noteId: noteIdOf(k1), paymentHash, body}
+}
+
 const noteState = (mint: TestMint, noteId: string) => mint.moneyer.store.noteById(noteId)?.state
 
 describe('a note that is not a whole sat', () => {
@@ -78,11 +89,14 @@ describe('melt discipline', () => {
     await waitFor(() => noteState(mint, noteId) === 'burned')
   })
 
-  it('restores the note on a clean, confirmed failure', async () => {
+  it('restores the note on a clean, confirmed failure and answers with the reason', async () => {
     const mint = (active = await startMint())
     mint.backend.control.setPayMode('fail-clean')
-    const {k1, noteId} = await meltOnce(mint)
-    await waitFor(() => noteState(mint, noteId) === 'outstanding')
+    const {k1, noteId, paymentHash, body} = await meltAnswer(mint)
+    expect(body).toEqual({status: 'ERROR', reason: 'Could not find a route to pay this invoice.'})
+    // Restored before the answer went out, not some time after it.
+    expect(noteState(mint, noteId)).toBe('outstanding')
+    expect(mint.moneyer.store.meltByHash(paymentHash)?.outcome).toBe('restored')
     const restored = await fetch(`${mint.moneyer.url}/w?h=${hashK1(k1)}`).then(r => r.json())
     expect(restored).toMatchObject({tag: 'withdrawRequest', maxWithdrawable: 21_000})
     expect(restored).not.toHaveProperty('k1')
@@ -127,7 +141,8 @@ describe('melt discipline', () => {
     // settled. Restoring here would let the holder melt the value twice.
     const mint = (active = await startMint())
     mint.backend.control.setPayMode('fail-then-paid')
-    const {noteId} = await meltOnce(mint)
+    const {noteId, body} = await meltAnswer(mint)
+    expect(body.status).toBe('OK')
     await waitFor(() => noteState(mint, noteId) === 'burned')
   })
 
@@ -141,7 +156,24 @@ describe('melt discipline', () => {
   it('restores the note when an ambiguous attempt is confirmed unpaid', async () => {
     const mint = (active = await startMint())
     mint.backend.control.setPayMode('ambiguous-unpaid')
-    const {noteId} = await meltOnce(mint)
+    const {noteId, body} = await meltAnswer(mint)
+    // The transport error is the operator's business; the wallet gets a
+    // plain sentence.
+    expect(body).toEqual({status: 'ERROR', reason: 'Payment failed.'})
+    expect(noteState(mint, noteId)).toBe('outstanding')
+  })
+
+  it('answers OK when the outcome is not known within the window, and still restores later', async () => {
+    const mint = (active = await startMint({}, {meltAnswerWindowMs: 20}))
+    mint.backend.control.setPayMode('fail-clean')
+    const realPay = mint.backend.payInvoice.bind(mint.backend)
+    mint.backend.payInvoice = async args => {
+      await new Promise(resolve => setTimeout(resolve, 150))
+      return realPay(args)
+    }
+    const {noteId, body} = await meltAnswer(mint)
+    expect(body.status).toBe('OK')
+    expect(noteState(mint, noteId)).toBe('pending')
     await waitFor(() => noteState(mint, noteId) === 'outstanding')
   })
 
@@ -260,8 +292,12 @@ describe('melt discipline', () => {
       }
       return realIsComplete(paymentHash)
     }
-    await meltNote(info.callback, k1, fakeBolt11({amountMsat: 21_000, paymentHashHex: hash}))
-    await waitFor(() => noteState(mint, noteIdOf(k1)) === 'outstanding')
+    const pr = fakeBolt11({amountMsat: 21_000, paymentHashHex: hash})
+    expect(await fetch(`${info.callback}?k1=${k1}&pr=${pr}`).then(r => r.json())).toEqual({
+      status: 'ERROR',
+      reason: 'Invoice already used by an earlier melt - use a fresh one.'
+    })
+    expect(noteState(mint, noteIdOf(k1))).toBe('outstanding')
     expect(mint.moneyer.store.meltByHash(hash)?.outcome).toBe('restored')
   })
 

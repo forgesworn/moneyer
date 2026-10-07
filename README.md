@@ -37,10 +37,13 @@ lesson, that behaviour is kept deliberately and tested.
   from the start.
 - Signs every note it mints with its own mint key (secp256k1, the standard
   `Lightning Signed Message` construction) for LUD-25 offline verification.
-- The melt discipline: reply OK when the note is reserved, pay in the
-  background, burn only on confirmed payment, restore only on confirmed
-  non-payment, and park everything else as pending for reconciliation -
-  which also runs at startup, so a crash mid-melt never guesses.
+- The melt discipline: reserve the note, then give the payment up to two
+  seconds. A payment the funding source confirms never left (no route, say)
+  is answered `ERROR` with its reason and the note is outstanding again;
+  anything else is answered `OK` and finishes in the background. Burn only
+  on confirmed payment, restore only on confirmed non-payment, and park
+  everything else as pending for reconciliation - which also runs at
+  startup, so a crash mid-melt never guesses.
 
 ## Run
 
