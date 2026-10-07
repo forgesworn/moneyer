@@ -89,6 +89,11 @@ export type FakeBackendOptions = {
   // and a wallet still mints without waiting on anything a human has to
   // do. A fast payer, rather than one that pays before being asked.
   autoSettleAfterMs?: number
+  // Stream settles like lnd's invoice subscription: control.settleInvoice
+  // reports each one, numbered, and a watcher resumes after its index. Off
+  // by default so the mint credits only on its lazy paths, as every test
+  // before the stream expects. autoSettle's invoices are never reported.
+  streamsSettles?: boolean
 }
 
 export type FakeBackend = LightningBackend & {
@@ -117,6 +122,9 @@ export type FakeBackend = LightningBackend & {
     // ratio. Under-coverage is a state the mint has to render honestly,
     // so a test must be able to ask for it.
     setLocalBalanceMsat(msat: number | undefined): void
+    // Ends every open settle stream, as a node restart or a dropped
+    // connection would. The watcher has to reconnect and resume.
+    dropInvoiceStreams(): void
   }
 }
 
@@ -136,10 +144,49 @@ export const createFakeBackend = (options: FakeBackendOptions = {}): FakeBackend
   const knownPreimages = new Map<string, string>()
   let localBalanceMsat: number | undefined = FAKE_LOCAL_BALANCE_MSAT
   let payMode: FakePayMode = 'succeed'
+  const settleLog: Array<{paymentHashHex: string; index: number}> = []
+  const watchers = new Set<{push: (entry: {paymentHashHex: string; index: number}) => void; end: () => void}>()
+
+  const watchSettledInvoices: LightningBackend['watchSettledInvoices'] = async ({fromIndex, signal, onSettled}) => {
+    const queue = settleLog.filter(entry => fromIndex > 0 && entry.index > fromIndex)
+    let wake: (() => void) | null = null
+    let ended = false
+    const watcher = {
+      push: (entry: {paymentHashHex: string; index: number}) => {
+        queue.push(entry)
+        wake?.()
+      },
+      end: () => {
+        ended = true
+        wake?.()
+      }
+    }
+    const onAbort = () => watcher.end()
+    signal.addEventListener('abort', onAbort)
+    watchers.add(watcher)
+    try {
+      for (;;) {
+        const entry = queue.shift()
+        if (entry) {
+          await onSettled(entry.paymentHashHex, entry.index)
+          continue
+        }
+        if (ended) return
+        await new Promise<void>(resolve => {
+          wake = resolve
+        })
+        wake = null
+      }
+    } finally {
+      watchers.delete(watcher)
+      signal.removeEventListener('abort', onAbort)
+    }
+  }
 
   return {
     name: 'fake',
     acceptsInvoicePreimage: !nodeChoosesPreimage,
+    ...(options.streamsSettles === true ? {watchSettledInvoices} : {}),
 
     async createInvoice({amountMsat, preimageHex, memo}) {
       // A node that mints its own preimages never sees the caller's.
@@ -235,7 +282,11 @@ export const createFakeBackend = (options: FakeBackendOptions = {}): FakeBackend
       settleInvoice(paymentHashHex) {
         const invoice = invoices.get(paymentHashHex)
         if (!invoice) throw new Error(`no fake invoice for ${paymentHashHex}`)
+        if (invoice.settled) return
         invoice.settled = true
+        const entry = {paymentHashHex, index: settleLog.length + 1}
+        settleLog.push(entry)
+        for (const watcher of watchers) watcher.push(entry)
       },
       setPayMode(mode) {
         payMode = mode
@@ -262,6 +313,14 @@ export const createFakeBackend = (options: FakeBackendOptions = {}): FakeBackend
       },
       setLocalBalanceMsat(msat) {
         localBalanceMsat = msat
+      },
+      dropInvoiceStreams() {
+        // gone at once, as a dropped connection is: a settle after this
+        // reaches the watcher only by its resuming from the index
+        for (const watcher of [...watchers]) {
+          watchers.delete(watcher)
+          watcher.end()
+        }
       },
       invoiceByHash(paymentHashHex) {
         const invoice = invoices.get(paymentHashHex)

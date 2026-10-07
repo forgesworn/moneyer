@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- **A paid mint invoice is credited the moment it settles.** moneyer now
+  watches the funding source's settled invoices (lnd's
+  `/v1/invoices/subscribe`, cln's `waitanyinvoice`) and mints the note as
+  soon as the payment lands, instead of when the wallet comes back to claim
+  or poll `verify`, or when the expiry sweep finds it. Liabilities and
+  coverage are therefore right straight away. A report is only a hint: the
+  invoice is checked against the node and credited through the same call
+  `verify` and the sweep make, and those remain the fallback while the
+  stream is down. The stream reconnects with backoff and resumes from the
+  node's settle index, kept in the database, so settles during a restart
+  are caught up. A settled zap invoice brings the next zap pass forward.
+  The existing lnd macaroon (`invoices:read`) already covers the
+  subscription. lnd sends no headers on it until the first event, so on a
+  quiet node Node's fetch ends it after five minutes; that counts as a
+  normal end and the stream reconnects without logging. The cln side is untested against a live node, like the
+  rest of that backend.
+
 ## 0.19.0 - 2026-10-07
 
 - **A failed melt's invoice can be tried again.** Once the funding source

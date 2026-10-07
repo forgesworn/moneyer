@@ -104,5 +104,14 @@ export interface LightningBackend {
   invoicePreimage(paymentHashHex: string): Promise<string | null>
   paymentPreimage(paymentHashHex: string): Promise<string | null>
   nodeInfo?(): Promise<NodeInfo>
+  // Reports each invoice the node settles, by payment hash and the node's
+  // own settle counter, starting after `fromIndex` (0: from now on only).
+  // Returns or throws when the stream ends; the caller reconnects. A
+  // report is a hint to look, never proof of payment.
+  watchSettledInvoices?(args: {
+    fromIndex: number
+    signal: AbortSignal
+    onSettled: (paymentHashHex: string, index: number) => Promise<void>
+  }): Promise<void>
   close?(): void | Promise<void>
 }

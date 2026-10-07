@@ -22,6 +22,14 @@ const FAILURE_REASONS: Record<string, string> = {
   FAILURE_REASON_TIMEOUT: 'Timed out trying to find a route to pay this invoice.'
 }
 
+// Node's fetch gives up on a response idle for five minutes, headers or
+// body. lnd sends no headers on an invoice subscription until its first
+// event, so on a quiet node that is the normal end of one, not a fault.
+const isIdleTimeout = (err: unknown): boolean => {
+  const code = (err as {code?: unknown; cause?: {code?: unknown}})?.cause?.code ?? (err as {code?: unknown})?.code
+  return code === 'UND_ERR_HEADERS_TIMEOUT' || code === 'UND_ERR_BODY_TIMEOUT'
+}
+
 const hexToBase64 = (hex: string): string => Buffer.from(hexToBytes(hex)).toString('base64')
 
 const decodeHexOrBase64 = (value: string): string => {
@@ -82,6 +90,40 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
           if (result !== undefined) return {status: res.status, result}
         }
         if (done) return {status: res.status, result: undefined}
+      }
+    } finally {
+      reader.cancel().catch(() => {})
+    }
+  }
+
+  const readSettledInvoices = async ({fromIndex, signal, onSettled}: Parameters<NonNullable<LightningBackend['watchSettledInvoices']>>[0]): Promise<void> => {
+    const res = await fetch(`${config.url}/v1/invoices/subscribe?settle_index=${fromIndex}`, {headers, signal})
+    if (!res.ok || !res.body) throw new Error(`lnd refused the invoice subscription (${res.status}).`)
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    try {
+      for (;;) {
+        const {done, value} = await reader.read()
+        if (done) return
+        buffer += decoder.decode(value, {stream: true})
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.trim()) continue
+          let event: any
+          try {
+            event = JSON.parse(line)
+          } catch {
+            continue
+          }
+          if (event?.error) throw new Error(`lnd ended the invoice subscription: ${event.error.message ?? 'unknown'}`)
+          const invoice = event?.result ?? event
+          if (invoice?.state !== 'SETTLED' || typeof invoice.r_hash !== 'string') continue
+          const index = Number(invoice.settle_index)
+          if (!Number.isSafeInteger(index) || index <= 0) continue
+          await onSettled(decodeHexOrBase64(invoice.r_hash), index)
+        }
       }
     } finally {
       reader.cancel().catch(() => {})
@@ -171,6 +213,17 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
       if (status === 404) return false
       if (result === undefined) throw new Error('lnd did not report a payment status.')
       return result
+    },
+
+    // lnd replays every settle after `settle_index` before going live, and
+    // none for 0. The stream is held open until lnd, the signal or Node's
+    // idle timeout ends it.
+    async watchSettledInvoices({fromIndex, signal, onSettled}) {
+      try {
+        await readSettledInvoices({fromIndex, signal, onSettled})
+      } catch (err) {
+        if (!isIdleTimeout(err)) throw err
+      }
     },
 
     // 404 is lnd's answer for an invoice it does not hold, which can never
