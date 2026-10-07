@@ -1,7 +1,7 @@
 import {existsSync} from 'node:fs'
 import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
-import {noteDeclaredAmount, noteK1, noteSignature, verifyNoteSignature, verifyNoteSignatureHash} from '@lnurlcash/kit'
+import {hashK1, noteDeclaredAmount, noteK1, noteSignature, verifyNoteSignatureForKey} from '@lnurlcash/kit'
 import {decodeNote, decodeSpend} from './spend.ts'
 import {configFromEnv, pubkeyHex, type MoneyerConfig} from './config.ts'
 import {NoteStore, type NoteState} from './store.ts'
@@ -414,7 +414,13 @@ export const runAdmin = async (argv: string[], deps: AdminDeps = {}): Promise<nu
         }
         const id = bytesToHex(spend.outputKey)
         const declared = noteDeclaredAmount(url)
-        const signature = noteSignature(url)
+        // `c` since the taproot unification; `sig` on a note URL from before.
+        let signature = noteSignature(url)
+        if (!signature) {
+          try {
+            signature = new URL(url).searchParams.get('sig')
+          } catch {}
+        }
         const current = signingPubkey(config)
         const keys = [...(current ? [current] : []), ...(config.previousSigningPubkeys ?? [])]
         out(`note id  ${id}`)
@@ -424,10 +430,14 @@ export const runAdmin = async (argv: string[], deps: AdminDeps = {}): Promise<nu
         } else if (declared === null) {
           out('signature present, but the URL declares no amount to check it against')
         } else {
-          // Over Q, as LUD-25 certifies every note now, or over the note's
-          // old id for a certificate issued before that.
+          // Over Q, as LUD-25 certifies every note now, or, for a bearer
+          // note certified before that, over its old id sha256(k1). A key
+          // note's old id was its key, which is Q already.
+          const legacyId = spend.kind === 'script' && /^[0-9a-f]{64}$/i.test(k1.trim()) ? hashK1(k1.trim()) : null
           const signedBy = keys.find(
-            pubkey => verifyNoteSignatureHash(id, declared, signature, pubkey) || verifyNoteSignature(k1, declared, signature, pubkey)
+            pubkey =>
+              verifyNoteSignatureForKey(id, declared, signature, pubkey) ||
+              (legacyId !== null && verifyNoteSignatureForKey(legacyId, declared, signature, pubkey))
           )
           out(
             signedBy === undefined
