@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.0 - 2026-10-07
 
 - **A zap paid while the mint was down is no longer lost.** The expiry
   sweep deleted any unsettled zap invoice an hour past expiry without
