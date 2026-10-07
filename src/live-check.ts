@@ -285,6 +285,8 @@ export const runLiveBoundMintCheck = async (options: LiveBoundMintCheckOptions):
     if (state.grossMsat < pay.minSendable || state.grossMsat > pay.maxSendable) {
       throw new Error(`Test amount is outside the mint range ${pay.minSendable}-${pay.maxSendable} msat.`)
     }
+    // Named by the bare h, which the kit reads as a bearer note's h and
+    // normalises to its Q on both sides of the comparison below.
     const quote = await requestInvoiceShort(pay.callback, state.grossMsat, state.h)
     if (!quote.verify || !quote.mint) throw new Error('Mint did not bind this quote to h and a verification URL.')
     const netMsat = quote.mint.amountMsat
