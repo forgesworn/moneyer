@@ -13,7 +13,7 @@ import {
   type NoteRow
 } from './store.ts'
 import {createNoteSigner, type NoteSigner} from './signing.ts'
-import {bearerNoteId, decodeNote, decodeSpend, spendDomainOf, verifySpend, type ScriptVerifier} from './spend.ts'
+import {bearerNoteId, decodeNote, decodeSpend, encodeCp1, spendDomainOf, verifySpend, type ScriptVerifier} from './spend.ts'
 import {createKernelVerifier} from './kernel.ts'
 import {describeFee} from './fee-words.ts'
 import {createFakeBackend} from './backends/fake.ts'
@@ -41,6 +41,11 @@ const namedRef = (value: string): NoteRef | null => {
   const q = decodeNote(value)
   return q ? {q, named: HEX32.test(value) ? value : q} : null
 }
+
+// The name a quote or receipt repeats back, in the spelling the wallet used.
+// A wallet reads bare hex there as a bearer note's h, so a note named by its
+// cp1 has to come back as that cp1, never as the hex of its Q.
+const echoedName = (q: string, named: string): string => (named === q ? encodeCp1(hexToBytes(q)) : named)
 
 const INVALID_K1 = 'Invalid or already spent k1.'
 // LUD-25's own reason for an output that names a note already credited.
@@ -945,7 +950,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // value this invoice will mint. It is only offered when /verify can
         // later authenticate settlement with this mint's signing key.
         ...(config.verify && signer
-          ? {mint: {h: commentRef.named, amount: net}}
+          ? {mint: {h: echoedName(commentRef.q, commentRef.named), amount: net}}
           : {}),
         // Every current-draft mint quote is comment-bound, so the LUD-21
         // preimage is ordinary settlement proof and safe to disclose after
@@ -985,19 +990,21 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           preimage: preimageHex,
           pr: invoice.pr,
           // Repeating h and amount binds this response to the quote. The
-          // ordinary note signature appears only once value exists at h.
-          // The receipt signs exactly the `h` it repeats - what the wallet
-          // named, a bearer note's h or a cp1's Q - since that is what a
-          // receipt validator checks it over. The note's own certificate,
-          // the cs1 over its Q, comes from the withdraw endpoint.
+          // signature appears only once value exists there, and it is the
+          // note's ordinary certificate: a cs1 over its Q, which is what a
+          // receipt validator derives from the repeated name and checks.
+          // A quote from before notes were keyed by Q stored the bearer h
+          // as its output and no separate name.
           ...(currentInvoice.outputId !== null && signer
             ? (() => {
+                const legacy = currentInvoice.outputNamed === null
+                const q = legacy ? bearerNoteId(currentInvoice.outputId) : currentInvoice.outputId
                 const named = currentInvoice.outputNamed ?? currentInvoice.outputId
                 return {
                   mint: {
-                    h: named,
+                    h: echoedName(q, named),
                     amount: currentInvoice.netMsat,
-                    ...(settled ? {sig: signer.sign(named, currentInvoice.netMsat)} : {})
+                    ...(settled ? {sig: certify(q, currentInvoice.netMsat)} : {})
                   }
                 }
               })()

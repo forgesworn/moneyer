@@ -12,6 +12,7 @@ import {animate, stagger, svg as animeSvg, utils} from 'animejs'
 import {renderSVG} from 'uqr'
 import {
   applyMintFee,
+  bearerNoteIdOfHash,
   buildNoteUrl,
   fetchInvoiceVerification,
   fetchMintAddress,
@@ -21,12 +22,13 @@ import {
   hashK1,
   noteK1,
   noteSignature,
+  isPreimage,
   requestInvoice,
+  requestInvoiceShort,
   resolveNoteInput,
   rotateNote,
   toBech32Lnurl,
-  verifyNoteSignature,
-  verifyNoteSignatureHash,
+  verifyNoteSignatureForKey,
   withinMintFeeBand,
   withNewK1,
   AmbiguousMutationError,
@@ -46,14 +48,16 @@ import {banknote} from './banknote.ts'
 import {noteImage} from './note-image.ts'
 
 // Does this certificate cover the note `k1` spends? LUD-25 certifies every
-// note over hex(Q), read here off the spend itself; a note certified
-// before that was signed over sha256(k1), which the kit still checks.
+// note over hex(Q), read here off the spend itself; a bearer note certified
+// before that was signed over its old id, sha256(k1). The kit's verifiers
+// that take a k1 derive Q from it themselves, so both go through the
+// explicit-id check.
 const certifiesNote = (k1: string, amountMsat: number, signature: string, mintPubkey: string): boolean => {
   const spend = decodeSpend(k1)
   const q = spend ? Array.from(spend.outputKey, byte => byte.toString(16).padStart(2, '0')).join('') : null
   return Boolean(
-    (q && verifyNoteSignatureHash(q, amountMsat, signature, mintPubkey)) ||
-      verifyNoteSignature(k1, amountMsat, signature, mintPubkey)
+    (q && verifyNoteSignatureForKey(q, amountMsat, signature, mintPubkey)) ||
+      (isPreimage(k1) && verifyNoteSignatureForKey(hashK1(k1), amountMsat, signature, mintPubkey))
   )
 }
 
@@ -868,7 +872,10 @@ const viewMint = (): void => {
             grossMsat: gross,
             amountMsat: expectedNet
           })
-          const invoice = await requestInvoice(p.callback, gross, h)
+          // Named by the bare h: the kit reads a mint's echo of a bare hex
+          // as an h and turns it into the note's Q, so the commitment below
+          // is compared as that Q.
+          const invoice = await requestInvoiceShort(p.callback, gross, h)
           const committedAmount = invoice.mint?.amountMsat
           // LUD-25 does not specify whether a mint rounds its advertised
           // millisatoshi fee up to a whole sat. Accept either reading of
@@ -882,7 +889,7 @@ const viewMint = (): void => {
           const committed = Boolean(
             invoice.mintToHash === true &&
             invoice.verify !== undefined &&
-            invoice.mint?.h.toLowerCase() === h &&
+            invoice.mint?.h === bearerNoteIdOfHash(h) &&
             feeAccepted &&
             invoice.mint.signature === undefined
           )
@@ -985,9 +992,9 @@ const viewInvoice = (args: {
             receipt?.signature &&
               mintPubkey &&
               result.pr.trim().toLowerCase() === args.pr.trim().toLowerCase() &&
-              receipt.h.toLowerCase() === args.bound.h &&
+              receipt.h === bearerNoteIdOfHash(args.bound.h) &&
               receipt.amountMsat === args.bound.amountMsat &&
-              verifyNoteSignature(args.bound.secret, receipt.amountMsat, receipt.signature, mintPubkey)
+              verifyNoteSignatureForKey(receipt.h, receipt.amountMsat, receipt.signature, mintPubkey)
           )
           if (!valid) throw new Error('The settled receipt does not match or authenticate this note.')
           claimed = true

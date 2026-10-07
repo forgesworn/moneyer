@@ -420,10 +420,11 @@ The rules:
   true`, so a wallet knows this mint takes the parameter before it asks
   rather than after it pays.
 - When signing and LUD-21 verification are enabled, the quote also carries
-  `mint: {h, amount}`. This is the exact output and net millisatoshi value
-  the invoice will mint; it never carries `sig` before settlement.
+  `mint: {h, amount}`. This is the exact output, in the spelling the wallet
+  named it (a bearer note's hex `h`, or its `cp1`), and the net millisatoshi
+  value the invoice will mint; it never carries `sig` before settlement.
 - Once settled, `/verify` repeats the same `h` and `amount` and adds `sig`,
-  the ordinary LUD-25 signature over `LNURLcash:<amount>:<h>`. A sealed
+  the note's ordinary LUD-25 certificate: a `cs1` over its Q. A sealed
   signer can verify that receipt against the pre-payment commitment and
   pinned `mintPubkey`, then confirm its staged note without exporting `k1`.
 - Claiming needs nothing else. `GET /w?k1=<the secret>` brings the note

@@ -6,10 +6,14 @@ import {
   fetchInvoiceVerification,
   fetchNoteInfo,
   fetchPayRequest,
+  bearerNoteIdOfHash,
+  encodeCp1,
   hashK1,
   rotateNote,
   rotateNoteWithHash,
-  verifyNoteSignature
+  validateBoundMintReceipt,
+  verifyNoteSignatureForKey,
+  type InvoiceResult
 } from '@lnurlcash/kit'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {sha256} from '@noble/hashes/sha2.js'
@@ -115,6 +119,21 @@ describe('requiring comment protection', () => {
 })
 
 describe('minting to a named note', () => {
+  it('repeats a cp1-named output as that cp1, and its receipt validates', async () => {
+    const mint = await start()
+    const secret = freshK1()
+    const cp1 = encodeCp1(hexToBytes(bearerNoteIdOfHash(hashK1(secret))))
+    const reply = await payCallback(mint, {amount: '21000', comment: cp1})
+    // Bare hex there would read as a bearer h and derive a different Q.
+    expect(reply.mint).toEqual({h: cp1, amount: 21_000})
+    mint.backend.control.settleInvoice(decodeBolt11(reply.pr!).paymentHashHex)
+    const verification = await fetchInvoiceVerification(reply.verify!)
+    expect(verification.mint?.signature).toBeDefined()
+    expect(() =>
+      validateBoundMintReceipt({pr: reply.pr!} as InvoiceResult, verification, cp1, 21_000, mint.moneyer.signer!.pubkey)
+    ).not.toThrow()
+  })
+
   it('mints the note at the id the wallet named, so the payment preimage buys nothing', async () => {
     const mint = await start()
     const secret = freshK1()
@@ -144,9 +163,14 @@ describe('minting to a named note', () => {
     }
     expect(receipt.mint.h).toBe(hashK1(secret))
     expect(receipt.mint.amount).toBe(21_000)
+    // The receipt carries the note's ordinary certificate, a cs1 over its
+    // Q, and the kit's own validator accepts it against the quote.
     expect(
-      verifyNoteSignature(secret, receipt.mint.amount, receipt.mint.sig, mint.moneyer.signer!.pubkey)
+      verifyNoteSignatureForKey(bearerNoteIdOfHash(receipt.mint.h), 21_000, receipt.mint.sig, mint.moneyer.signer!.pubkey)
     ).toBe(true)
+    expect(() =>
+      validateBoundMintReceipt({pr: reply.pr!} as InvoiceResult, verification, hashK1(secret), 21_000, mint.moneyer.signer!.pubkey)
+    ).not.toThrow()
 
     // It is not a note. Neither reading it nor spending it works.
     await expect(fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, verification.preimage!))).rejects.toThrow(

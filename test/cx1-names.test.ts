@@ -150,7 +150,7 @@ const keyAt = (who: Holder, index: number): string =>
   bytesToHex(deriveNotePubkey(who.branchPubkey, who.chainCode, NOTE_PURPOSE_LIGHTNING_ADDRESS, index))
 
 const ck1At = (who: Holder, index: number): string => {
-  const {pubkeyXOnly, signature} = signNoteOwnership(deriveNoteSecretKey(who, NOTE_PURPOSE_LIGHTNING_ADDRESS, index))
+  const {pubkeyXOnly, signature} = signNoteOwnership(deriveNoteSecretKey(who, NOTE_PURPOSE_LIGHTNING_ADDRESS, index), HOST)
   return encodeCk1(pubkeyXOnly, signature)
 }
 

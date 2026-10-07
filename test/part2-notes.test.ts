@@ -4,7 +4,7 @@ import {
   encodeCp1,
   hashK1,
   signNoteOwnership,
-  verifyNoteSignatureHash
+  verifyNoteSignatureForKey
 } from '@lnurlcash/kit'
 import {schnorr, secp256k1} from '@noble/curves/secp256k1.js'
 import {sha256} from '@noble/hashes/sha2.js'
@@ -12,6 +12,7 @@ import {bytesToHex, hexToBytes, randomBytes, utf8ToBytes} from '@noble/hashes/ut
 import {bech32m} from '@scure/base'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
+import {keyPathSighash} from '../src/spend.ts'
 import {freshK1, startMint, type TestMint, noteIdOf, certifiesNote} from './helpers.ts'
 
 // LUD-25 Part 2: a note keyed by a public key (cp1), spent with a recoverable
@@ -44,7 +45,7 @@ type NoteKey = {sk: Uint8Array; id: string; cp1: string; ck1: string}
 const freshKey = (): NoteKey => {
   const sk = secp256k1.utils.randomSecretKey()
   const pk = secp256k1.getPublicKey(sk, true).slice(1)
-  const {pubkeyXOnly, signature} = signNoteOwnership(sk)
+  const {pubkeyXOnly, signature} = signNoteOwnership(sk, MINT_DOMAIN)
   return {sk, id: bytesToHex(pk), cp1: encodeCp1(pk), ck1: encodeCk1(pubkeyXOnly, signature)}
 }
 
@@ -62,6 +63,10 @@ const creditSecret = (mint: TestMint, amountMsat: number): string => {
 
 const OWNERSHIP_MESSAGE = utf8ToBytes('LNURLcash')
 const OWNERSHIP_DIGEST = sha256(OWNERSHIP_MESSAGE)
+
+// The test mint has no configured origin, so a spend is bound to the host a
+// request reached: loopback.
+const MINT_DOMAIN = '127.0.0.1'
 
 // The two ck1 shapes wallets issued before the current one. Notes spelled
 // this way are still in holders' hands, so the mint must keep reading them.
@@ -82,15 +87,20 @@ const rawMessageCk1 = (key: NoteKey): string => {
   return ck1Of(new Uint8Array([...pubkeyXOnly, ...schnorr.sign(OWNERSHIP_MESSAGE, key.sk, new Uint8Array(32))]))
 }
 
+// kit 0.18.1: pk || Schnorr over sha256 of the message, bound to no domain. The
+// shape the kit signed with until 0.20, so it is the one most notes hold.
+const digestCk1 = (key: NoteKey): string => {
+  const pubkeyXOnly = secp256k1.getPublicKey(key.sk, true).slice(1)
+  return ck1Of(new Uint8Array([...pubkeyXOnly, ...schnorr.sign(OWNERSHIP_DIGEST, key.sk, new Uint8Array(32))]))
+}
+
 // A second, equally valid ck1 the key's owner can make with a fresh nonce.
-// BIP-340 Schnorr, unlike the old recoverable-ECDSA scheme, has no cheap
-// bit-flip malleation of a FIXED signature into another one that still
-// verifies (there is no separate "flip s and the recovery id" trick): the
-// only way to get a second valid ck1 for one key is a fresh nonce, same as
-// this.
+// BIP-340 Schnorr has no cheap bit-flip malleation of a FIXED signature
+// into another one that still verifies: the only way to get a second valid ck1
+// for one key is a fresh nonce, same as this.
 const resigned = (key: NoteKey): string => {
   const pubkeyXOnly = secp256k1.getPublicKey(key.sk, true).slice(1)
-  const signature = schnorr.sign(OWNERSHIP_DIGEST, key.sk, randomBytes(32))
+  const signature = schnorr.sign(keyPathSighash(pubkeyXOnly, MINT_DOMAIN), key.sk, randomBytes(32))
   return encodeCk1(pubkeyXOnly, signature)
 }
 
@@ -127,7 +137,7 @@ describe('looking a cp1 note up', () => {
     expect(byKey.maxWithdrawable).toBe(42_000)
     expect(byKey).not.toHaveProperty('k1')
     expect(certifies(mint, key, 42_000, byKey.sig)).toBe(true)
-    expect(verifyNoteSignatureHash(key.id, 42_000, byKey.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(verifyNoteSignatureForKey(key.id, 42_000, byKey.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
   })
 
   it('not by its key as bare hex, which LUD-25 reads as a bearer note h', async () => {
@@ -258,7 +268,8 @@ describe('spending with a ck1', () => {
 describe('a note held under an older ck1 shape', () => {
   for (const [how, spell] of [
     ['pre-Schnorr ECDSA', ecdsaCk1],
-    ['raw-message Schnorr', rawMessageCk1]
+    ['raw-message Schnorr', rawMessageCk1],
+    ['message-digest Schnorr', digestCk1]
   ] as const) {
     it(`still looks up, and rotates out, a ${how} ck1`, async () => {
       const mint = await start()
@@ -305,7 +316,8 @@ describe('a note named twice', () => {
     ['the same ck1 twice', (key: NoteKey) => key.ck1],
     ['a second signature by the same key', resigned],
     ['its pre-Schnorr ECDSA ck1', ecdsaCk1],
-    ['its raw-message Schnorr ck1', rawMessageCk1]
+    ['its raw-message Schnorr ck1', rawMessageCk1],
+    ['its message-digest Schnorr ck1', digestCk1]
   ] as const) {
     it(`is refused when spelled as ${how}, with nothing burned`, async () => {
       const mint = await start()
