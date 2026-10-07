@@ -91,6 +91,21 @@ describe('lnd watchSettledInvoices', () => {
     expect(seen).toEqual([[HASH, 7]])
   })
 
+  it("ends quietly on Node's idle timeout, which a quiet node always reaches", async () => {
+    // lnd sends no headers until its first event; undici gives up after 300 s
+    const real = globalThis.fetch
+    globalThis.fetch = (async () => {
+      throw new TypeError('fetch failed', {cause: Object.assign(new Error('Headers Timeout Error'), {code: 'UND_ERR_HEADERS_TIMEOUT'})})
+    }) as typeof fetch
+    restore = () => {
+      globalThis.fetch = real
+    }
+    const lnd = createLndBackend({url: 'https://lnd.test', macaroon: 'ff'})
+    await expect(
+      lnd.watchSettledInvoices!({fromIndex: 0, signal: new AbortController().signal, onSettled: async () => {}})
+    ).resolves.toBeUndefined()
+  })
+
   it('throws when lnd ends the stream with an error', async () => {
     const {lnd} = streaming([{error: {code: 2, message: 'shutting down'}}])
     await expect(

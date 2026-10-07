@@ -315,7 +315,12 @@ export const createFakeBackend = (options: FakeBackendOptions = {}): FakeBackend
         localBalanceMsat = msat
       },
       dropInvoiceStreams() {
-        for (const watcher of watchers) watcher.end()
+        // gone at once, as a dropped connection is: a settle after this
+        // reaches the watcher only by its resuming from the index
+        for (const watcher of [...watchers]) {
+          watchers.delete(watcher)
+          watcher.end()
+        }
       },
       invoiceByHash(paymentHashHex) {
         const invoice = invoices.get(paymentHashHex)

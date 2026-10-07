@@ -14,7 +14,9 @@
   node's settle index, kept in the database, so settles during a restart
   are caught up. A settled zap invoice brings the next zap pass forward.
   The existing lnd macaroon (`invoices:read`) already covers the
-  subscription. The cln side is untested against a live node, like the
+  subscription. lnd sends no headers on it until the first event, so on a
+  quiet node Node's fetch ends it after five minutes; that counts as a
+  normal end and the stream reconnects without logging. The cln side is untested against a live node, like the
   rest of that backend.
 
 ## 0.19.0 - 2026-10-07

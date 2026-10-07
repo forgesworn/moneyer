@@ -64,6 +64,8 @@ describe('the invoice settle stream', () => {
     await waitFor(() => credited(mint, first))
     mint.backend.control.dropInvoiceStreams()
     mint.backend.control.settleInvoice(second)
+    // nothing is listening until the mint reconnects
+    expect(credited(mint, second)).toBe(false)
     await waitFor(() => credited(mint, second))
     expect(mint.moneyer.store.metaValue('invoice_stream_index:fake')).toBe('2')
   })
