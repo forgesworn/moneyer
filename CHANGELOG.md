@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.18.1 - 2026-10-07
 
 - **Bound mint receipts verify in current wallets again.** Since
   `@lnurlcash/kit` moved to taproot notes, a wallet checks a settled
