@@ -1,5 +1,5 @@
 import {bytesToHex, randomBytes} from '@noble/hashes/utils.js'
-import {applyMintFee, verifyNoteSignatureHash, type MintFee} from '@lnurlcash/kit'
+import {applyMintFee, verifyNoteSignatureForKey, type MintFee} from '@lnurlcash/kit'
 import type {MoneyerConfig} from '../src/config.ts'
 import {createFakeBackend, type FakeBackend} from '../src/backends/fake.ts'
 import {createMoneyer, type Moneyer, type MoneyerDeps} from '../src/server.ts'
@@ -79,9 +79,10 @@ export {bearerNoteIdOfPreimage as noteIdOf} from '../src/spend.ts'
 
 // Does `signature` certify the note `k1` spends at `amountMsat`? LUD-25
 // certifies every note over hex(Q), so this reads Q off the spend - a
-// preimage, a ck1 or a cw1 - rather than hashing the k1 as the kit's
-// verifyNoteSignature still does.
+// preimage, a ck1 or a cw1 - and verifies over it with
+// verifyNoteSignatureForKey, as the kit.s verifyNoteSignature now derives Q
+// from a bearer k1 itself.
 export const certifiesNote = (k1: string, amountMsat: number, signature: string, mintPubkey: string): boolean => {
   const spend = decodeSpend(k1)
-  return spend !== null && verifyNoteSignatureHash(bytesToHex(spend.outputKey), amountMsat, signature, mintPubkey)
+  return spend !== null && verifyNoteSignatureForKey(bytesToHex(spend.outputKey), amountMsat, signature, mintPubkey)
 }
