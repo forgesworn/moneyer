@@ -5,6 +5,7 @@ import {applyMintFee, encodeCs1WithAmount, grossUpForMintFee, hashK1} from '@lnu
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import type {MoneyerConfig} from './config.ts'
 import {
+  InvoiceUsedError,
   NotePendingError,
   NoteStore,
   NoteUnavailableError,
@@ -1234,8 +1235,14 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         }
         // The funding source dedupes payments by hash, so a second melt
         // into the same invoice would be "confirmed" against the first
-        // payment and burn its note without moving funds.
-        if (store.meltByHash(paymentHash)) {
+        // payment and burn its note without moving funds. A melt that was
+        // restored is the exception: the funding source confirmed it never
+        // paid, lnd sends a hash whose payment failed again (it refuses
+        // only one being created, in flight or paid), and the payee is
+        // still waiting on that invoice. A backend that refuses anyway
+        // throws PaymentAlreadyKnownError and the note restores.
+        const earlier = store.meltByHash(paymentHash)
+        if (earlier && earlier.outcome !== 'restored') {
           return fail('Invoice already used by an earlier melt - use a fresh one.')
         }
         // A shared funding source is a supported deployment (DEPLOY.md),
@@ -1260,7 +1267,9 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         } catch (err) {
           if (err instanceof NotePendingError) return fail('pending')
           if (err instanceof NoteUnavailableError) return fail(INVALID_K1)
-          return fail('Invoice already used by an earlier melt - use a fresh one.')
+          if (err instanceof InvoiceUsedError) return fail('Invoice already used by an earlier melt - use a fresh one.')
+          log(`melt reservation failed: ${(err as Error).message}`)
+          return fail('Temporarily unable to melt - try again shortly.')
         }
         inFlight.add(paymentHash)
         const melt = runMelt(

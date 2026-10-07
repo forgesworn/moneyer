@@ -1,7 +1,7 @@
 import {afterEach, describe, expect, it} from 'vitest'
 import {buildNoteUrl, hashK1, meltNote, fetchNoteInfo, PendingNoteError} from '@lnurlcash/kit'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
-import {NoteStore} from '../src/store.ts'
+import {InvoiceUsedError, NoteStore} from '../src/store.ts'
 import {createMoneyer} from '../src/server.ts'
 import {claimMintedNote} from '../src/claim.ts'
 import {freshK1, startMint, testConfig, waitFor, type TestMint, noteIdOf} from './helpers.ts'
@@ -79,6 +79,124 @@ describe('a note that is not a whole sat', () => {
     expect(info.minWithdrawable).toBe(21_000)
     const res = await fetch(`${info.callback}?k1=${k1}&pr=${fakeBolt11({amountMsat: 20_000, paymentHashHex: hashK1(freshK1())})}`)
     expect(((await res.json()) as {reason?: string}).reason).toMatch(/exactly 21000 msat/)
+  })
+})
+
+describe('retrying a failed melt\'s invoice', () => {
+  // The payee is still waiting on the invoice a failed melt left behind, so
+  // a wallet may melt into it again once the funding source confirmed the
+  // first attempt never paid. Nothing else unlocks it.
+  const noteFor = async (mint: TestMint, amountMsat = 21_000) => {
+    const k1 = freshK1()
+    mint.moneyer.store.creditNote(noteIdOf(k1), amountMsat)
+    const info = await fetchNoteInfo(buildNoteUrl(`${mint.moneyer.url}/w`, k1, amountMsat))
+    return {k1, noteId: noteIdOf(k1), callback: info.callback}
+  }
+  const answer = async (callback: string, k1: string, pr: string) =>
+    (await fetch(`${callback}?k1=${k1}&pr=${pr}`).then(r => r.json())) as {status: string; reason?: string}
+
+  it('pays the same invoice from the same note once the first attempt failed cleanly', async () => {
+    const mint = (active = await startMint())
+    const note = await noteFor(mint)
+    const paymentHash = hashK1(freshK1())
+    const pr = fakeBolt11({amountMsat: 21_000, paymentHashHex: paymentHash})
+
+    mint.backend.control.setPayMode('fail-clean')
+    expect(await answer(note.callback, note.k1, pr)).toEqual({
+      status: 'ERROR',
+      reason: 'Could not find a route to pay this invoice.'
+    })
+    expect(noteState(mint, note.noteId)).toBe('outstanding')
+
+    mint.backend.control.setPayMode('succeed')
+    expect((await answer(note.callback, note.k1, pr)).status).toBe('OK')
+    await waitFor(() => noteState(mint, note.noteId) === 'burned')
+    expect(mint.moneyer.store.meltByHash(paymentHash)).toMatchObject({noteId: note.noteId, outcome: 'paid'})
+    // and once paid, it is spent for good
+    const other = await noteFor(mint)
+    expect(await answer(other.callback, other.k1, pr)).toEqual({
+      status: 'ERROR',
+      reason: 'Invoice already used by an earlier melt - use a fresh one.'
+    })
+    expect(noteState(mint, other.noteId)).toBe('outstanding')
+  })
+
+  it('lets a different note take over the invoice, leaving the first one untouched', async () => {
+    const mint = (active = await startMint())
+    const first = await noteFor(mint)
+    const second = await noteFor(mint)
+    const paymentHash = hashK1(freshK1())
+    const pr = fakeBolt11({amountMsat: 21_000, paymentHashHex: paymentHash})
+
+    mint.backend.control.setPayMode('fail-clean')
+    expect((await answer(first.callback, first.k1, pr)).status).toBe('ERROR')
+    mint.backend.control.setPayMode('succeed')
+    expect((await answer(second.callback, second.k1, pr)).status).toBe('OK')
+    await waitFor(() => noteState(mint, second.noteId) === 'burned')
+    expect(noteState(mint, first.noteId)).toBe('outstanding')
+    expect(mint.moneyer.store.meltByHash(paymentHash)).toMatchObject({noteId: second.noteId, outcome: 'paid'})
+  })
+
+  it('refuses the invoice while an earlier melt into it is unresolved', async () => {
+    const mint = (active = await startMint())
+    const first = await noteFor(mint)
+    const paymentHash = hashK1(freshK1())
+    const pr = fakeBolt11({amountMsat: 21_000, paymentHashHex: paymentHash})
+
+    mint.backend.control.setPayMode('ambiguous-pending')
+    expect((await answer(first.callback, first.k1, pr)).status).toBe('OK')
+    await waitFor(() => noteState(mint, first.noteId) === 'pending')
+
+    mint.backend.control.setPayMode('succeed')
+    const second = await noteFor(mint)
+    expect(await answer(second.callback, second.k1, pr)).toEqual({
+      status: 'ERROR',
+      reason: 'Invoice already used by an earlier melt - use a fresh one.'
+    })
+    expect(noteState(mint, first.noteId)).toBe('pending')
+    expect(noteState(mint, second.noteId)).toBe('outstanding')
+  })
+
+  it('refuses a restored invoice somebody else has since paid on a shared node', async () => {
+    const mint = (active = await startMint())
+    const note = await noteFor(mint)
+    const paymentHash = hashK1(freshK1())
+    const pr = fakeBolt11({amountMsat: 21_000, paymentHashHex: paymentHash})
+
+    mint.backend.control.setPayMode('fail-clean')
+    expect((await answer(note.callback, note.k1, pr)).status).toBe('ERROR')
+    for (const status of ['pending', 'complete'] as const) {
+      mint.backend.control.seedForeignPayment(paymentHash, status)
+      mint.backend.control.setPayMode('succeed')
+      expect(await answer(note.callback, note.k1, pr)).toEqual({
+        status: 'ERROR',
+        reason: 'Invoice already used by an earlier melt - use a fresh one.'
+      })
+      expect(noteState(mint, note.noteId)).toBe('outstanding')
+      expect(mint.moneyer.store.meltByHash(paymentHash)?.outcome).toBe('restored')
+    }
+  })
+
+  it('takes over only a restored row in the store itself', () => {
+    const store = new NoteStore(':memory:')
+    const pr = (hash: string) => fakeBolt11({amountMsat: 1000, paymentHashHex: hash})
+    const [a, b, c] = [noteIdOf(freshK1()), noteIdOf(freshK1()), noteIdOf(freshK1())]
+    for (const id of [a, b, c]) store.creditNote(id, 1000)
+    const hash = hashK1(freshK1())
+
+    store.markPending(a, hash, pr(hash), 1000)
+    expect(() => store.markPending(b, hash, pr(hash), 1000)).toThrow(InvoiceUsedError)
+    expect(store.noteById(b)?.state).toBe('outstanding')
+
+    store.restoreMelt(hash)
+    store.markPending(b, hash, pr(hash), 1000)
+    expect(store.meltByHash(hash)).toMatchObject({noteId: b, outcome: null})
+    expect(store.noteById(a)?.state).toBe('outstanding')
+
+    store.finalizeMelt(hash)
+    expect(() => store.markPending(c, hash, pr(hash), 1000)).toThrow(InvoiceUsedError)
+    expect(store.noteById(c)?.state).toBe('outstanding')
+    expect(store.noteById(b)?.state).toBe('burned')
   })
 })
 

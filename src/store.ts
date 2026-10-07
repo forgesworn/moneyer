@@ -141,6 +141,9 @@ export class NoteUnavailableError extends Error {}
 // before anything burns: minting "over" an existing id would let whoever
 // can learn that id's preimage take the output.
 export class OutputCollisionError extends Error {}
+// An earlier melt into this invoice paid it, or has not yet resolved. Only
+// one the funding source confirmed never paid may be melted into again.
+export class InvoiceUsedError extends Error {}
 
 export class NoteStore {
   private db: DatabaseSync
@@ -450,14 +453,23 @@ export class NoteStore {
   }
 
   // Reserves a note for a melt and records the melt, atomically. The melts
-  // row is keyed by the invoice's payment hash; a duplicate hash means an
-  // earlier melt already used this invoice and the INSERT itself refuses.
+  // row is keyed by the invoice's payment hash. An earlier melt into the
+  // same invoice may be retried only once it was restored - the funding
+  // source confirmed nothing went out - and the retry takes over its row.
+  // One that paid, or is still unresolved, refuses the reservation.
   markPending(noteId: string, paymentHash: string, pr: string, amountMsat: number): void {
     this.tx(() => {
       this.assertOutstanding(noteId)
-      this.db
-        .prepare('INSERT INTO melts (payment_hash, note_id, pr, amount_msat, outcome, created_at) VALUES (?, ?, ?, ?, NULL, ?)')
+      const written = this.db
+        .prepare(
+          `INSERT INTO melts (payment_hash, note_id, pr, amount_msat, outcome, created_at) VALUES (?, ?, ?, ?, NULL, ?)
+           ON CONFLICT (payment_hash) DO UPDATE SET
+             note_id = excluded.note_id, pr = excluded.pr, amount_msat = excluded.amount_msat,
+             outcome = NULL, created_at = excluded.created_at, resolved_at = NULL
+           WHERE melts.outcome = 'restored'`
+        )
         .run(paymentHash, noteId, pr, amountMsat, Date.now())
+      if (written.changes !== 1) throw new InvoiceUsedError('an earlier melt already used this invoice')
       this.setNoteState(noteId, 'pending')
     })
   }

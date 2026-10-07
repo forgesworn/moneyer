@@ -43,7 +43,9 @@ lesson, that behaviour is kept deliberately and tested.
   anything else is answered `OK` and finishes in the background. Burn only
   on confirmed payment, restore only on confirmed non-payment, and park
   everything else as pending for reconciliation - which also runs at
-  startup, so a crash mid-melt never guesses.
+  startup, so a crash mid-melt never guesses. An invoice whose melt was
+  restored may be melted into again, from that note or another; one that
+  paid or is still unresolved is refused.
 
 ## Run
 
