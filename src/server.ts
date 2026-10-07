@@ -1396,7 +1396,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   // unref'd so it never keeps the process alive.
   const housekeeping = async (): Promise<void> => {
     const {swept: mintSwept, settled} = await sweepExpiredMintInvoices(store, backend)
-    const swept = mintSwept + (zap?.sweep() ?? 0)
+    const swept = mintSwept + (zap ? await zap.sweep() : 0)
     if (swept > 0) log(`swept ${swept} expired mint invoice${swept === 1 ? '' : 's'}`)
     if (settled > 0) log(`found ${settled} expired mint invoice${settled === 1 ? '' : 's'} paid after all - note${settled === 1 ? '' : 's'} minted`)
     await reconcilePendingMelts(store, backend, inFlight, log)

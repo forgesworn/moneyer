@@ -310,3 +310,48 @@ describe('a zap name', () => {
     expect(() => configFromEnv({...full, MONEYER_NOSTR_KEY: 'abc'})).toThrow(/32 bytes/)
   })
 })
+
+describe('the zap-invoice expiry sweep', () => {
+  // A day on, every invoice here is far past expiry and the hour's margin.
+  const later = () => Date.now() + 24 * 3_600_000
+
+  // The settle pass is held off, as for a mint that was down.
+  const quoteZap = async () => {
+    mint = await startMint(
+      {
+        publicOrigin: 'http://mint.test',
+        mintFee: {baseFeeMsat: 1000, feePpm: 0},
+        zap: {nostrKey: MINT_NOSTR_KEY, relays: ['wss://mint-relay.example'], names: {alice}}
+      },
+      {nostr: fakeRelay().transport, zapPollMs: 3_600_000}
+    )
+    const cb = (await (
+      await fetch(`${mint.moneyer.url}/z/cb/alice?amount=21000&nostr=${encodeURIComponent(zapRequest(21_000))}`)
+    ).json()) as {verify: string}
+    return {mint, paymentHash: cb.verify.split('/').pop()!}
+  }
+
+  it('deletes an expired zap invoice the funding source confirms unpaid', async () => {
+    const {mint, paymentHash} = await quoteZap()
+    expect(await mint.moneyer.zap!.sweep(later())).toBe(1)
+    expect(mint.moneyer.store.zapInvoiceByHash(paymentHash)).toBeNull()
+  })
+
+  it('keeps one paid while nobody was looking, for the settle pass to mint', async () => {
+    const {mint, paymentHash} = await quoteZap()
+    mint.backend.control.settleInvoice(paymentHash)
+    expect(await mint.moneyer.zap!.sweep(later())).toBe(0)
+    expect(mint.moneyer.store.zapInvoiceByHash(paymentHash)?.settled).toBe(false)
+    await mint.moneyer.reconcile()
+    expect(mint.moneyer.store.zapInvoiceByHash(paymentHash)?.settled).toBe(true)
+  })
+
+  it('deletes nothing it gets no answer for', async () => {
+    const {mint, paymentHash} = await quoteZap()
+    mint.backend.isInvoiceSettled = async () => {
+      throw new Error('node unreachable')
+    }
+    expect(await mint.moneyer.zap!.sweep(later())).toBe(0)
+    expect(mint.moneyer.store.zapInvoiceByHash(paymentHash)).not.toBeNull()
+  })
+})
