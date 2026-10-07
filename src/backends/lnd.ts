@@ -133,7 +133,10 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
         // lnd refuses a send whose payment hash it already holds - on a
         // shared node that is somebody else's payment, and nothing went
         // out for THIS call. Distinct from ambiguity: safely restorable.
-        if (error && /already exists|AlreadyExists|payment is in transition/i.test(error)) {
+        // Its three refusals (lnd 0.20, payments/db/errors.go): one being
+        // created, one in flight, one that succeeded. A hash whose payment
+        // failed is not refused - lnd sends it again.
+        if (error && /already exists|AlreadyExists|payment is in transition|invoice is already paid/i.test(error)) {
           throw new PaymentAlreadyKnownError('lnd already has a payment for this hash')
         }
         // The stream ended without a terminal status - genuinely ambiguous.

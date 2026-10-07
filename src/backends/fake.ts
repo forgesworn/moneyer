@@ -170,8 +170,10 @@ export const createFakeBackend = (options: FakeBackendOptions = {}): FakeBackend
       const paymentHashHex = bolt11PaymentHash(pr)
       if (!paymentHashHex) throw new PaymentFailedError('That is not a decodable invoice.')
       // Real nodes dedupe sends by payment hash: a hash this node already
-      // holds a payment for is refused, exactly as lnd and cln refuse it.
-      if (payments.has(paymentHashHex)) {
+      // paid, or is still paying, is refused exactly as lnd and cln refuse
+      // it. One whose every attempt failed may be sent again, as on both.
+      const earlier = payments.get(paymentHashHex)
+      if (earlier && earlier.status !== 'failed') {
         throw new PaymentAlreadyKnownError('this node already has a payment for that hash')
       }
       const preimageHex = knownPreimages.get(paymentHashHex) ?? null

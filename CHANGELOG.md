@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- **A failed melt's invoice can be tried again.** Once the funding source
+  confirms a melt never paid, the note is restored as before, and now the
+  invoice is free again too: the payee is still waiting on it, so a wallet
+  can melt into it a second time, from the same note or a different one,
+  instead of asking for a fresh invoice. lnd sends a hash whose payment
+  failed again; a backend that refuses it restores the note, as for any
+  payment the node already holds. An invoice that paid, or whose melt is
+  still unresolved, is refused as before. The retry reuses the melt's row, so
+  `moneyer admin melts` and the restored count in the lifetime totals show
+  the latest attempt only.
+- lnd's "invoice is already paid" refusal, sent when a shared node paid the
+  hash between the mint's pre-check and its send, is now read as a payment
+  the node already holds, like its other two refusals. It used to fall
+  through as an ambiguous failure, which the payment tracker would then
+  have confirmed as paid against somebody else's payment, burning the note.
+
 ## 0.18.1 - 2026-10-07
 
 - **Bound mint receipts verify in current wallets again.** Since
