@@ -1,7 +1,7 @@
 import {existsSync} from 'node:fs'
 import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
-import {hashK1, noteDeclaredAmount, noteK1, noteSignature, verifyNoteSignatureForKey} from '@lnurlcash/kit'
+import {encodeCs1WithAmount, hashK1, noteDeclaredAmount, noteK1, noteSignature, verifyNoteSignatureForKey} from '@lnurlcash/kit'
 import {decodeNote, decodeSpend} from './spend.ts'
 import {configFromEnv, pubkeyHex, type MoneyerConfig} from './config.ts'
 import {NoteStore, type NoteState} from './store.ts'
@@ -420,6 +420,12 @@ export const runAdmin = async (argv: string[], deps: AdminDeps = {}): Promise<nu
           try {
             signature = new URL(url).searchParams.get('sig')
           } catch {}
+        }
+        // The kit reads only a cs1 now. A certificate from before that was
+        // the bare 65-byte signature in hex, its amount on the URL beside
+        // it: put the amount back into a cs1 so it can still be checked.
+        if (signature && declared !== null && /^[0-9a-f]{130}$/i.test(signature)) {
+          signature = encodeCs1WithAmount(declared, hexToBytes(signature))
         }
         const current = signingPubkey(config)
         const keys = [...(current ? [current] : []), ...(config.previousSigningPubkeys ?? [])]

@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
-import {hashK1, verifyNoteSignature} from '@lnurlcash/kit'
+import {encodeCs1WithAmount, hashK1, verifyNoteSignature, verifyNoteSignatureForKey} from '@lnurlcash/kit'
 import {sha256} from '@noble/hashes/sha2.js'
-import {utf8ToBytes} from '@noble/hashes/utils.js'
+import {hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {createNoteSigner, noteIdSignatureDigest} from '../src/signing.ts'
 import {
   buildStats,
@@ -11,7 +11,7 @@ import {
   verifyStatsSignature,
   verifyStatsSnapshot
 } from '../src/stats.ts'
-import {TEST_SIGNING_KEY, freshK1} from './helpers.ts'
+import {TEST_SIGNING_KEY, freshK1, noteIdOf} from './helpers.ts'
 
 // The mint signs over the note ID; the wallet-side kit builds its digest
 // from the secret. These tests are the byte-level handshake between the
@@ -19,6 +19,10 @@ import {TEST_SIGNING_KEY, freshK1} from './helpers.ts'
 
 describe('note signing', () => {
   const signer = createNoteSigner(TEST_SIGNING_KEY)
+  // The kit reads a certificate only as a cs1, and checks a bearer note's
+  // over its taproot output key Q, which it derives from the secret itself.
+  const certificate = (k1: string, amountMsat: number, from = signer): string =>
+    encodeCs1WithAmount(amountMsat, hexToBytes(from.sign(noteIdOf(k1), amountMsat)))
 
   it('agrees with the kit digest built from the secret', () => {
     const k1 = freshK1()
@@ -30,27 +34,34 @@ describe('note signing', () => {
 
   it('produces signatures the kit verifies against the mint pubkey', () => {
     const k1 = freshK1()
-    const signature = signer.sign(hashK1(k1), 21_000)
-    expect(signature).toHaveLength(130)
-    expect(verifyNoteSignature(k1, 21_000, signature, signer.pubkey)).toBe(true)
+    expect(signer.sign(noteIdOf(k1), 21_000)).toHaveLength(130)
+    expect(verifyNoteSignature(k1, 21_000, certificate(k1, 21_000), signer.pubkey)).toBe(true)
+  })
+
+  it('still signs over the note id it is given, a note\'s old id included', () => {
+    const k1 = freshK1()
+    const signature = encodeCs1WithAmount(21_000, hexToBytes(signer.sign(hashK1(k1), 21_000)))
+    expect(verifyNoteSignatureForKey(hashK1(k1), 21_000, signature, signer.pubkey)).toBe(true)
+    // ...and that is not the certificate of the note the secret opens now.
+    expect(verifyNoteSignature(k1, 21_000, signature, signer.pubkey)).toBe(false)
   })
 
   it('binds the signature to the amount', () => {
     const k1 = freshK1()
-    const signature = signer.sign(hashK1(k1), 21_000)
+    const signature = certificate(k1, 21_000)
     expect(verifyNoteSignature(k1, 21_001, signature, signer.pubkey)).toBe(false)
   })
 
   it('binds the signature to the note', () => {
     const k1 = freshK1()
-    const signature = signer.sign(hashK1(k1), 21_000)
+    const signature = certificate(k1, 21_000)
     expect(verifyNoteSignature(freshK1(), 21_000, signature, signer.pubkey)).toBe(false)
   })
 
   it('never verifies against a different pubkey', () => {
     const other = createNoteSigner('22'.repeat(32))
     const k1 = freshK1()
-    const signature = signer.sign(hashK1(k1), 21_000)
+    const signature = certificate(k1, 21_000)
     expect(verifyNoteSignature(k1, 21_000, signature, other.pubkey)).toBe(false)
   })
 })

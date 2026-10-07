@@ -5,7 +5,7 @@ import {join} from 'node:path'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
 import {npubEncode} from 'nostr-tools/nip19'
-import {buildNoteUrl, hashK1, withNewK1} from '@lnurlcash/kit'
+import {buildNoteUrl, encodeCs1WithAmount, hashK1, withNewK1} from '@lnurlcash/kit'
 import {runAdmin} from '../src/admin.ts'
 import {NoteStore} from '../src/store.ts'
 import {createFakeBackend, FAKE_LOCAL_BALANCE_MSAT} from '../src/backends/fake.ts'
@@ -152,15 +152,26 @@ describe('moneyer admin', () => {
     const signer = createNoteSigner(TEST_SIGNING_KEY)
     const k1 = freshK1()
     store.creditNote(noteIdOf(k1), 21_000)
-    const url = withNewK1('https://mint.example/w', k1, 21_000, signer.sign(hashK1(k1), 21_000))
+    // LUD-25 certifies a note over its Q, as a cs1 the amount rides in.
+    const cs1Over = (id: string, from = signer) => encodeCs1WithAmount(21_000, hexToBytes(from.sign(id, 21_000)))
+    const url = withNewK1('https://mint.example/w', k1, 21_000, cs1Over(noteIdOf(k1)))
     const good = await run(['verify-note', url], {store})
     expect(good.code).toBe(0)
     expect(good.out).toContain('verifies against the current key')
     expect(good.out).toContain('holds 21 sat, state outstanding')
 
+    // A bearer note certified before that: the bare signature in hex, in
+    // `sig`, over sha256(k1) rather than Q.
+    const legacy = new URL(buildNoteUrl('https://mint.example/w', k1, 21_000))
+    legacy.searchParams.set('sig', signer.sign(hashK1(k1), 21_000))
+    const old = await run(['verify-note', legacy.toString()], {store})
+    expect(old.code).toBe(0)
+    expect(old.out).toContain('verifies against the current key')
+
     // A note this mint never signed: the signature is the tell, not the
     // database, and both are reported.
-    const stranger = withNewK1('https://mint.example/w', k1, 21_000, createNoteSigner('22'.repeat(32)).sign(hashK1(k1), 21_000))
+    const other = createNoteSigner('22'.repeat(32))
+    const stranger = withNewK1('https://mint.example/w', k1, 21_000, cs1Over(noteIdOf(k1), other))
     expect((await run(['verify-note', stranger], {store})).out).toContain('DOES NOT verify')
 
     const unknown = buildNoteUrl('https://mint.example/w', freshK1(), 21_000)

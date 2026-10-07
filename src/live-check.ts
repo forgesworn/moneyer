@@ -13,7 +13,7 @@ import {
   isPreimage,
   meltNote,
   probeBurnedNote,
-  requestInvoice,
+  requestInvoiceShort,
   requireBoundMintQuote,
   validateBoundMintReceipt,
   withinMintFeeBand,
@@ -285,7 +285,7 @@ export const runLiveBoundMintCheck = async (options: LiveBoundMintCheckOptions):
     if (state.grossMsat < pay.minSendable || state.grossMsat > pay.maxSendable) {
       throw new Error(`Test amount is outside the mint range ${pay.minSendable}-${pay.maxSendable} msat.`)
     }
-    const quote = await requestInvoice(pay.callback, state.grossMsat, state.h)
+    const quote = await requestInvoiceShort(pay.callback, state.grossMsat, state.h)
     if (!quote.verify || !quote.mint) throw new Error('Mint did not bind this quote to h and a verification URL.')
     const netMsat = quote.mint.amountMsat
     if (!Number.isSafeInteger(netMsat) || netMsat <= 0) throw new Error('Mint committed an invalid net note amount.')

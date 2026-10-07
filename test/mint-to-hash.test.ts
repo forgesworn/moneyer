@@ -6,10 +6,11 @@ import {
   fetchInvoiceVerification,
   fetchNoteInfo,
   fetchPayRequest,
+  encodeCs1WithAmount,
   hashK1,
   rotateNote,
   rotateNoteWithHash,
-  verifyNoteSignature
+  verifyNoteSignatureForKey
 } from '@lnurlcash/kit'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {sha256} from '@noble/hashes/sha2.js'
@@ -144,8 +145,11 @@ describe('minting to a named note', () => {
     }
     expect(receipt.mint.h).toBe(hashK1(secret))
     expect(receipt.mint.amount).toBe(21_000)
+    // The receipt signs the h it repeats, as bare hex; the kit reads only a
+    // cs1, so the amount goes back in before it checks the signature.
+    const receiptCs1 = encodeCs1WithAmount(receipt.mint.amount, hexToBytes(receipt.mint.sig))
     expect(
-      verifyNoteSignature(secret, receipt.mint.amount, receipt.mint.sig, mint.moneyer.signer!.pubkey)
+      verifyNoteSignatureForKey(receipt.mint.h, receipt.mint.amount, receiptCs1, mint.moneyer.signer!.pubkey)
     ).toBe(true)
 
     // It is not a note. Neither reading it nor spending it works.
