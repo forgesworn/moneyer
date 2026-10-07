@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.18.0 - 2026-10-07
 
 - **A melt that cannot leave is answered with its reason.** The callback
   used to reply `OK` the moment the note was reserved, so a melt with no
