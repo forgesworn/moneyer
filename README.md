@@ -473,7 +473,8 @@ at `h`" alone would let anyone holding a burned `k1` and any outstanding
 note id draw a success out of the mint.
 
 The melt path is untouched: melts are deduplicated by payment hash, which
-is a different question with a different answer.
+is a different question with a different answer (a restored melt's
+invoice excepted - see the melt discipline above).
 
 This is moneyer's own behaviour. The LUD-25 draft says nothing about
 retries yet; the suggested wording is on lnurl/luds#301 as a SHOULD.
