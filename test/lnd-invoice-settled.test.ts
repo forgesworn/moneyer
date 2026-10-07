@@ -56,3 +56,45 @@ describe('lnd payInvoice refusals', () => {
     }
   )
 })
+
+// lnd's invoice subscription: one {"result": Invoice} per line, adds and
+// settles alike, and an {"error": ...} line if lnd ends it.
+describe('lnd watchSettledInvoices', () => {
+  const streaming = (lines: unknown[]) => {
+    const real = globalThis.fetch
+    const urls: string[] = []
+    globalThis.fetch = (async (input: string | URL) => {
+      urls.push(String(input))
+      return new Response(lines.map(line => JSON.stringify(line)).join('\n') + '\n', {status: 200})
+    }) as typeof fetch
+    restore = () => {
+      globalThis.fetch = real
+    }
+    return {lnd: createLndBackend({url: 'https://lnd.test', macaroon: 'ff'}), urls}
+  }
+  const base64 = (hex: string) => Buffer.from(hex, 'hex').toString('base64')
+
+  it('reports settled invoices only, by hex hash and settle index, resuming after the index given', async () => {
+    const {lnd, urls} = streaming([
+      {result: {state: 'OPEN', r_hash: base64('cd'.repeat(32)), settle_index: '0'}},
+      {result: {state: 'SETTLED', r_hash: base64(HASH), settle_index: '7'}}
+    ])
+    const seen: Array<[string, number]> = []
+    await lnd.watchSettledInvoices!({
+      fromIndex: 6,
+      signal: new AbortController().signal,
+      onSettled: async (hash, index) => {
+        seen.push([hash, index])
+      }
+    })
+    expect(urls).toEqual(['https://lnd.test/v1/invoices/subscribe?settle_index=6'])
+    expect(seen).toEqual([[HASH, 7]])
+  })
+
+  it('throws when lnd ends the stream with an error', async () => {
+    const {lnd} = streaming([{error: {code: 2, message: 'shutting down'}}])
+    await expect(
+      lnd.watchSettledInvoices!({fromIndex: 0, signal: new AbortController().signal, onSettled: async () => {}})
+    ).rejects.toThrow(/shutting down/)
+  })
+})

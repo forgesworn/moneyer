@@ -334,6 +334,17 @@ export class NoteStore {
 
   // Invoices quoted at or after this instant get no verify if they named no
   // output. See the migration above for why it is not simply "now".
+  // Small operational values that must survive a restart, such as where
+  // the funding source's invoice stream should resume.
+  metaValue(key: string): string | null {
+    const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as {value: string} | undefined
+    return row?.value ?? null
+  }
+
+  setMetaValue(key: string, value: string): void {
+    this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value').run(key, value)
+  }
+
   unnamedVerifyCutover(): number {
     const row = this.db
       .prepare("SELECT value FROM meta WHERE key = 'unnamed_verify_cutover'")

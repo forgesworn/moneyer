@@ -351,6 +351,15 @@ preimage then buys nothing: it is an ordinary payment proof, which is why
 there is no race left to run, and no window in which holding the invoice
 is nearly holding the money.
 
+On lnd and cln the mint watches the node's settled invoices (lnd's
+invoice subscription, cln's `waitanyinvoice`), so the note exists from
+the moment the invoice is paid, whether or not the wallet ever comes
+back. Each report is checked against the node before anything is
+credited, and the stream resumes from the last settle it handled after a
+drop or a restart. Without it, a paid invoice is credited when the wallet
+claims or polls `verify`, or at the latest when the expiry sweep finds it
+paid.
+
 ### Every note is a taproot output key
 
 LUD-25 makes every note a BIP-341 output key Q, written `cp1<Q>`, and that

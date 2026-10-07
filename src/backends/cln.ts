@@ -113,6 +113,32 @@ export const createClnBackend = (config: {url: string; rune: string}): Lightning
       return pays.some(pay => pay?.status === 'complete')
     },
 
+    // waitanyinvoice answers with the first invoice paid after
+    // `lastpay_index`, or the next one paid at all without it. Its timeout
+    // (904) just means nothing was paid meanwhile.
+    async watchSettledInvoices({fromIndex, signal, onSettled}) {
+      let lastIndex = fromIndex
+      while (!signal.aborted) {
+        const res = await fetch(`${config.url}/v1/waitanyinvoice`, {
+          method: 'POST',
+          headers: {'content-type': 'application/json', Rune: config.rune},
+          body: JSON.stringify({...(lastIndex > 0 ? {lastpay_index: lastIndex} : {}), timeout: 60}),
+          signal: AbortSignal.any([signal, AbortSignal.timeout(90_000)])
+        })
+        const invoice: any = await res.json().catch(() => null)
+        if (!res.ok) {
+          if (invoice?.code === 904) continue
+          throw new Error(`cln waitanyinvoice failed (${res.status}).`)
+        }
+        const index = invoice?.pay_index
+        if (invoice?.status !== 'paid' || typeof invoice.payment_hash !== 'string' || !Number.isSafeInteger(index)) {
+          throw new Error('cln waitanyinvoice returned no paid invoice.')
+        }
+        await onSettled(invoice.payment_hash, index)
+        lastIndex = index
+      }
+    },
+
     async isInvoiceSettled(paymentHashHex) {
       const result = await mustCall('/v1/listinvoices', {payment_hash: paymentHashHex})
       const invoices: any[] = result?.invoices ?? []

@@ -110,6 +110,9 @@ export type MoneyerDeps = {
   zapPollMs?: number
   // How often a signed liabilities snapshot is published. Tests shrink it.
   statsPublishMs?: number
+  // First wait before reconnecting a dropped invoice stream; it doubles to
+  // a minute. Tests shrink it.
+  invoiceStreamRetryMs?: number
   // Judges a script-path spend whose leaf this mint cannot evaluate itself.
   // Without one, such a spend is refused and its note stays outstanding.
   scriptVerifier?: ScriptVerifier
@@ -1426,6 +1429,56 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   const zapTimer = zap ? setInterval(() => void zapTick(), deps.zapPollMs ?? 5_000) : null
   zapTimer?.unref()
 
+  // A funding source that streams its settles lets a paid mint invoice be
+  // credited the moment it is paid, rather than when its wallet next asks
+  // or the expiry sweep finds it. A report is only a hint: the invoice is
+  // checked again and credited by the same call /verify and the sweep
+  // make, and those stay as the fallback whenever the stream is down. A
+  // settled zap invoice brings the next zap pass forward instead.
+  const streamAbort = new AbortController()
+  const streamIndexKey = `invoice_stream_index:${backend.name}`
+  const onSettled = async (paymentHash: string, index: number): Promise<void> => {
+    try {
+      const invoice = store.mintInvoiceByHash(paymentHash)
+      if (invoice && !invoice.settled && (await backend.isInvoiceSettled(paymentHash))) {
+        if (streamAbort.signal.aborted) return
+        store.settleMintInvoice(paymentHash)
+      } else if (!invoice && zap && store.zapInvoiceByHash(paymentHash)) {
+        void zapTick()
+      }
+    } catch (err) {
+      log(`invoice stream: could not settle a reported invoice (${(err as Error).message})`)
+    }
+    if (!streamAbort.signal.aborted) store.setMetaValue(streamIndexKey, String(index))
+  }
+  const streamInvoices = async (watch: NonNullable<LightningBackend['watchSettledInvoices']>): Promise<void> => {
+    const firstRetryMs = deps.invoiceStreamRetryMs ?? 1_000
+    let retryMs = firstRetryMs
+    while (!streamAbort.signal.aborted) {
+      const startedAt = Date.now()
+      try {
+        await watch({fromIndex: Number(store.metaValue(streamIndexKey) ?? 0), signal: streamAbort.signal, onSettled})
+      } catch (err) {
+        if (!streamAbort.signal.aborted) log(`invoice stream dropped: ${(err as Error).message}`)
+      }
+      if (streamAbort.signal.aborted) return
+      if (Date.now() - startedAt > 60_000) retryMs = firstRetryMs
+      await new Promise<void>(resolve => {
+        const done = () => {
+          clearTimeout(timer)
+          streamAbort.signal.removeEventListener('abort', done)
+          resolve()
+        }
+        const timer = setTimeout(done, retryMs)
+        streamAbort.signal.addEventListener('abort', done)
+      })
+      retryMs = Math.min(retryMs * 2, 60_000)
+    }
+  }
+  const invoiceStream = backend.watchSettledInvoices
+    ? streamInvoices(backend.watchSettledInvoices.bind(backend))
+    : Promise.resolve()
+
   // One hourly pass to Nostr carries both: the signed liabilities snapshot
   // and the mint's announcement of itself. Each re-checks its own switch,
   // so an operator can have either, both, or neither.
@@ -1455,12 +1508,14 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     publishStats,
     publishAnnouncement,
     close: async () => {
+      streamAbort.abort()
       clearInterval(housekeepingTimer)
       if (zapTimer) clearInterval(zapTimer)
       if (statsTimer) clearInterval(statsTimer)
       nostr?.close()
       kernel?.close()
       await new Promise<void>((resolve, reject) => server.close(err => (err ? reject(err) : resolve())))
+      await invoiceStream
       await backend.close?.()
       store.close()
     }

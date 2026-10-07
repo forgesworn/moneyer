@@ -173,6 +173,42 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
       return result
     },
 
+    // lnd replays every settle after `settle_index` before going live, and
+    // none for 0. The stream is held open until lnd or the signal ends it.
+    async watchSettledInvoices({fromIndex, signal, onSettled}) {
+      const res = await fetch(`${config.url}/v1/invoices/subscribe?settle_index=${fromIndex}`, {headers, signal})
+      if (!res.ok || !res.body) throw new Error(`lnd refused the invoice subscription (${res.status}).`)
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      try {
+        for (;;) {
+          const {done, value} = await reader.read()
+          if (done) return
+          buffer += decoder.decode(value, {stream: true})
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+          for (const line of lines) {
+            if (!line.trim()) continue
+            let event: any
+            try {
+              event = JSON.parse(line)
+            } catch {
+              continue
+            }
+            if (event?.error) throw new Error(`lnd ended the invoice subscription: ${event.error.message ?? 'unknown'}`)
+            const invoice = event?.result ?? event
+            if (invoice?.state !== 'SETTLED' || typeof invoice.r_hash !== 'string') continue
+            const index = Number(invoice.settle_index)
+            if (!Number.isSafeInteger(index) || index <= 0) continue
+            await onSettled(decodeHexOrBase64(invoice.r_hash), index)
+          }
+        }
+      } finally {
+        reader.cancel().catch(() => {})
+      }
+    },
+
     // 404 is lnd's answer for an invoice it does not hold, which can never
     // settle. Any other refusal is no answer at all, and reading it as
     // "unpaid" would let the expiry sweep delete a paid invoice's row.
