@@ -128,7 +128,7 @@ export type ZapBridge = {
   // Push parked wraps and receipts to relays. A wrap that reaches no relay
   // stays parked for the next pass.
   publish(): Promise<number>
-  sweep(nowMs?: number): number
+  sweep(nowMs?: number): Promise<number>
 }
 
 const metadataFor = (
@@ -387,15 +387,29 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
     return published
   }
 
-  const sweep = (nowMs: number = now()): number => {
+  // As the mint-invoice sweep: an expired row goes only once the funding
+  // source confirms it unpaid. One paid while the mint was down stays for
+  // the next settle pass to mint, and no answer deletes nothing.
+  const sweep = async (nowMs: number = now()): Promise<number> => {
     const stale: string[] = []
     for (const row of store.unsettledZapInvoices()) {
       const decoded = tryDecodeBolt11(row.pr)
       if (!decoded) continue
       if (nowMs > (decoded.timestamp + decoded.expirySeconds) * 1000 + 3_600_000) stale.push(row.paymentHash)
     }
-    for (const hash of stale) store.deleteUnsettledZapInvoice(hash)
-    return stale.length
+    let swept = 0
+    for (const hash of stale) {
+      let paid: boolean
+      try {
+        paid = await backend.isInvoiceSettled(hash)
+      } catch {
+        continue
+      }
+      if (paid) continue
+      store.deleteUnsettledZapInvoice(hash)
+      swept++
+    }
+    return swept
   }
 
   return {pubkey, isZapName, payRequest, callback, settle, publish, sweep}

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A zap paid while the mint was down is no longer lost.** The expiry
+  sweep deleted any unsettled zap invoice an hour past expiry without
+  asking the funding source, so a zap paid while moneyer was down that long
+  stayed in the node and never became a note. It now asks first, as the
+  mint-invoice sweep has since 0.17.1: an unpaid one goes, a paid one stays
+  for the settle pass to mint, and no answer deletes nothing.
 - **A paid mint invoice is credited the moment it settles.** moneyer now
   watches the funding source's settled invoices (lnd's
   `/v1/invoices/subscribe`, cln's `waitanyinvoice`) and mints the note as
