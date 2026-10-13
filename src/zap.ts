@@ -122,7 +122,14 @@ export type ZapBridge = {
   pubkey: string
   isZapName(name: string): boolean
   payRequest(name: string): Record<string, unknown> | null
-  callback(name: string, amountMsat: number, nostrParam: string | null): Promise<ZapCallbackResult>
+  // `advertisedIndex` is the path segment after the name, when the
+  // payRequest put one there (see payRequest).
+  callback(
+    name: string,
+    amountMsat: number,
+    nostrParam: string | null,
+    advertisedIndex?: string | null
+  ): Promise<ZapCallbackResult>
   // Poll the funding source for settled zap invoices: mint, wrap, park.
   settle(): Promise<number>
   // Push parked wraps and receipts to relays. A wrap that reaches no relay
@@ -171,7 +178,7 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
     const lowered = name.toLowerCase()
     const registered = store.zapName(lowered)
     if (!registered) return null
-    let internalTransfer: string | undefined
+    let advertisedIndex: number | undefined
     const branch = decodeCx1(registered.cx1 ?? '')
     if (branch) {
       let index = registered.nextIndex
@@ -179,7 +186,7 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
         try {
           const noteId = bytesToHex(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, NOTE_PURPOSE_LIGHTNING_ADDRESS, index))
           if (!store.outputIdInUse(noteId)) {
-            internalTransfer = `${registered.cx1}:${index}`
+            advertisedIndex = index
             break
           }
         } catch {
@@ -187,9 +194,15 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
         }
       }
     }
+    const internalTransfer = advertisedIndex === undefined ? undefined : `${registered.cx1}:${advertisedIndex}`
     return {
       tag: 'payRequest',
-      callback: `${origin}/z/cb/${lowered}`,
+      // The index rides in the callback path so the invoice can commit to
+      // this exact metadata (LUD-06): by the time the payer calls back, a
+      // settled payment may have moved the next unused index on. A path
+      // segment rather than a query parameter, because some zap clients
+      // append `?amount=` without looking for an existing query.
+      callback: `${origin}/z/cb/${lowered}${advertisedIndex === undefined ? '' : `/${advertisedIndex}`}`,
       minSendable: deps.minSendableMsat,
       maxSendable: deps.maxSendableMsat,
       metadata: metadataFor(lowered, host, deps.mintFeeLine, deps.feeInWords, internalTransfer),
@@ -201,10 +214,20 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
     }
   }
 
-  const callback = async (name: string, amountMsat: number, nostrParam: string | null): Promise<ZapCallbackResult> => {
+  const callback = async (
+    name: string,
+    amountMsat: number,
+    nostrParam: string | null,
+    advertisedIndex: string | null = null
+  ): Promise<ZapCallbackResult> => {
     const lowered = name.toLowerCase()
-    const recipient = store.zapName(lowered)?.pubkey
-    if (!recipient) return {reason: 'Unknown user.'}
+    const registered = store.zapName(lowered)
+    const recipient = registered?.pubkey
+    if (!registered || !recipient) return {reason: 'Unknown user.'}
+    // Below 2^31: a non-hardened index, as the derivation's ser32 needs.
+    if (advertisedIndex !== null && (!/^\d{1,10}$/.test(advertisedIndex) || Number(advertisedIndex) > 0x7fffffff)) {
+      return {reason: 'Invalid callback.'}
+    }
     if (!Number.isSafeInteger(amountMsat) || amountMsat <= 0) return {reason: 'Invalid amount.'}
     if (amountMsat < deps.minSendableMsat || amountMsat > deps.maxSendableMsat) return {reason: 'Amount out of range.'}
     const net = deps.netAfterMintFee(amountMsat)
@@ -229,6 +252,15 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
     // nothing to them. The note's secret is minted at settlement.
     const preimage = bytesToHex(randomBytes(32))
     const paymentHash = hashK1(preimage)
+    // A zap commits to its zap request (NIP-57); any other payment to the
+    // metadata the payer was shown (LUD-06), rebuilt from the index the
+    // payRequest advertised. That index is only a hint and feeds nothing
+    // but this string: settlement derives the note's key itself, so a
+    // forged one changes no more than the forger's own invoice. A cx1
+    // changed or cleared between the two requests still mismatches, and
+    // the payer's wallet fetches the payRequest again.
+    const internalTransfer =
+      advertisedIndex !== null && registered.cx1 ? `${registered.cx1}:${Number(advertisedIndex)}` : undefined
     let pr: string
     try {
       pr = (
@@ -236,7 +268,7 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
           amountMsat,
           preimageHex: preimage,
           memo: `Zap ${lowered}@${host}`,
-          descriptionForHash: zapRequest ?? metadataFor(lowered, host, deps.mintFeeLine, deps.feeInWords)
+          descriptionForHash: zapRequest ?? metadataFor(lowered, host, deps.mintFeeLine, deps.feeInWords, internalTransfer)
         })
       ).pr
     } catch (err) {
