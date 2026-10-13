@@ -729,11 +729,12 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     if (lnurlpMatch && zap && zap.isZapName(lnurlpMatch[1]!)) {
       return send(zap.payRequest(lnurlpMatch[1]!))
     }
-    const zapCbMatch = requestUrl.pathname.match(/^\/z\/cb\/(.+)$/)
+    // `/z/cb/<name>`, or `/z/cb/<name>/<index>` for a name advertising a cx1.
+    const zapCbMatch = requestUrl.pathname.match(/^\/z\/cb\/([^/]+)(?:\/([^/]+))?$/)
     if (zapCbMatch) {
       if (!zap || !zap.isZapName(zapCbMatch[1]!)) return fail('Unknown user.', 404)
       if (config.sunset) return fail('This mint is sunsetting - minting is disabled.')
-      const result = await zap.callback(zapCbMatch[1]!, Number(q.get('amount')), q.get('nostr'))
+      const result = await zap.callback(zapCbMatch[1]!, Number(q.get('amount')), q.get('nostr'), zapCbMatch[2] ?? null)
       if ('reason' in result) return fail(result.reason)
       return send({...result, disposable: false})
     }

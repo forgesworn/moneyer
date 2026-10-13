@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- **A name with a cx1 issues invoices its payer's wallet will accept.** Its
+  payRequest metadata carries `text/cpub` with the next free index, but the
+  invoice's description hash was taken over the metadata without it, so it
+  never matched `sha256(metadata)` as LUD-06 requires. A wallet that checks
+  refused to pay the name by Lightning. The callback is now
+  `/z/cb/<name>/<index>`, the index the payRequest advertised, and the
+  invoice commits to exactly the metadata the payer read, even when a
+  settled payment has moved the next free index on in between. The index
+  feeds only the metadata: the note still lands on the next free key at
+  settlement. An index that is not a non-hardened one is refused. Zaps were
+  unaffected (their hash is over the zap request), and so is a name without
+  a cx1, whose callback stays `/z/cb/<name>`; that form still answers for
+  every name.
+- The derivation, address proof and auto-mint text moved from LUD-25 to
+  LUD-26 in the draft (lnurl/luds 2f17578, editorial); the README and
+  comments now point there.
+
 ## 0.20.0 - 2026-10-07
 
 - **A zap paid while the mint was down is no longer lost.** The expiry

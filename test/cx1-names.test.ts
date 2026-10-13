@@ -19,6 +19,7 @@ import {
 import {NOTE_PURPOSE_LIGHTNING_ADDRESS, NOTE_PURPOSE_WALLET, deriveNotePubkey} from '../src/spend.ts'
 import {NIP98_KIND, addressProofVerifies} from '../src/names.ts'
 import {NOTE_KIND, type NostrTransport} from '../src/zap.ts'
+import {createFakeBackend, type FakeBackend} from '../src/backends/fake.ts'
 import {startMint, waitFor, type TestMint, noteIdOf, certifiesNote} from './helpers.ts'
 
 // A name with a cx1 is paid to the holder's own keys: the mint derives the
@@ -51,7 +52,7 @@ afterEach(async () => {
   active = null
 })
 
-const start = async (overrides: Record<string, unknown> = {}) => {
+const start = async (overrides: Record<string, unknown> = {}, backend?: FakeBackend) => {
   const relay = fakeRelay()
   active = await startMint(
     {
@@ -61,9 +62,22 @@ const start = async (overrides: Record<string, unknown> = {}) => {
       namePriceMsat: 0,
       ...overrides
     },
-    {nostr: relay.transport, zapPollMs: 20}
+    {nostr: relay.transport, zapPollMs: 20, ...(backend ? {backend} : {})}
   )
   return {mint: active, relay}
+}
+
+// What each invoice commits to, as the funding source is asked for it: lnd
+// and cln hash exactly this string into the invoice's description hash.
+const recordingBackend = () => {
+  const backend = createFakeBackend()
+  const committed: Array<string | undefined> = []
+  const createInvoice = backend.createInvoice.bind(backend)
+  backend.createInvoice = async args => {
+    committed.push(args.descriptionForHash)
+    return createInvoice(args)
+  }
+  return {backend, committed}
 }
 
 const token = (secret: Uint8Array, body: string): string => {
@@ -128,7 +142,7 @@ const holder = (): Holder => {
   }
 }
 
-// The wallet's half of LUD-25's derivation, which the kit pinned here
+// The wallet's half of LUD-26's derivation, which the kit pinned here
 // predates: the branch key taken at even y, plus the same tweak the mint
 // adds to derive the public key.
 const N = secp256k1.Point.CURVE().n
@@ -238,6 +252,67 @@ describe('a name with a cx1', () => {
     await claim(mint, custodial.sk, {name: 'bobby'})
     const oldPay = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/bobby`)).json()) as {metadata: string}
     expect(JSON.parse(oldPay.metadata).some((entry: unknown[]) => entry[0] === 'text/cpub')).toBe(false)
+  })
+
+  it('issues each invoice committed to the metadata its payer was shown', async () => {
+    const {backend, committed} = recordingBackend()
+    const {mint, relay} = await start({}, backend)
+    const alice = holder()
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
+    await claim(mint, holder().sk, {name: 'bobby'})
+
+    const payRequest = async (name: string) =>
+      (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/${name}`)).json()) as {callback: string; metadata: string}
+    const callBack = async (callback: string, extra = '') => {
+      const url = `${callback.replace(`http://${HOST}`, mint.moneyer.url)}?amount=21000${extra}`
+      return (await (await fetch(url)).json()) as {pr?: string; reason?: string}
+    }
+
+    // A name without a branch advertises no index and needs none.
+    const bobby = await payRequest('bobby')
+    expect(bobby.callback).toBe(`http://${HOST}/z/cb/bobby`)
+    expect((await callBack(bobby.callback)).pr).toBeTypeOf('string')
+    expect(committed.at(-1)).toBe(bobby.metadata)
+
+    // A payment settles between the payer reading alice's payRequest and
+    // calling back, so the next free index moves on. The invoice still
+    // commits to the metadata the payer read, hint and all.
+    const shown = await payRequest('alice')
+    expect(shown.callback).toBe(`http://${HOST}/z/cb/alice/0`)
+    await settle(mint, relay, alice, await invoice(mint, 'alice', 21_000))
+    const later = await payRequest('alice')
+    expect(later.callback).toBe(`http://${HOST}/z/cb/alice/1`)
+    expect(later.metadata).not.toBe(shown.metadata)
+    expect((await callBack(shown.callback)).pr).toBeTypeOf('string')
+    expect(committed.at(-1)).toBe(shown.metadata)
+
+    // The index is a hint only: the payment it paid for lands on the next
+    // free key, whatever the callback said.
+    const paymentHash = decodeBolt11((await callBack(`http://${HOST}/z/cb/alice/7`)).pr!).paymentHashHex
+    const landed = await settle(mint, relay, alice, paymentHash)
+    expect(landed.url.searchParams.get('i')).toBe('1')
+
+    // A zap still commits to its zap request, index or not.
+    const zap = JSON.stringify(
+      finalizeEvent(
+        {
+          kind: 9734,
+          created_at: Math.floor(Date.now() / 1000),
+          content: '',
+          tags: [['p', alice.pubkey], ['relays', 'wss://zapper.example'], ['amount', '21000']]
+        },
+        generateSecretKey()
+      )
+    )
+    expect((await callBack(later.callback, `&nostr=${encodeURIComponent(zap)}`)).pr).toBeTypeOf('string')
+    expect(committed.at(-1)).toBe(zap)
+
+    // A malformed index is refused rather than dropped.
+    for (const bad of ['x', '-1', '1.5', '2147483648', '00000000001']) {
+      const before = committed.length
+      expect(await callBack(`http://${HOST}/z/cb/alice/${bad}`)).toMatchObject({reason: 'Invalid callback.'})
+      expect(committed.length).toBe(before)
+    }
   })
 
   it('accepts an internal transfer on the address purpose and advances after a raced hint', async () => {

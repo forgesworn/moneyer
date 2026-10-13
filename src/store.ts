@@ -115,7 +115,7 @@ export type ZapNameRow = {
   createdAt: number
   paidMsat: number
   source: 'env' | 'self'
-  // LUD-25 Part 2: the holder's watch-only branch. With one, a payment is
+  // LUD-26 auto-mint: the holder's watch-only branch. With one, a payment is
   // minted to the holder's next key rather than to a secret this mint draws.
   cx1: string | null
   nextIndex: number

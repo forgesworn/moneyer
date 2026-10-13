@@ -94,7 +94,7 @@ export const validateNip98 = (
   return {pubkey: event.pubkey}
 }
 
-// LUD-25's address proof. A cx1 is public, so pointing a name at one, or
+// LUD-26's address proof. A cx1 is public, so pointing a name at one, or
 // away from one, has to be proven by the branch itself: a BIP-340
 // signature by its index-0 key over sha256("LNURLcash:<action>:<domain>:
 // <name>"). The domain is this mint's own, so a proof one mint has seen
@@ -161,7 +161,7 @@ export const registerName = async (args: {
   if ([...ALWAYS_RESERVED, ...args.reserved.map(name => name.toLowerCase())].includes(raw)) {
     return refuse('That name is reserved.', 403)
   }
-  // LUD-25 Part 2: a watch-only branch, so payments to the name are minted
+  // LUD-26 auto-mint: a watch-only branch, so payments to the name are minted
   // to the holder's own keys. Absent leaves it as it is; null clears it.
   let cx1: string | null | undefined
   if (args.body.cx1 === null) {

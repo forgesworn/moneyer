@@ -584,7 +584,7 @@ A registered name resolves on both rails at once:
 The discovery endpoint advertises `namePriceMsat` while registration is
 open, so a wallet can offer the flow without asking.
 
-### A name that pays to your own keys (LUD-25 auto-mint)
+### A name that pays to your own keys (LUD-26 auto-mint)
 
 Add `"cx1": "cx1..."` to the registration body, or send `{"name", "cx1"}`
 again later from the key that owns the name, and payments to it stop being
@@ -592,7 +592,7 @@ custodial. A `cx1` is a watch-only branch: from it the mint can work out each
 of the holder's note keys in turn, but never spend one.
 
 A `cx1` is public, so pointing a name at one has to be proven by the branch
-itself, as LUD-25 requires: the body also carries `"sig"`, a BIP-340
+itself, as LUD-26 requires: the body also carries `"sig"`, a BIP-340
 signature by the branch's purpose-0 index-0 key over
 `sha256("LNURLcash:register:<domain>:<name>")`, `<domain>` being this mint's
 hostname. Changing the branch later is proven by the branch on file, not the
@@ -690,7 +690,7 @@ clearnet.
 | `/.well-known/lnurlp/<zap name>` | NIP-57 payRequest; paying mints a note *to the name's pubkey* |
 | `/.well-known/lnurlw/<user>` | LUD-25 mint address discovery (experimental) |
 | `/p/cb` | LUD-06 pay callback; issues the mint invoice for the note the `comment` names, a hash or a `cp1` key (`h` is an older spelling for a hash) |
-| `/z/cb/<zap name>` | the zap callback; validates the kind 9734 and issues the invoice |
+| `/z/cb/<zap name>` | the zap callback; validates the kind 9734 and issues the invoice. A name with a `cx1` calls back at `/z/cb/<zap name>/<index>`, the index its payRequest advertised, so the invoice commits to exactly the metadata the payer was shown |
 | `/verify/<hash>` | LUD-21 verify, for mint invoices and melt payments |
 | `/w` | LUD-03 informational GET; accepts `k1` (a preimage, `ck1` or `cw1`, verified in full) or the non-disclosing LUD-25 `p` check (a bearer note's h or any `cp1`; `h` is its older name, still accepted); a live note carries `payLink` and its `cs1` as `sig` |
 | `/w/cb` | the mutating callback: melt, rotate, split, merge; inputs as preimages, `ck1`s or `cw1`s, outputs as `p1`/`p2` (a bearer note's h or a `cp1`), or their older names `h`/`h2` |
