@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.1 - 2026-10-13
 
 - **A name with a cx1 issues invoices its payer's wallet will accept.** Its
   payRequest metadata carries `text/cpub` with the next free index, but the
