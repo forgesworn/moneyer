@@ -5,10 +5,13 @@
 
 moneyer is an independent implementation of the LUD-25 draft: paying an
 invoice it issues mints a bearer note, and a note's holder can rotate,
-split, merge and melt it against the withdraw callback. The note's spend
-secret is chosen by the buyer, before the invoice exists, and named to the
-mint only as a hash - so the mint never holds it, and neither does any node
-that forwards the payment. It passes the full
+split, merge and melt it against the withdraw callback. When a wallet buys a
+note, its spend secret is chosen by the buyer, before the invoice exists, and
+named to the mint only as a hash - so the mint never holds it, and neither
+does any node that forwards the payment. The exception is zap-to-note, where
+the mint creates the secret itself and knows it until the recipient rotates
+the note (see [Zap-to-note](#zap-to-note-a-lightning-address-that-pays-out-as-a-note)),
+unless the name carries a `cx1` key branch. It passes the full
 [lnurlcash-conformance](https://github.com/lnurlcash/lnurlcash-conformance)
 grader, including the spending checks, and the grader runs in this repo's
 own test suite.
@@ -30,11 +33,12 @@ lesson, that behaviour is kept deliberately and tested.
   mints its own preimages (phoenixd, NIP-47 `make_invoice`) can back a mint
   too - it just gets the after-the-fact checks instead. A backend declares
   which it is with `acceptsInvoicePreimage`. A **fake** backend exists for
-  development and tests and refuses to run outside `--dev`.
+  development and tests; the `moneyer` CLI refuses to run it outside `--dev`.
 - Notes are stored by their taproot output key Q, as LUD-25 now defines
   every note - the store never holds a spend. The buyer names the note they
   are buying with a mandatory LUD-12 comment, so the spend is theirs alone
-  from the start.
+  from the start (zap-to-note, where the mint creates the note, is the
+  exception).
 - Signs every note it mints with its own mint key (secp256k1, the standard
   `Lightning Signed Message` construction) for LUD-25 offline verification.
 - The melt discipline: reserve the note, then give the payment up to two
@@ -54,8 +58,8 @@ npm install @forgesworn/moneyer
 ```
 
 ```bash
-# development: fake funding source, in-memory store, ephemeral signing key,
-# a funded note printed
+# development: fake funding source (invoices settle themselves, nothing can
+# pay them), in-memory store, ephemeral signing key, a funded note printed
 npx moneyer --dev
 
 # production shape
@@ -99,6 +103,11 @@ through its life with nothing but `fetch`. The callbacks answer a refusal
 with an HTTP 200 and `{"status": "ERROR", "reason": "..."}`, so a wallet
 checks `status`, not the HTTP code.
 
+The `--dev` mint has no Lightning node behind it. Its fake funding source
+issues invoices that no wallet can pay and settles each one itself about
+1.5 seconds after issuing it, and it "pays" a melt without sending anything.
+The comments below say where a real mint (cln or lnd) differs.
+
 ```ts
 import {createHash, randomBytes} from 'node:crypto'
 
@@ -117,11 +126,13 @@ const h = sha256(secret)
 
 // 3. Quote. The mandatory LUD-12 comment names the note to be minted.
 const quote = await get(`${pay.callback}?${new URLSearchParams({amount: '21000', comment: h})}`)
-// quote.pr is a BOLT-11 invoice for 21000 msat: pay it from any Lightning
-// wallet. quote.verify is the LUD-21 URL to poll for settlement.
+// quote.pr is a BOLT-11 invoice for 21000 msat. On a real mint, pay it from
+// any Lightning wallet; on --dev nothing can pay it and it settles itself.
+// quote.verify is the LUD-21 URL to poll for settlement.
 
 // 4. Claim. Once the invoice has settled, GET /w?k1=<secret> brings the note
 //    into existence. Before that it answers 'Unknown note.'
+while (!(await get(quote.verify)).settled) await new Promise(resolve => setTimeout(resolve, 500))
 const note = await get(`${mint}/w?k1=${secret}`)
 // note.maxWithdrawable is the note's value in msat, note.c its cs1
 // certificate, note.callback the /w/cb URL used below.
@@ -133,7 +144,11 @@ await get(`${note.callback}?${new URLSearchParams({k1: secret, p1: sha256(next)}
 // {status: 'OK', c: '<cs1>', sig: '<cs1>'}
 
 // 6. Melt: pay the note out to a BOLT-11 invoice with k1 and pr.
-const invoice = 'lnbc...' // for the note's value, from the wallet you are paying out to
+// The invoice is for the note's value (21000 msat) or states no amount. On a
+// real mint it comes from the wallet you are paying out to. On --dev it only
+// has to decode, and nothing is sent: `fakeBolt11` (see As a library) makes
+// one. 'lnbc...' as written is refused as 'Invalid invoice.'
+const invoice = 'lnbc...'
 const melt = await get(`${note.callback}?${new URLSearchParams({k1: next, pr: invoice})}`)
 // {status: 'OK', pr, verify}. OK means in flight, not paid: poll melt.verify
 // (LUD-21) for {settled: true}.
@@ -503,9 +518,10 @@ non-payment, and the routing budget is still sized against the note.
 
 ## Name the note you are buying
 
-Paying a mint invoice always mints to a wallet-generated secret. The wallet
-chooses and persists that secret first, then sends its SHA-256 commitment in
-the mandatory LUD-12 comment:
+Paying a mint invoice (a quote from `/p/cb`) always mints to a
+wallet-generated secret. The wallet chooses and persists that secret first,
+then sends its SHA-256 commitment in the mandatory LUD-12 comment. A zap
+invoice is the exception, covered under [Zap-to-note](#zap-to-note-a-lightning-address-that-pays-out-as-a-note):
 
 ```
 GET /p/cb?amount=21000&comment=<64 hex>

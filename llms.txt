@@ -1,17 +1,21 @@
 # moneyer
 
 > A custodial LNURLcash mint issuing Lightning bearer notes: paying an
-> invoice mints a note whose spend secret is chosen by the buyer, never the
-> mint. moneyer is an independent LNURLcash (LUD-25) mint for Node 24+.
+> invoice mints a note whose spend secret, for a wallet's mint quote, is
+> chosen by the buyer and never held by the mint (zap-to-note is the
+> exception: the mint creates that secret and knows it until the recipient
+> rotates the note). moneyer is an independent LNURLcash (LUD-25) mint for
+> Node 24+.
 
 LNURLcash (LUD-25) mint for Node 24+. Strikes Lightning bearer notes.
-Paying an invoice it issues credits a note keyed by the buyer's mandatory
+Paying a mint quote's invoice credits a note keyed by the buyer's mandatory
 LUD-12 comment, hex(sha256(secret)) or a `cp1` key; the payment preimage is
 settlement proof only. The mint holds the value as a liability to the note's
 holder. ESM-only. MIT.
 
 Install: npm install @forgesworn/moneyer
-Run: npx moneyer --dev   (fake funding source, ephemeral signing key, prints a funded note)
+Run: npx moneyer --dev   (fake funding source whose invoices no wallet can pay and which settles
+     them itself after about 1.5 s; ephemeral signing key; prints a funded note)
 From a source checkout: npm run build, then node dist/cli.js --dev
 
 Draft spec: https://github.com/lnurl/luds/pull/301
@@ -142,7 +146,9 @@ signStats(stats, privHex) -> string   the signature alone, hex r || s || recover
                             merge:  ?k1=<spend>&k1=<spend>...&p1=<new note>
 POST /names                 claim a name (NIP-98; the signer owns it); body {name, note?, cx1?}.
                             The owner may resend {name, cx1} to set a branch, or cx1: null to clear it
-/z/cb/{name}                zap invoice for a name. With a cx1 the settled note is credited to the
+/z/cb/{name}                zap invoice for a name. Without a cx1 the mint creates the note's secret at
+                            settlement, wraps it to the recipient and knows it until they rotate the note.
+                            With a cx1 the settled note is credited to the
                             holder's next key on the branch's Lightning Address purpose (2), and the kind 2525 gift wrap carries no secret:
                             /w?p=<cp1>&c=<amount-bearing-cs1>&i=<index> plus an `i` tag. The index is
                             taken at settlement, never at the invoice, and occupied keys are skipped
