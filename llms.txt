@@ -1,16 +1,18 @@
 # moneyer
 
-> Custody-free Lightning bearer notes: paying an invoice mints a note whose
-> spend secret is chosen by the buyer, never the mint. moneyer is an
-> independent LNURLcash (LUD-25) mint for Node 24+.
+> A custodial LNURLcash mint issuing Lightning bearer notes: paying an
+> invoice mints a note whose spend secret is chosen by the buyer, never the
+> mint. moneyer is an independent LNURLcash (LUD-25) mint for Node 24+.
 
-LNURLcash (LUD-25) mint for Node 24+. Strikes Lightning bearer notes:
-paying an invoice it issues mints a note whose spend secret is the
-invoice's payment preimage, or a secret the buyer named with `h` on the
-pay callback. ESM-only. MIT.
+LNURLcash (LUD-25) mint for Node 24+. Strikes Lightning bearer notes.
+Paying an invoice it issues credits a note keyed by the buyer's mandatory
+LUD-12 comment, hex(sha256(secret)) or a `cp1` key; the payment preimage is
+settlement proof only. The mint holds the value as a liability to the note's
+holder. ESM-only. MIT.
 
 Install: npm install @forgesworn/moneyer
-Run: node dist/cli.js --dev   (fake funding source, prints a funded note)
+Run: npx moneyer --dev   (fake funding source, ephemeral signing key, prints a funded note)
+From a source checkout: npm run build, then node dist/cli.js --dev
 
 Draft spec: https://github.com/lnurl/luds/pull/301
 Conformance: https://github.com/lnurlcash/lnurlcash-conformance
@@ -45,7 +47,7 @@ Client library to build against a mint: @lnurlcash/kit
    notes, as mint-invoice payment hashes, or as a note another payer has
    already bought with `h`. A malformed `h` on the pay callback is
    refused BEFORE an invoice is issued; a colliding one gets the same
-   oracle-free refusal a colliding mutation output gets. The reply
+   oracle-free `already in use` a colliding mutation output gets. The reply
    carries mintToHash: true when the invoice was bound, and the
    payRequest and mint address advertise mintToHash: true.
 4. Melt OK means IN FLIGHT. The note burns only on confirmed payment,
@@ -67,16 +69,25 @@ Client library to build against a mint: @lnurlcash/kit
    would land at zero refuses with 'insufficient value'. The proportional
    part applies at mint time only.
 7. Reason strings are protocol surface: 'pending',
-   'Invalid or already spent k1.', 'Unknown note.', 'Note already spent.',
-   'missing p1', 'missing p2' (withdraw callback), 'missing h' (pay
-   callback), 'insufficient value' - wallets classify on them.
+   'Invalid or already spent k1.' (an unknown, burned or twice-named input),
+   'already in use' (an output that names a note already credited, on the
+   pay callback and the withdraw callback alike), 'Unknown note.',
+   'Note already spent.', 'missing p1', 'missing p2' (withdraw callback),
+   'a mint quote must name its output with a LUD-12 comment carrying a cp1
+   key or hex(sha256(secret))' (a missing or malformed comment on the pay
+   callback), 'missing h' (an `h` there that is not 64 hex),
+   'comment and h name different outputs', 'insufficient value' - wallets
+   classify on them.
 8. minSendable must survive the mint's own fee (grossUpForMintFee of the
    dust floor), or the mint advertises an amount it will refuse.
 
 ## Library API
 
-createMoneyer(config, deps?) -> {url, port, store, backend, signer, reconcile, close}
-  url is the full origin (http://host:port), port already included
+createMoneyer(config, deps?) -> {url, port, config, store, backend, signer, zap, reconcile,
+  stats, publishStats, publishAnnouncement, close}
+  url is the full origin (http://host:port), port already included.
+  config.signingKey is required (createMoneyer throws without it); the library
+  does not refuse a fake backend, only the CLI does outside --dev
 verifyAnnouncement(content, mintPubkey) -> {valid, document}
   kind 30078 / d=lnurlcash-mint: a mint announcing itself, content = its
   discovery document + sig by the note signing key. MONEYER_ANNOUNCE=true,
@@ -100,10 +111,11 @@ createNoteSigner(privHex) -> {pubkey, sign(noteId, amountMsat)}
   privHex is a secp256k1 private key, as MONEYER_SIGNING_KEY; zero is rejected
 fakeBolt11({amountMsat, paymentHashHex, memo?}) -> decodable, unpayable invoice
 NoteStore - SQLite store; notes by hex(Q), never spends; pre-Q rows found via legacy_ids
-runMelt(job, deps) -> Promise<void> / reconcilePendingMelts(store, backend, inFlight, log?)
+runMelt(job, deps) -> Promise<{kind: 'paid'} | {kind: 'restored', reason} | {kind: 'unresolved'}>
+reconcilePendingMelts(store, backend, inFlight, log?) -> Promise<void>
   the melt discipline: burn only on confirmed payment, restore only on confirmed
-  non-payment. The /w/cb handler drives both; outcomes land in the store, not in a
-  return value. job = {paymentHash, noteId, pr, amountMsat, payAmountMsat?},
+  non-payment. The /w/cb handler drives both; the note's state lands in the store.
+  job = {paymentHash, noteId, pr, amountMsat, payAmountMsat?},
   deps = {store, backend, feeLimitMsat(amountMsat), confirmDelaysMs?, log?}
 buildStats({liabilities, localBalanceMsat?, reconciledAt?, at?, ratioOnly?}) -> MintStats
   liabilities = store.liabilities() -> {outstandingMsat, outstandingNotes,
@@ -120,10 +132,14 @@ signStats(stats, privHex) -> string   the signature alone, hex r || s || recover
 
 /.well-known/lnurlp/{user}  LUD-16 payRequest (mints)
 /.well-known/lnurlw/{user}  LUD-25 mint address (experimental)
-/p/cb                       LUD-06 pay callback (comment names the note: a bearer h or a cp1)
+/p/cb                       LUD-06 pay callback: ?amount=<msat>&comment=<hex(sha256(secret)) or cp1> (comment is mandatory)
 /verify/{payment_hash}      LUD-21 verify (mint invoices AND melt payments)
 /w                          LUD-03 informational GET by k1 (preimage, ck1 or cw1, verified in full) or p (a bearer h or a cp1, older h); every note carries its cs1 over Q as sig
 /w/cb                       melt / rotate / split / merge; inputs preimages, ck1 or cw1, outputs p1/p2 as a bearer h or cp1 (or older h/h2); every output certified as cs1 over Q; a taken output is `already in use`
+                            melt:   ?k1=<spend>&pr=<bolt11>  (pr cannot combine with amount or several k1)
+                            rotate: ?k1=<spend>&p1=<new note>
+                            split:  ?k1=<spend>&amount=<msat>&p1=<note for amount>&p2=<change note>
+                            merge:  ?k1=<spend>&k1=<spend>...&p1=<new note>
 POST /names                 claim a name (NIP-98; the signer owns it); body {name, note?, cx1?}.
                             The owner may resend {name, cx1} to set a branch, or cx1: null to clear it
 /z/cb/{name}                zap invoice for a name. With a cx1 the settled note is credited to the
