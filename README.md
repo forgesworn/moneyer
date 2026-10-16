@@ -393,9 +393,8 @@ spend is refused with a reason and the note stays outstanding; a verifier
 that crashes, errors or stalls refuses too, and never accepts.
 
 Every note gets a certificate, `cs1` over hex(Q) and its amount: `c` on
-the informational GET, `c`/`c2` on every rotate, split and merge. The same
-value also goes out as the older `sig`/`sig2` until wallets reading only
-those have moved on. The
+the informational GET, `c`/`c2` on every rotate, split and merge, and
+under no other name. The
 informational GET verifies a `k1` in full before answering, so a wallet
 checking a note it was handed learns whether its spend really opens it.
 
@@ -692,7 +691,7 @@ clearnet.
 | `/p/cb` | LUD-06 pay callback; issues the mint invoice for the note the `comment` names, a hash or a `cp1` key (`h` is an older spelling for a hash) |
 | `/z/cb/<zap name>` | the zap callback; validates the kind 9734 and issues the invoice. A name with a `cx1` calls back at `/z/cb/<zap name>/<index>`, the index its payRequest advertised, so the invoice commits to exactly the metadata the payer was shown |
 | `/verify/<hash>` | LUD-21 verify, for mint invoices and melt payments |
-| `/w` | LUD-03 informational GET; accepts `k1` (a preimage, `ck1` or `cw1`, verified in full) or the non-disclosing LUD-25 `p` check (a bearer note's h or any `cp1`; `h` is its older name, still accepted); a live note carries `payLink` and its `cs1` as `sig` |
+| `/w` | LUD-03 informational GET; accepts `k1` (a preimage, `ck1` or `cw1`, verified in full) or the non-disclosing LUD-25 `p` check (a bearer note's h or any `cp1`; `h` is its older name, still accepted); a live note carries `payLink` and its `cs1` as `c` |
 | `/w/cb` | the mutating callback: melt, rotate, split, merge; inputs as preimages, `ck1`s or `cw1`s, outputs as `p1`/`p2` (a bearer note's h or a `cp1`), or their older names `h`/`h2` |
 | `POST /names` | claim a lightning address, authenticated by NIP-98 |
 | `/.well-known/nostr.json` | NIP-05 for the names this mint serves |

@@ -178,13 +178,12 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   // every note, bearer notes included.
   const certify = (q: string, amountMsat: number): string =>
     encodeCs1WithAmount(amountMsat, hexToBytes(signer.sign(q, amountMsat)))
-  // LUD-25 names the certificate `c` (and `c2` for split change). The old
-  // `sig`/`sig2` go out alongside it until the wallets that read only those
-  // have moved on.
-  const certified = (field: 'c' | 'c2', q: string, amountMsat: number): Record<string, string> => {
-    const cs1 = certify(q, amountMsat)
-    return field === 'c' ? {c: cs1, sig: cs1} : {c2: cs1, sig2: cs1}
-  }
+  // LUD-25 names the certificate `c` (and `c2` for split change). The
+  // `sig`/`sig2` that went out alongside them from 0.17.0 to 0.20.1 are
+  // gone: the draft never named them, and every wallet reads `c`.
+  const certified = (field: 'c' | 'c2', q: string, amountMsat: number): Record<string, string> => ({
+    [field]: certify(q, amountMsat)
+  })
 
   // Every host this mint answers on. A spend's signature is bound to one
   // domain, and a note travels as a URL naming one host, so a signature

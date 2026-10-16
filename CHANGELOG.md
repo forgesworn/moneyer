@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Certificates go out as `c` and `c2` only.** The `sig`/`sig2` that had
+  carried the same value alongside them since 0.17.0 are dropped, as dni
+  asked. The draft never named them, the reference mint emits only `c`/`c2`,
+  and every wallet that verifies a moneyer certificate reads `c` first:
+  notecase since 0.25.0, heartwood since 0.18.0-beta.24, lnurl-wallet,
+  lnurlcash-core and its Python and Go ports. The bound-mint receipt on
+  `/verify` is a different field and keeps its name.
+
 ## 0.20.1 - 2026-10-13
 
 - **A name with a cx1 issues invoices its payer's wallet will accept.** Its
