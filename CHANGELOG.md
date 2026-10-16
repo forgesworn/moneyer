@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.21.0 - 2026-10-16
 
 - **Certificates go out as `c` and `c2` only.** The `sig`/`sig2` that had
   carried the same value alongside them since 0.17.0 are dropped, as dni
