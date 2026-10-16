@@ -113,7 +113,11 @@ ScriptVerifier = ({outputKey, domain, spend, now, lockedAt}) => Promise<reason |
   pass as MoneyerDeps.scriptVerifier to judge leaves moneyer cannot evaluate itself
 createNoteSigner(privHex) -> {pubkey, sign(noteId, amountMsat)}
   privHex is a secp256k1 private key, as MONEYER_SIGNING_KEY; zero is rejected
-fakeBolt11({amountMsat, paymentHashHex, memo?}) -> decodable, unpayable invoice
+fakeBolt11({amountMsat?, paymentHashHex, memo?, timestamp?}) -> decodable, unpayable invoice
+  omit amountMsat for an amountless one. To melt into it against a --dev mint, give each
+  invoice a fresh paymentHashHex (64 hex, e.g. random 32 bytes): a hash an earlier melt used,
+  the node has paid, or this mint issued is refused. A placeholder like 'lnbc...' is refused
+  as 'Invalid invoice.'
 NoteStore - SQLite store; notes by hex(Q), never spends; pre-Q rows found via legacy_ids
 runMelt(job, deps) -> Promise<{kind: 'paid'} | {kind: 'restored', reason} | {kind: 'unresolved'}>
 reconcilePendingMelts(store, backend, inFlight, log?) -> Promise<void>
@@ -128,6 +132,8 @@ statsSnapshotContent(stats, privHex) -> string   the published content: stats JS
 verifyStatsSnapshot(content, pubkey) -> {valid, stats: MintStats | null}
   stats is null when content is not JSON or carries no sig; a bad signature
   still returns the parsed stats with valid false, so check valid first
+  CLI check: node node_modules/@forgesworn/moneyer/scripts/verify-stats.mjs <mintPubkey> [snapshot.json]
+  (from a source checkout, after npm run build: node scripts/verify-stats.mjs ...)
 signStats(stats, privHex) -> string   the signature alone, hex r || s || recovery id
   kind 30078, d = lnurlcash-liabilities: a signed liabilities snapshot for
   third-party solvency checks

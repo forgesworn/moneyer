@@ -31,7 +31,7 @@ touch fiat.
 src/            library and CLI source (server, store, signing, backends, stats, announce, cli)
 src/backends/   funding source adapters: cln (clnrest), lnd (REST), fake
 web/            operator website (Vite)
-scripts/        live-bound-mint-check.mjs and other operational scripts
+scripts/        live-bound-mint-check.mjs, kernel-verifier.py and verify-stats.mjs (all three ship in the package)
 test/           vitest suite, including the lnurlcash-conformance grader
 DEPLOY.md       deployment and regulatory guidance - read before pointing a mint at mainnet
 THREAT-MODEL.md threat model
