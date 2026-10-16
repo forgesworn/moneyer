@@ -99,7 +99,8 @@ boundary is what keeps a mint clear of the payments and e-money regimes.
 ## Quickstart: a wallet's flow
 
 Start a development mint (`npx moneyer --dev`, above), then walk one note
-through its life with nothing but `fetch`. The callbacks answer a refusal
+through its life with nothing but `fetch`, plus `fakeBolt11` for the melt's
+dev-only invoice. The callbacks answer a refusal
 with an HTTP 200 and `{"status": "ERROR", "reason": "..."}`, so a wallet
 checks `status`, not the HTTP code.
 
@@ -110,6 +111,7 @@ The comments below say where a real mint (cln or lnd) differs.
 
 ```ts
 import {createHash, randomBytes} from 'node:crypto'
+import {fakeBolt11} from '@forgesworn/moneyer' // step 6 only, and only against --dev
 
 const mint = 'http://127.0.0.1:3737' // or your mint's origin
 const get = async (url: string) => (await fetch(url)).json()
@@ -147,8 +149,14 @@ await get(`${note.callback}?${new URLSearchParams({k1: secret, p1: sha256(next)}
 // The invoice is for the note's value (21000 msat) or states no amount. On a
 // real mint it comes from the wallet you are paying out to. On --dev it only
 // has to decode, and nothing is sent: `fakeBolt11` (see As a library) makes
-// one. 'lnbc...' as written is refused as 'Invalid invoice.'
-const invoice = 'lnbc...'
+// one. A placeholder such as 'lnbc...' is refused as 'Invalid invoice.' The
+// payment hash must be fresh: one an earlier melt used, that the node has
+// paid, or that this mint issued itself is refused, so each melt needs a new
+// random hash.
+const invoice = fakeBolt11({
+  amountMsat: note.maxWithdrawable,
+  paymentHashHex: randomBytes(32).toString('hex')
+})
 const melt = await get(`${note.callback}?${new URLSearchParams({k1: next, pr: invoice})}`)
 // {status: 'OK', pr, verify}. OK means in flight, not paid: poll melt.verify
 // (LUD-21) for {settled: true}.
@@ -446,8 +454,15 @@ key** - the key a holder already checks their own notes against, so the
 history adds nothing new to trust.
 
 ```bash
+# installed from npm
+node node_modules/@forgesworn/moneyer/scripts/verify-stats.mjs <mintPubkey> snapshot.json
+
+# from a source checkout, after npm run build
 node scripts/verify-stats.mjs <mintPubkey> snapshot.json
 ```
+
+`snapshot.json` holds the event's content, and the script reads stdin when
+no file is named. It needs the built `dist/`, which the package ships.
 
 ## Announcing the mint
 

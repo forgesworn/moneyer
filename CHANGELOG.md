@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `scripts/verify-stats.mjs` ships in the package, so the README's snapshot
+  check runs from an npm install, and the README says how to invoke it from
+  one. The quickstart's melt step builds its invoice with `fakeBolt11`
+  (imported, with a fresh random payment hash) instead of the `'lnbc...'`
+  placeholder the mint refuses, and `fakeBolt11`'s entry in llms.txt now
+  matches its signature.
 - `DEPLOY.md` ships in the package. The README and llms.txt now state secret
   ownership as it is (zap-to-note without a `cx1` is the one case where the
   mint creates the secret), describe `--dev` as it behaves, and add a wallet
