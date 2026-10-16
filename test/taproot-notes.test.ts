@@ -159,11 +159,11 @@ describe('a bearer note', () => {
     const k1 = creditBearer(mint, 21_000)
     const pubkey = mint.moneyer.signer.pubkey
     const byH = await info(mint, [['p', hashK1(k1)]])
-    expect(certifiesNote(k1, 21_000, byH.sig as string, pubkey)).toBe(true)
-    expect((byH.sig as string).startsWith('cs')).toBe(true)
+    expect(certifiesNote(k1, 21_000, byH.c as string, pubkey)).toBe(true)
+    expect((byH.c as string).startsWith('cs')).toBe(true)
     const next = freshK1()
     const rotated = await callback(mint, [['k1', k1], ['p1', hashK1(next)]])
-    expect(certifiesNote(next, 21_000, rotated.sig as string, pubkey)).toBe(true)
+    expect(certifiesNote(next, 21_000, rotated.c as string, pubkey)).toBe(true)
     // Over Q, and so NOT over h the way certificates used to be made.
     expect(mint.moneyer.signer.sign(hashK1(next), 21_000)).not.toBe(mint.moneyer.signer.sign(noteIdOf(next), 21_000))
   })
@@ -275,7 +275,7 @@ describe('a database from before notes were keyed by Q', () => {
     }
     // Certified over its Q like any other note.
     const byP = await info(mint, [['p', hashK1(k1)]])
-    expect(certifiesNote(k1, 21_000, byP.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(k1, 21_000, byP.c as string, mint.moneyer.signer.pubkey)).toBe(true)
   })
 
   it('spends it once, and never credits its Q or its h anew', async () => {
@@ -312,7 +312,7 @@ describe('a database from before notes were keyed by Q', () => {
     })
     const retry = await callback(mint, [['k1', input], ['p1', hashK1(output)]])
     expect(retry.status).toBe('OK')
-    expect(certifiesNote(output, 21_000, retry.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(output, 21_000, retry.c as string, mint.moneyer.signer.pubkey)).toBe(true)
   })
 
   it('keeps an old quote payable: its note lands at the h it was bound to, found by Q', async () => {
@@ -339,12 +339,12 @@ describe('a database from before notes were keyed by Q', () => {
 })
 
 describe('certificates', () => {
-  it('are named c and c2, with the older sig and sig2 alongside', async () => {
+  it('are named c and c2, with no sig or sig2 alongside', async () => {
     const mint = await start()
     const k1 = creditBearer(mint, 50_000)
     const looked = await info(mint, [['k1', k1]])
     expect(looked.c).toBeTypeOf('string')
-    expect(looked.sig).toBe(looked.c)
+    expect(looked).not.toHaveProperty('sig')
     expect(certifiesNote(k1, 50_000, looked.c as string, mint.moneyer.signer.pubkey)).toBe(true)
 
     const [to, change] = [freshK1(), freshK1()]
@@ -355,7 +355,8 @@ describe('certificates', () => {
       ['p2', hashK1(change)]
     ])
     expect(split.status).toBe('OK')
-    expect([split.sig, split.sig2]).toEqual([split.c, split.c2])
+    expect(split).not.toHaveProperty('sig')
+    expect(split).not.toHaveProperty('sig2')
     expect(certifiesNote(to, 20_000, split.c as string, mint.moneyer.signer.pubkey)).toBe(true)
     expect(certifiesNote(change, 30_000, split.c2 as string, mint.moneyer.signer.pubkey)).toBe(true)
   })

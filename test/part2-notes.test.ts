@@ -119,7 +119,7 @@ describe('minting to a cp1 key', () => {
     const note = await info(mint, [['k1', key.ck1]])
     expect(note.maxWithdrawable).toBe(21_000)
     expect(note.k1).toBe(key.ck1)
-    expect(certifies(mint, key, 21_000, note.sig)).toBe(true)
+    expect(certifies(mint, key, 21_000, note.c)).toBe(true)
   })
 
   it('refuses a comment that is neither a hash nor a cp1 key', async () => {
@@ -136,8 +136,8 @@ describe('looking a cp1 note up', () => {
     const byKey = await info(mint, [['p', key.cp1]])
     expect(byKey.maxWithdrawable).toBe(42_000)
     expect(byKey).not.toHaveProperty('k1')
-    expect(certifies(mint, key, 42_000, byKey.sig)).toBe(true)
-    expect(verifyNoteSignatureForKey(key.id, 42_000, byKey.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifies(mint, key, 42_000, byKey.c)).toBe(true)
+    expect(verifyNoteSignatureForKey(key.id, 42_000, byKey.c as string, mint.moneyer.signer.pubkey)).toBe(true)
   })
 
   it('not by its key as bare hex, which LUD-25 reads as a bearer note h', async () => {
@@ -174,7 +174,7 @@ describe('spending with a ck1', () => {
     const to = freshKey()
     const reply = await callback(mint, [['k1', from.ck1], ['p1', to.cp1]])
     expect(reply.status).toBe('OK')
-    expect(certifies(mint, to, 30_000, reply.sig)).toBe(true)
+    expect(certifies(mint, to, 30_000, reply.c)).toBe(true)
     expect((await info(mint, [['k1', from.ck1]])).reason).toBe('Note already spent.')
     expect((await info(mint, [['k1', to.ck1]])).maxWithdrawable).toBe(30_000)
   })
@@ -184,12 +184,12 @@ describe('spending with a ck1', () => {
     const secret = creditSecret(mint, 20_000)
     const key = freshKey()
     const toKey = await callback(mint, [['k1', secret], ['p1', key.cp1]])
-    expect(certifies(mint, key, 20_000, toKey.sig)).toBe(true)
+    expect(certifies(mint, key, 20_000, toKey.c)).toBe(true)
 
     const next = freshK1()
     const toHash = await callback(mint, [['k1', key.ck1], ['p1', hashK1(next)]])
     expect(toHash.status).toBe('OK')
-    expect(certifiesNote(next, 20_000, toHash.sig as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(next, 20_000, toHash.c as string, mint.moneyer.signer.pubkey)).toBe(true)
     expect(await worth(mint, next)).toBe(20_000)
   })
 
@@ -214,8 +214,8 @@ describe('spending with a ck1', () => {
       ['p2', hashK1(change)]
     ])
     expect(reply.status).toBe('OK')
-    expect(certifies(mint, key, 20_000, reply.sig)).toBe(true)
-    expect(certifiesNote(change, 30_000, reply.sig2 as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifies(mint, key, 20_000, reply.c)).toBe(true)
+    expect(certifiesNote(change, 30_000, reply.c2 as string, mint.moneyer.signer.pubkey)).toBe(true)
     expect(await worth(mint, change)).toBe(30_000)
   })
 
@@ -226,7 +226,7 @@ describe('spending with a ck1', () => {
     const to = freshKey()
     const reply = await callback(mint, [['k1', secret], ['k1', from.ck1], ['p1', to.cp1]])
     expect(reply.status).toBe('OK')
-    expect(certifies(mint, to, 33_000, reply.sig)).toBe(true)
+    expect(certifies(mint, to, 33_000, reply.c)).toBe(true)
   })
 
   it('answers a retried rotate as a replay, with the same certificate', async () => {
@@ -281,7 +281,7 @@ describe('a note held under an older ck1 shape', () => {
       const to = freshKey()
       const reply = await callback(mint, [['k1', old], ['p1', to.cp1]])
       expect(reply.status).toBe('OK')
-      expect(certifies(mint, to, 40_000, reply.sig)).toBe(true)
+      expect(certifies(mint, to, 40_000, reply.c)).toBe(true)
       // the rotate burned the note itself, whichever spelling named it
       expect((await info(mint, [['k1', key.ck1]])).reason).toBe('Note already spent.')
     })
