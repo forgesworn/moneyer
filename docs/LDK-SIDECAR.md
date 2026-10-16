@@ -1,7 +1,7 @@
 # An LDK funding source for moneyer: design
 
 Status: design only, nothing built. Written 2026-10-07 for review before any
-code exists.
+code exists. Updated 2026-10-16 for ldk-node 0.7.1 (see Sources).
 
 The idea: a small Rust process (the "sidecar") embeds the `ldk-node` crate and
 exposes a minimal local HTTP API, and a new moneyer backend (`ldk`) talks to it
@@ -13,8 +13,13 @@ and keeps its melt discipline unchanged.
 Every claim about ldk-node, LDK or dni's mint below cites one of these:
 
 - **ldk-node 0.7.0**, the crate source from crates.io (released 2025-12-03,
-  `CHANGELOG.md`; it is still the newest release on crates.io). It is the
-  version dni's mint pins (`Cargo.lock`). Cited as `ldk-node src/...`.
+  `CHANGELOG.md`), the version dni's mint pinned when this was written.
+  Cited as `ldk-node src/...`; those line numbers are 0.7.0's, and are kept
+  where 0.7.1 left the code unchanged.
+- **ldk-node 0.7.1** (released 2026-10-12), which dni's mint pins since
+  `4a90c8d` (2026-10-15). Read 2026-10-16 where it differs: `CHANGELOG.md`,
+  `src/event.rs` and `src/payment/bolt11.rs`. Cited as `ldk-node 0.7.1
+  src/...`.
 - **lightning 0.2.7** (LDK), as pinned in dni's `Cargo.lock`. Cited as
   `lightning src/...`. `lightning-background-processor 0.2.3` likewise.
 - **dni's lnurl-mint-rust at e91b8f2** ("feat: use ldk-node"), read with
@@ -31,7 +36,7 @@ proof before anything relies on them.
 
 ## Status of the pieces, stated as they are
 
-- ldk-node is pre-1.0 (0.7.0). Its README and crate docs make no production
+- ldk-node is pre-1.0 (0.7.1). Its README and crate docs make no production
   claim either way. Within it, splicing is "experimental"
   (`ldk-node CHANGELOG.md`, `src/lib.rs:1250`), the LSPS2 *service* is
   "alpha" (`ldk-node src/builder.rs:476-479`) and the VSS storage backend is
@@ -49,7 +54,8 @@ proof before anything relies on them.
   "exact control over claim decisions and payment ids"
   (`lnurl-mint-rust:PLAN.md`, "Risks and open questions"). The switch happened
   anyway, the same day this was written. Section 1 shows that the payment
-  store concern is real.
+  store concern was real in 0.7.0: 0.7.1 fixed two of its three failure
+  modes five days later, and the third remains.
 
 ---
 
@@ -149,7 +155,8 @@ rule `lnd.ts` 176-183 states). The preimage is returned only for `settled`.
 ### The sidecar's own ledger
 
 ldk-node's payment store cannot be the sole source of truth for melts, for
-three reasons found in its source:
+three reasons found in 0.7.0's source. 0.7.1 fixed the second and third,
+which confirms the reading; the first remains, and is enough on its own:
 
 1. **A crash window with no record.** `send` calls `pay_for_bolt11_invoice`
    and only afterwards inserts the payment as `Pending`
@@ -159,20 +166,28 @@ three reasons found in its source:
    emit the event (`ldk-node src/event.rs:1020-1110`), but `node.payment()`
    reads "absent", and absent is what lnd's 404 means: "never attempted, safe
    to restore". Answering from the store alone would restore a paid note.
+   Unchanged in 0.7.1: `send` still calls `pay_for_bolt11_invoice` before it
+   inserts the row (`ldk-node 0.7.1 src/payment/bolt11.rs:117` and
+   `:143`).
 2. **Status is not sticky.** LDK warns that "in exceedingly rare cases" a
    `PaymentFailed` can follow a `PaymentSent` and "MUST be ignored"
    (`lightning src/events/mod.rs:1077-1080`). ldk-node's store update writes
    the new status unconditionally (`ldk-node src/payment/store.rs:281`), so
    `Succeeded` can become `Failed`. The preimage written by `PaymentSent`
-   stays set.
+   stays set. **Fixed in 0.7.1** (#1065): a late `PaymentFailed` for a
+   payment the store holds as `Succeeded` is logged and ignored
+   (`ldk-node 0.7.1 src/event.rs:1090-1097`).
 3. **An inbound HTLC can mark an outbound payment `Failed`.** When an inbound
    payment arrives whose hash matches an *outbound* entry, ldk-node fails the
    inbound HTLC back and sets that payment's status to `Failed`
    (`ldk-node src/event.rs:647-663`). Reading the source, a hodl-invoice payee
    who holds our HTLC knows the preimage and could send a keysend with it to
    the mint's node, turning our still-in-flight melt to `Failed` in the store.
-   That is the hodl-invoice attack `melt.ts` exists to stop. This is inferred
-   from source and **must be proved or disproved on regtest** (section 8).
+   That is the hodl-invoice attack `melt.ts` exists to stop. This was
+   inferred from 0.7.0's source. **Fixed in 0.7.1** (#1157): the inbound
+   HTLC is failed back and the outbound payment's status is left alone
+   (`ldk-node 0.7.1 src/event.rs:670-671`). Scenario 4 in section 8 now pins
+   that behaviour rather than deciding whether the attack is real.
 
 So the sidecar keeps a small SQLite ledger of its own (`synchronous=FULL`),
 written before it acts and updated only from ldk-node's events:
@@ -454,7 +469,8 @@ operator notes) are unchanged except the third.
 
 lnd's SCB plus the seed recovers channel funds by asking peers to force close,
 and is safe to restore at any age. **ldk-node 0.7.0 has no equivalent that I
-could find.** LDK 0.2 contains peer-storage machinery
+could find, and 0.7.1's changelog adds none.** LDK 0.2 contains
+peer-storage machinery
 (`lightning src/ln/our_peer_storage.rs`), and ldk-node wires its key in
 (`ldk-node src/builder.rs:1375`), but no restore-from-peer-storage flow
 exists in ldk-node's API. Whether one is usable is unverified.
@@ -642,10 +658,11 @@ Scenarios beyond dni's:
    sidecar instance with a test-only "hold claims" switch, or an lnd/cln with
    hold invoices. The note stays pending until the HTLC is gone.
 4. **Keysend into a held melt** (section 1, reason 3): while the payee holds
-   our HTLC, it keysends to our node using the preimage (ldk-node 0.7.0 can
-   send a keysend with a chosen preimage, `CHANGELOG.md` #549). Expect
-   ldk-node's store to read `Failed` and the sidecar to answer `unresolved`.
-   This test decides whether the attack is real.
+   our HTLC, it keysends to our node using the preimage (ldk-node can send
+   a keysend with a chosen preimage, `CHANGELOG.md` #549). On 0.7.0 the
+   store read `Failed` and the sidecar had to answer `unresolved`; on 0.7.1
+   (#1157) the store must stay `Pending`. The test pins that for whichever
+   version the sidecar is built against.
 5. Crash windows, via test-only failpoints: kill the sidecar between `send`
    and the store insert; kill it holding a claimable HTLC and restart before
    and after the claim deadline (mine blocks between); kill moneyer mid-melt.
@@ -689,8 +706,7 @@ effort.
 
 ### Unverified, to settle on regtest or in source
 
-- Whether the keysend-into-a-held-melt path flips ldk-node's store to `Failed`
-  in practice (section 8, scenario 4).
+- Whether scenario 4 behaves on 0.7.1 as #1157 says (section 8).
 - Whether LDK's peer storage gives any usable restore in ldk-node.
 - How a node restored from a stale channel database behaves on reconnection.
 - The DuplicatePayment window after a failure.
@@ -709,9 +725,10 @@ Against it:
 1. **Backup gets weaker.** No static channel backup in ldk-node; a stale
    channel database is dangerous to restore; VSS is alpha (section 5).
 2. **A safety-critical component to write and own.** The sidecar's ledger
-   has to make up for three ways ldk-node's payment store can mislead a melt
-   (section 1). One of them looks like a hodl-invoice attack and is
-   unproven either way. lnd's tracker has none of these problems.
+   has to make up for the ways ldk-node's payment store can mislead a melt
+   (section 1). Two of the three were fixed in 0.7.1, after this was
+   written, which confirms the reading; the crash window remains. lnd's
+   tracker has none of these problems, and the conclusion does not move.
 3. **Privacy and dependency regression** from neutrino to a public chain
    server, plus an unmeasured memory cost on a box that has no swap and
    already holds money services (sections 3 and 6).
