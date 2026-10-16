@@ -57,6 +57,7 @@
     "SECURITY.md",
     "THREAT-MODEL.md",
     "TERMS-TEMPLATE.md",
+    "DEPLOY.md",
     "llms.txt"
   ],
   "scripts": {

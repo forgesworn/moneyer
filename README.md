@@ -5,10 +5,13 @@
 
 moneyer is an independent implementation of the LUD-25 draft: paying an
 invoice it issues mints a bearer note, and a note's holder can rotate,
-split, merge and melt it against the withdraw callback. The note's spend
-secret is chosen by the buyer, before the invoice exists, and named to the
-mint only as a hash - so the mint never holds it, and neither does any node
-that forwards the payment. It passes the full
+split, merge and melt it against the withdraw callback. When a wallet buys a
+note, its spend secret is chosen by the buyer, before the invoice exists, and
+named to the mint only as a hash - so the mint never holds it, and neither
+does any node that forwards the payment. The exception is zap-to-note, where
+the mint creates the secret itself and knows it until the recipient rotates
+the note (see [Zap-to-note](#zap-to-note-a-lightning-address-that-pays-out-as-a-note)),
+unless the name carries a `cx1` key branch. It passes the full
 [lnurlcash-conformance](https://github.com/lnurlcash/lnurlcash-conformance)
 grader, including the spending checks, and the grader runs in this repo's
 own test suite.
@@ -30,11 +33,12 @@ lesson, that behaviour is kept deliberately and tested.
   mints its own preimages (phoenixd, NIP-47 `make_invoice`) can back a mint
   too - it just gets the after-the-fact checks instead. A backend declares
   which it is with `acceptsInvoicePreimage`. A **fake** backend exists for
-  development and tests and refuses to run outside `--dev`.
+  development and tests; the `moneyer` CLI refuses to run it outside `--dev`.
 - Notes are stored by their taproot output key Q, as LUD-25 now defines
   every note - the store never holds a spend. The buyer names the note they
   are buying with a mandatory LUD-12 comment, so the spend is theirs alone
-  from the start.
+  from the start (zap-to-note, where the mint creates the note, is the
+  exception).
 - Signs every note it mints with its own mint key (secp256k1, the standard
   `Lightning Signed Message` construction) for LUD-25 offline verification.
 - The melt discipline: reserve the note, then give the payment up to two
@@ -53,16 +57,10 @@ lesson, that behaviour is kept deliberately and tested.
 npm install @forgesworn/moneyer
 ```
 
-Or build from source:
-
 ```bash
-git clone https://github.com/forgesworn/moneyer
-cd moneyer && npm install && npm run build && npm run web:build
-```
-
-```bash
-# development: fake funding source, in-memory store, a funded note printed
-node dist/cli.js --dev
+# development: fake funding source (invoices settle themselves, nothing can
+# pay them), in-memory store, ephemeral signing key, a funded note printed
+npx moneyer --dev
 
 # production shape
 MONEYER_BACKEND=cln \
@@ -71,7 +69,15 @@ MONEYER_BACKEND_RUNE=... \
 MONEYER_SIGNING_KEY=<32 bytes hex> \
 MONEYER_PUBLIC_ORIGIN=https://mint.example \
 MONEYER_DB=/var/lib/moneyer/mint.sqlite \
-node dist/cli.js
+npx moneyer
+```
+
+Or build from source, where the entry point is `dist/cli.js`:
+
+```bash
+git clone https://github.com/forgesworn/moneyer
+cd moneyer && npm install && npm run build && npm run web:build
+node dist/cli.js --dev
 ```
 
 The mint is then payable at `mint@mint.example` (and the bare-domain `_`
@@ -90,6 +96,78 @@ than zeroed, no priced names, a small cap, a MOTD that says so - or
 better, a test network), and **no mint should ever touch fiat**. moneyer is millisatoshis throughout, deliberately, and that
 boundary is what keeps a mint clear of the payments and e-money regimes.
 
+## Quickstart: a wallet's flow
+
+Start a development mint (`npx moneyer --dev`, above), then walk one note
+through its life with nothing but `fetch`. The callbacks answer a refusal
+with an HTTP 200 and `{"status": "ERROR", "reason": "..."}`, so a wallet
+checks `status`, not the HTTP code.
+
+The `--dev` mint has no Lightning node behind it. Its fake funding source
+issues invoices that no wallet can pay and settles each one itself about
+1.5 seconds after issuing it, and it "pays" a melt without sending anything.
+The comments below say where a real mint (cln or lnd) differs.
+
+```ts
+import {createHash, randomBytes} from 'node:crypto'
+
+const mint = 'http://127.0.0.1:3737' // or your mint's origin
+const get = async (url: string) => (await fetch(url)).json()
+const sha256 = (hex: string) => createHash('sha256').update(Buffer.from(hex, 'hex')).digest('hex')
+
+// 1. Discover. The payRequest carries callback, minSendable and maxSendable
+//    (msat) and commentAllowed: 64.
+const pay = await get(`${mint}/.well-known/lnurlp/mint`)
+
+// 2. Choose the note's spend secret and persist it durably BEFORE asking for
+//    an invoice. The mint is only ever told its hash.
+const secret = randomBytes(32).toString('hex') // this is the k1: holding it is holding the note
+const h = sha256(secret)
+
+// 3. Quote. The mandatory LUD-12 comment names the note to be minted.
+const quote = await get(`${pay.callback}?${new URLSearchParams({amount: '21000', comment: h})}`)
+// quote.pr is a BOLT-11 invoice for 21000 msat. On a real mint, pay it from
+// any Lightning wallet; on --dev nothing can pay it and it settles itself.
+// quote.verify is the LUD-21 URL to poll for settlement.
+
+// 4. Claim. Once the invoice has settled, GET /w?k1=<secret> brings the note
+//    into existence. Before that it answers 'Unknown note.'
+while (!(await get(quote.verify)).settled) await new Promise(resolve => setTimeout(resolve, 500))
+const note = await get(`${mint}/w?k1=${secret}`)
+// note.maxWithdrawable is the note's value in msat, note.c its cs1
+// certificate, note.callback the /w/cb URL used below.
+
+// 5. Rotate on receipt: spend the old secret, name a fresh secret's hash as p1.
+//    Persist the new secret first, again.
+const next = randomBytes(32).toString('hex')
+await get(`${note.callback}?${new URLSearchParams({k1: secret, p1: sha256(next)})}`)
+// {status: 'OK', c: '<cs1>'}
+
+// 6. Melt: pay the note out to a BOLT-11 invoice with k1 and pr.
+// The invoice is for the note's value (21000 msat) or states no amount. On a
+// real mint it comes from the wallet you are paying out to. On --dev it only
+// has to decode, and nothing is sent: `fakeBolt11` (see As a library) makes
+// one. 'lnbc...' as written is refused as 'Invalid invoice.'
+const invoice = 'lnbc...'
+const melt = await get(`${note.callback}?${new URLSearchParams({k1: next, pr: invoice})}`)
+// {status: 'OK', pr, verify}. OK means in flight, not paid: poll melt.verify
+// (LUD-21) for {settled: true}.
+```
+
+The `/w/cb` parameters, by operation:
+
+| operation | query | answer |
+| --- | --- | --- |
+| melt | `k1=<spend>&pr=<bolt11>` | `{status, pr, verify}` (`pr` and `verify` only while `MONEYER_VERIFY` is on). `pr` must be for the note's whole value, or its whole-sat floor, or state no amount; it cannot be combined with `amount` or several `k1`s |
+| rotate | `k1=<spend>&p1=<new note>` | `{status, c}` |
+| split | `k1=<spend>&amount=<msat>&p1=<note for amount>&p2=<note for the change>` | `{status, c, c2}`; the base fee, if any, comes out of the change |
+| merge | `k1=<spend>&k1=<spend>...&p1=<new note>` | `{status, c}` |
+
+`k1` is a spend: the 64-hex secret of a bearer note, a `ck1` or a `cw1`.
+`p1` and `p2` name outputs, as a bearer note's 64-hex hash or a `cp1`; the
+older `h` and `h2` still work. A taken output is refused with `already in
+use`, and every output comes back certified as a `cs1` over its Q.
+
 ## Configuration
 
 Environment only. Every variable is `MONEYER_*`; anything unset takes the
@@ -105,11 +183,11 @@ default, and a variable set to an empty string counts as unset.
 | `MONEYER_USERNAME` | `mint` | the local part of the mint's own lightning address |
 | `MONEYER_DESCRIPTION` | `an LNURLcash note` | what a note is called on the wire (`defaultDescription`, and `description` on discovery) |
 | `MONEYER_DB` | `moneyer.sqlite` | SQLite path; `:memory:` allowed |
-| `MONEYER_BACKEND` | `fake` | `cln`, `lnd`, or `fake` (refused outside `--dev`) |
+| `MONEYER_BACKEND` | `fake` | `cln`, `lnd`, or `fake`. The `moneyer` CLI refuses `fake` outside `--dev`, so set this for anything else; the library does not refuse it (see [As a library](#as-a-library)) |
 | `MONEYER_BACKEND_URL` | | the funding source's REST endpoint |
 | `MONEYER_BACKEND_RUNE` | | cln authentication |
 | `MONEYER_BACKEND_MACAROON` | | lnd authentication, hex |
-| `MONEYER_SIGNING_KEY` | required | Persistent 32-byte hex note-signing key. The service refuses to start without it; use `moneyer admin keys rotate` to generate one |
+| `MONEYER_SIGNING_KEY` | required | Persistent 32-byte hex note-signing key. The service refuses to start without it; use `moneyer admin keys rotate` to generate one. `moneyer --dev` is the one exemption: it generates an ephemeral key that is lost on exit, unless this variable is set |
 | `MONEYER_PREVIOUS_SIGNING_PUBKEYS` | | compressed pubkeys this mint signed under before, comma separated (see below) |
 | `MONEYER_BASE_FEE_MSAT` | `0` | flat mint fee |
 | `MONEYER_FEE_PPM` | `0` | proportional mint fee, parts per million |
@@ -127,7 +205,10 @@ default, and a variable set to an empty string counts as unset.
 | `MONEYER_STATS_PUBLISH` | `false` | publish a signed hourly snapshot of `/stats` to Nostr |
 | `MONEYER_ANNOUNCE` | `false` | announce this mint on Nostr, hourly, so a wallet can find it (see below) |
 | `MONEYER_METRICS` | `false` | the `/metrics` endpoint, in the OpenMetrics text format |
-| `MONEYER_NAME_PRICE_MSAT` | | what a self-service lightning address costs. Unset means registration is closed; `0` means free |
+| `MONEYER_NAME_PRICE_MSAT` | | what a self-service lightning address costs. Unset means registration is closed; `0` means free. Needs the Nostr identity below |
+| `MONEYER_NOSTR_KEY` | | the mint's own Nostr identity, 32 bytes of hex: seals zap gift wraps and signs zap receipts, and is the identity behind `MONEYER_STATS_PUBLISH` and `MONEYER_ANNOUNCE`. Set together with `MONEYER_NOSTR_RELAYS`; zap-to-note also needs `MONEYER_PUBLIC_ORIGIN` |
+| `MONEYER_NOSTR_RELAYS` | | comma-separated `ws://` or `wss://` relay URLs: where receipts and snapshots go, and where a recipient's inbox list is looked for. Required with `MONEYER_NOSTR_KEY`, and the reverse |
+| `MONEYER_ZAP_NAMES` | | `name=npub1...` or `name=<hex pubkey>`, comma separated: lightning addresses on this host that pay out as notes gift-wrapped to that pubkey. Optional, because a mint can open registration and start with none. A name must not be the mint username or `_` (see [Zap-to-note](#zap-to-note-a-lightning-address-that-pays-out-as-a-note)) |
 
 ### Who runs this mint
 
@@ -169,12 +250,112 @@ against the same endpoints every wallet uses:
 Without a web build the server falls back to a self-contained, zero-script
 landing page, so an npm-installed mint still has a face.
 
-As a library:
+## As a library
+
+`createMoneyer(config, deps?)` starts the same server the `moneyer` binary
+does and resolves to a running `Moneyer`. `configFromEnv()` reads the
+`MONEYER_*` variables, so with the production variables above set, this is the
+whole program:
 
 ```ts
 import {createMoneyer, configFromEnv} from '@forgesworn/moneyer'
+
 const mint = await createMoneyer(configFromEnv())
+console.log(mint.url) // http://127.0.0.1:3737, the origin with the port included
+// ...
+await mint.close()
 ```
+
+With an empty environment that throws, because `MONEYER_SIGNING_KEY` (the
+`signingKey` field) is required. The library has no `--dev` flag and does not
+refuse the `fake` funding source, which the CLI does outside `--dev`. The
+equivalent of `--dev` is a throwaway key, an in-memory store and a fake
+backend that settles its own invoices:
+
+```ts
+import {randomBytes} from 'node:crypto'
+import {createMoneyer, configFromEnv, createFakeBackend} from '@forgesworn/moneyer'
+
+const mint = await createMoneyer(
+  configFromEnv({MONEYER_SIGNING_KEY: randomBytes(32).toString('hex'), MONEYER_DB: ':memory:'}),
+  {backend: createFakeBackend({autoSettle: true})}
+)
+console.log(mint.url)
+await mint.close()
+```
+
+A `Moneyer` is `{url, port, config, store, backend, signer, zap, reconcile,
+stats, publishStats, publishAnnouncement, close}`: `zap` is `null` unless
+zap-to-note is configured, `stats()` is the snapshot `/stats` serves, and
+`publishStats()` and `publishAnnouncement()` force the hourly Nostr passes.
+
+### `MoneyerDeps`
+
+The optional second argument. Every field is optional.
+
+| field | what it does |
+| --- | --- |
+| `backend: LightningBackend` | the funding source; omitted, one is built from `config.backend` |
+| `store: NoteStore` | the note store; omitted, `new NoteStore(config.dbPath)` |
+| `log: (message: string) => void` | where operational messages go; omitted, nowhere |
+| `scriptVerifier: ScriptVerifier` | judges script-path spends moneyer cannot evaluate; omitted, one is run from `config.scriptVerifier` if set, otherwise such spends are refused |
+| `webAssets: WebAssets \| null` | the built website served at `GET /`; omitted, `web/dist` is loaded from disk; `null` serves the self-contained landing page |
+| `nostr: NostrTransport` | relay access for zap-to-note; omitted, a real relay pool |
+| `confirmDelaysMs: number[]` | backoff between confirmations of an unclear melt payment |
+| `meltAnswerWindowMs: number` | how long a melt callback waits for the payment's outcome before answering `OK` (2000 by default) |
+| `zapPollMs: number` | how often settled zap invoices are looked for |
+| `statsPublishMs: number` | how often a signed liabilities snapshot is published |
+| `invoiceStreamRetryMs: number` | first wait before reconnecting a dropped invoice stream, doubling to a minute |
+
+The last five exist so tests can shrink them. `WebAssets` and
+`NostrTransport` are not exported from the package.
+
+### Library API
+
+Everything exported from `src/index.ts`. Amounts are millisatoshis, and a
+`Q` is a note's taproot output key.
+
+| export | what it is |
+| --- | --- |
+| `createMoneyer(config: MoneyerConfig, deps?: MoneyerDeps): Promise<Moneyer>` | start a mint; throws without `config.signingKey` |
+| `configFromEnv(env?: NodeJS.ProcessEnv): MoneyerConfig` | read `MONEYER_*` (default `process.env`); throws on a value it cannot honour |
+| `DEFAULTS` | the default `host`, `port`, `username`, `description`, sendable limits, `minMintMsat`, `dbPath`, `verify`, `maxK1s` and the other flags |
+| `MoneyerConfig`, `BackendConfig` | the config object, its fields mirroring the variables (`signingKey`, `dbPath`, `publicOrigin`, `mintFee`, ...); `BackendConfig` is `{kind: 'fake', autoSettle?, autoSettleAfterMs?} \| {kind: 'cln', url, rune} \| {kind: 'lnd', url, macaroon}` |
+| `NoteStore` | `new NoteStore(path: string, options?: {readOnly?: boolean})`: the SQLite store; notes by hex(Q), never a spend, pre-Q rows found through `legacy_ids` |
+| `NotePendingError`, `NoteUnavailableError`, `OutputCollisionError` | store errors for a note with a melt in flight, a note that is burned or was never minted, and an output id already in use |
+| `NoteRow`, `NoteState`, `MeltRow`, `MintInvoiceRow`, `Liabilities` | store row types; `NoteState` is `'outstanding' \| 'pending' \| 'burned'`; `Liabilities` is `{outstandingMsat, outstandingNotes, pendingMsat, pendingMelts, oldestPendingMeltAgeSecs}` |
+| `createNoteSigner(privateKeyHex: string): NoteSigner` | `{pubkey, sign(noteId: string, amountMsat: number): string}`; `sign` returns r \|\| s \|\| recovery id as hex |
+| `noteIdSignatureDigest(noteId, amountMsat): Uint8Array` | the digest a note signature covers |
+| `signDigestRecoverable(digest: Uint8Array, privateKeyHex): string` | a recoverable signature in the LUD-25 wire layout |
+| `recoversToPubkey(digest: Uint8Array, signatureHex, pubkeyHex): boolean` | does the signature recover to that key |
+| `decodeSpend(k1: string): Spend \| null` | a preimage, `ck1` or `cw1`, with the Q it opens; nothing is checked against a note |
+| `decodeNote(value: string): string \| null` | hex(Q) of a `cp1` or a bearer note's 64-hex h |
+| `verifySpend(spend: Spend, context: {outputKey: Uint8Array, domains: string[], now: number, lockedAt: number, scriptVerifier?: ScriptVerifier}): Promise<SpendVerdict>` | does the spend open the note; `now` and `lockedAt` are Unix seconds |
+| `bearerNoteId(hHex: string): string`, `bearerNoteIdOfPreimage(k1Hex: string): string` | hex(Q) of the bearer note with hash h, or opened by that preimage |
+| `keyPathSighash(outputKey: Uint8Array, domain: string): Uint8Array` | what a `ck1` signs |
+| `scriptPathSighash(outputKey: Uint8Array, domain: string, leafScript: Uint8Array, locktime: number, sequence: number): Uint8Array` | what a signature inside a `cw1` leaf signs |
+| `spendDomainOf(origin: string): string` | the bare lower-case hostname a spend is bound to |
+| `deriveNotePubkey(branchPubkeyXOnly: Uint8Array, chainCode: Uint8Array, purpose: number, index: number): Uint8Array` | a `cx1` branch's note key |
+| `NOTE_PURPOSE_WALLET` (0), `NOTE_PURPOSE_CHANGE` (1), `NOTE_PURPOSE_LIGHTNING_ADDRESS` (2) | the branch purposes |
+| `Spend`, `ScriptSpend`, `SpendVerdict`, `ScriptVerifier` | `SpendVerdict` is `{ok: true} \| {ok: false, reason, specific}`; `ScriptVerifier` is `({outputKey, domain, spend, now, lockedAt}) => Promise<string \| null>`, resolving to the refusal reason or `null` |
+| `createKernelVerifier(options: {command: string[], timeoutMs?: number, log?}): KernelVerifier` | a `ScriptVerifier` that runs a command speaking the line protocol of `scripts/kernel-verifier.py`, with a `close()` |
+| `buildStats(args: {liabilities, localBalanceMsat?, reconciledAt?, at?, ratioOnly?}): MintStats` | the `/stats` document; `liabilities` is `store.liabilities()` |
+| `canonicalJson(value: Record<string, number \| string>): string` | the RFC 8785 body that is signed |
+| `statsDigest(stats): Uint8Array`, `signStats(stats, privateKeyHex): string`, `verifyStatsSignature(stats, signatureHex, mintPubkeyHex): boolean` | sign and check the stats |
+| `statsSnapshotContent(stats, privateKeyHex): string`, `verifyStatsSnapshot(content, mintPubkeyHex): {valid, stats}` | the published snapshot: the stats JSON plus `sig`; `stats` is `null` for unparseable content, so check `valid` first |
+| `STATS_KIND` (30078), `STATS_D_TAG` (`lnurlcash-liabilities`), `MintStats` | the snapshot's event kind and `d` tag, and the stats type |
+| `announcementContent(document, privateKeyHex?): string`, `signAnnouncement(document, privateKeyHex): string`, `announcementDigest(document): Uint8Array`, `canonicalise(value: unknown): string` | build and sign a mint announcement |
+| `verifyAnnouncement(content: string, mintPubkeyHex: string): {valid: boolean, document: MintAddressDocument \| null}` | check an announcement against the note-signing key |
+| `ANNOUNCE_KIND` (30078), `ANNOUNCE_D_TAG` (`lnurlcash-mint`), `ANNOUNCE_MESSAGE_PREFIX`, `MintAddressDocument` | announcement constants and type |
+| `LightningBackend`, `NodeInfo`, `PaymentOutcome` | the funding-source interface (`name`, `acceptsInvoicePreimage`, `createInvoice`, `payInvoice`, `isPaymentComplete`, `isInvoiceSettled`, `invoicePreimage`, `paymentPreimage`, optional `nodeInfo`, `watchSettledInvoices`, `close`) and its result types |
+| `PaymentFailedError`, `PaymentPendingError`, `PaymentAlreadyKnownError` | a clean terminal failure, a payment with no answer yet, and a payment on a shared node this call did not create |
+| `createClnBackend(config: {url: string, rune: string}): LightningBackend` | clnrest funding source |
+| `createLndBackend(config: {url: string, macaroon: string}): LightningBackend` | lnd REST funding source |
+| `createFakeBackend(options?: {autoSettle?, nodeChoosesPreimage?, autoSettleAfterMs?, streamsSettles?}): FakeBackend` | in-process funding source for development and tests, with `.control` hooks; `FakePayMode` is its payment-mode type |
+| `fakeBolt11(args: {amountMsat?: number, paymentHashHex: string, memo?: string, timestamp?: number}): string` | a decodable, unpayable invoice; omit `amountMsat` for an amountless one |
+| `runMelt(job: MeltJob, deps: MeltDeps): Promise<{kind: 'paid'} \| {kind: 'restored', reason} \| {kind: 'unresolved'}>` | the melt discipline: burn only on confirmed payment, restore only on confirmed non-payment; `MeltJob` is `{paymentHash, noteId, pr, amountMsat, payAmountMsat?}`, `MeltDeps` is `{store, backend, feeLimitMsat(amountMsat), confirmDelaysMs?, log?}` |
+| `reconcilePendingMelts(store, backend, inFlight: ReadonlySet<string>, log?): Promise<void>` | resolve melts an earlier process left pending |
+| `runAdmin(argv: string[], deps?: AdminDeps): Promise<number>`, `adminHelp(): string` | the `moneyer admin` commands, returning the exit code, and their help text |
 
 ## Rotating the signing key
 
@@ -337,9 +518,10 @@ non-payment, and the routing budget is still sized against the note.
 
 ## Name the note you are buying
 
-Paying a mint invoice always mints to a wallet-generated secret. The wallet
-chooses and persists that secret first, then sends its SHA-256 commitment in
-the mandatory LUD-12 comment:
+Paying a mint invoice (a quote from `/p/cb`) always mints to a
+wallet-generated secret. The wallet chooses and persists that secret first,
+then sends its SHA-256 commitment in the mandatory LUD-12 comment. A zap
+invoice is the exception, covered under [Zap-to-note](#zap-to-note-a-lightning-address-that-pays-out-as-a-note):
 
 ```
 GET /p/cb?amount=21000&comment=<64 hex>
@@ -408,20 +590,24 @@ GET /p/cb?amount=21000&comment=<64 hex>&h=<same 64 hex>
 The rules:
 
 - `comment` is mandatory and is exactly 64 hex characters, the SHA-256 of
-  a 32-byte secret. Missing or malformed comments are refused before an
-  invoice exists.
+  a 32-byte secret (or a `cp1` key). A missing or malformed comment is
+  refused before an invoice exists, with `a mint quote must name its output
+  with a LUD-12 comment carrying a cp1 key or hex(sha256(secret))`.
 - When supplied, `h` has the same
   meaning `h` carries on the withdraw callback. Upper case is accepted and
   read as lower case, there too.
-- `comment` and `h` must match. A disagreement is refused rather than
-  guessing which output the wallet is watching.
-- A malformed `h` is refused before the mint asks its funding source for
-  anything, so a wallet is never left holding a quote the mint was always
-  going to reject.
-- An `h` that already names a note, an invoice, or a note another buyer
-  has already bought is refused with `Invalid or already spent k1.`, the
-  same sentence a colliding output gets on the withdraw callback. Which
-  table an id sits in is an oracle nobody is owed.
+- `comment` and `h` must match. A disagreement is refused
+  (`comment and h name different outputs`) rather than guessing which
+  output the wallet is watching.
+- A malformed `h` is refused (`missing h`) before the mint asks its funding
+  source for anything, so a wallet is never left holding a quote the mint
+  was always going to reject.
+- A comment (and so an `h`) that already names a note, an invoice, or a
+  note another buyer has already bought is refused with `already in use`,
+  the same reason a colliding output gets on the withdraw callback. Which
+  table an id sits in is an oracle nobody is owed. `Invalid or already
+  spent k1.` is for a `k1` that opens nothing: unknown, already burned, or
+  named twice in one request.
 - The callback's reply carries `mintToHash: true` when the invoice really
   was bound to `h`. A mint that did not implement the parameter would
   ignore it and answer without that field, so a wallet can tell the two
