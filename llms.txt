@@ -138,7 +138,7 @@ signStats(stats, privHex) -> string   the signature alone, hex r || s || recover
 /.well-known/lnurlw/{user}  LUD-25 mint address (experimental)
 /p/cb                       LUD-06 pay callback: ?amount=<msat>&comment=<hex(sha256(secret)) or cp1> (comment is mandatory)
 /verify/{payment_hash}      LUD-21 verify (mint invoices AND melt payments)
-/w                          LUD-03 informational GET by k1 (preimage, ck1 or cw1, verified in full) or p (a bearer h or a cp1, older h); every note carries its cs1 over Q as sig
+/w                          LUD-03 informational GET by k1 (preimage, ck1 or cw1, verified in full) or p (a bearer h or a cp1, older h); every note carries its cs1 over Q as c
 /w/cb                       melt / rotate / split / merge; inputs preimages, ck1 or cw1, outputs p1/p2 as a bearer h or cp1 (or older h/h2); every output certified as cs1 over Q; a taken output is `already in use`
                             melt:   ?k1=<spend>&pr=<bolt11>  (pr cannot combine with amount or several k1)
                             rotate: ?k1=<spend>&p1=<new note>

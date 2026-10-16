@@ -141,7 +141,7 @@ const note = await get(`${mint}/w?k1=${secret}`)
 //    Persist the new secret first, again.
 const next = randomBytes(32).toString('hex')
 await get(`${note.callback}?${new URLSearchParams({k1: secret, p1: sha256(next)})}`)
-// {status: 'OK', c: '<cs1>', sig: '<cs1>'}
+// {status: 'OK', c: '<cs1>'}
 
 // 6. Melt: pay the note out to a BOLT-11 invoice with k1 and pr.
 // The invoice is for the note's value (21000 msat) or states no amount. On a
@@ -159,9 +159,9 @@ The `/w/cb` parameters, by operation:
 | operation | query | answer |
 | --- | --- | --- |
 | melt | `k1=<spend>&pr=<bolt11>` | `{status, pr, verify}` (`pr` and `verify` only while `MONEYER_VERIFY` is on). `pr` must be for the note's whole value, or its whole-sat floor, or state no amount; it cannot be combined with `amount` or several `k1`s |
-| rotate | `k1=<spend>&p1=<new note>` | `{status, c, sig}` |
-| split | `k1=<spend>&amount=<msat>&p1=<note for amount>&p2=<note for the change>` | `{status, c, sig, c2, sig2}`; the base fee, if any, comes out of the change |
-| merge | `k1=<spend>&k1=<spend>...&p1=<new note>` | `{status, c, sig}` |
+| rotate | `k1=<spend>&p1=<new note>` | `{status, c}` |
+| split | `k1=<spend>&amount=<msat>&p1=<note for amount>&p2=<note for the change>` | `{status, c, c2}`; the base fee, if any, comes out of the change |
+| merge | `k1=<spend>&k1=<spend>...&p1=<new note>` | `{status, c}` |
 
 `k1` is a spend: the 64-hex secret of a bearer note, a `ck1` or a `cw1`.
 `p1` and `p2` name outputs, as a bearer note's 64-hex hash or a `cp1`; the
