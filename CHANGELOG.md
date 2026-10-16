@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- `DEPLOY.md` ships in the package. The README and llms.txt now state secret
+  ownership as it is (zap-to-note without a `cx1` is the one case where the
+  mint creates the secret), describe `--dev` as it behaves, and add a wallet
+  quickstart, the `/w/cb` parameters by operation and a library reference
+  checked against the source (#75).
+- `docs/LDK-SIDECAR.md`: a design, nothing built, for an ldk-node sidecar as
+  a funding source. It recommends keeping lnd on moneyer.dev. Of the three
+  payment-store failure modes it found in ldk-node 0.7.0, 0.7.1 fixed two
+  (#1065, #1157); the crash window between send and the store insert
+  remains (#76).
+
 ## 0.21.0 - 2026-10-16
 
 - **Certificates go out as `c` and `c2` only.** The `sig`/`sig2` that had
