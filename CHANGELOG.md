@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.22.0 - 2026-11-04
 
 Breaking. Follows luds `lnurlcash` through `92e430f` (LUD-26 as plain BIP-32,
 registration at the address, address fee, internal transfer) and lnurl-mint
