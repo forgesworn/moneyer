@@ -1,6 +1,7 @@
 import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
-import {decodeLegacyCx1 as decodeCx1, encodeCp1, hashK1} from '@lnurlcash/kit'
-import {NOTE_PURPOSE_LIGHTNING_ADDRESS, bearerNoteIdOfPreimage, deriveNotePubkey} from './spend.ts'
+import {encodeCp1, hashK1} from '@lnurlcash/kit'
+import {bearerNoteIdOfPreimage} from './spend.ts'
+import {shareOnFile} from './shares.ts'
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import {finalizeEvent, getPublicKey, type Event, type UnsignedEvent} from 'nostr-tools/pure'
 import {SimplePool} from 'nostr-tools/pool'
@@ -8,7 +9,7 @@ import {makeZapReceipt, validateZapRequest} from 'nostr-tools/nip57'
 import {wrapEvent} from 'nostr-tools/nip59'
 import type {Filter} from 'nostr-tools/filter'
 import type {ZapConfig} from './config.ts'
-import type {NoteStore, ZapInvoiceRow} from './store.ts'
+import {NotePendingError, NoteUnavailableError, swapFingerprint, type NoteRow, type NoteStore, type ZapInvoiceRow} from './store.ts'
 import type {LightningBackend} from './backends/types.ts'
 
 // Zap-to-note: a lightning address on this host that pays out as an
@@ -102,8 +103,18 @@ export type ZapBridgeDeps = {
   minSendableMsat: number
   maxSendableMsat: number
   minMintMsat: number
+  // `Mint fees: <base>,<ppm>`, without the address fee: a LUD-26 address
+  // carries mint@'s mint fees, and only mint@ advertises what registering
+  // costs.
   mintFeeLine: string | null
   feeInWords: string | null
+  // The mint's withdraw endpoint, `${origin}/w`: an address with a share
+  // advertises it, as LUD-26 has, so a payer holding a note here knows it
+  // is the same mint and may transfer internally.
+  withdrawLink: string
+  // The note a spend verifiably opens, in any state, by Q, or a reason: the
+  // check the withdraw callback makes before anything moves.
+  openNote: (k1: string) => Promise<{q: string; note: NoteRow} | {reason: string}>
   verify: boolean
   // The mint's public origin. Required when zaps are on: a settled zap is
   // minted by a timer, with no request to read a Host header from.
@@ -115,47 +126,44 @@ export type ZapBridgeDeps = {
   now?: () => number
 }
 
-export type ZapCallbackResult = {pr: string; verify?: string} | {reason: string}
+export type ZapCallbackResult = {pr: string; verify?: string} | {status: 'OK'} | {reason: string}
 
 export type ZapBridge = {
   // The mint's Nostr pubkey (hex): `nostrPubkey` in every zap payRequest.
   pubkey: string
   isZapName(name: string): boolean
   payRequest(name: string): Record<string, unknown> | null
-  // `advertisedIndex` is the path segment after the name, when the
-  // payRequest put one there (see payRequest).
-  callback(
-    name: string,
-    amountMsat: number,
-    nostrParam: string | null,
-    advertisedIndex?: string | null
-  ): Promise<ZapCallbackResult>
+  // With a `k1`, LUD-26's internal transfer instead of an invoice.
+  callback(name: string, amountMsat: number, nostrParam: string | null, k1?: string | null): Promise<ZapCallbackResult>
   // Poll the funding source for settled zap invoices: mint, wrap, park.
   settle(): Promise<number>
   // Push parked wraps and receipts to relays. A wrap that reaches no relay
   // stays parked for the next pass.
   publish(): Promise<number>
   sweep(nowMs?: number): Promise<number>
+  // LUD-26 address fees: register each held name whose invoice settled,
+  // and free each whose invoice expired unpaid.
+  settleHolds(nowMs?: number): Promise<number>
+  // One hold, checked now: what a lookup of a held name does, so a payment
+  // the poll has not reached yet still publishes the address.
+  settleHold(paymentHash: string): Promise<boolean>
 }
 
-const metadataFor = (
-  name: string,
-  host: string,
-  mintFeeLine: string | null,
-  feeInWords: string | null = null,
-  internalTransfer?: string
-): string => {
+// The same for every payment to a name, so an invoice commits to exactly
+// what the payer was shown (LUD-06). No key of the share is ever in it:
+// LUD-26 dropped `text/cpub`, since anyone who fetched it could watch the
+// share. A payer holding a note here transfers by the callback instead.
+const metadataFor = (name: string, host: string, mintFeeLine: string | null, feeInWords: string | null = null): string => {
   const metadata: Array<[string, string]> = [
     ['text/plain', `Zap ${name}@${host}: arrives as a Lightning bearer note${feeInWords ? ` (${feeInWords})` : ''}`],
     ['text/identifier', `${name}@${host}`]
   ]
-  // `text/cpub`, never the older `text/xpub` as well: a wallet that reads
-  // `text/xpub` derives the index without a purpose, and would transfer to
-  // a key the payee never scans. Without it that wallet pays by Lightning.
-  if (internalTransfer) metadata.push(['text/cpub', internalTransfer])
   if (mintFeeLine) metadata.push(['text/plain', mintFeeLine])
   return JSON.stringify(metadata)
 }
+
+// LUD-16's `+tag`: a payment to <name>+<tag> is a payment to <name>.
+export const addressName = (name: string): string => name.toLowerCase().split('+', 1)[0]!
 
 const tagValues = (event: {tags: string[][]}, name: string): string[] =>
   event.tags.filter(t => t[0] === name && t[1]).map(t => t[1]!)
@@ -171,70 +179,90 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
 
   // Names live in the store, not in the configuration: the operator's own
   // are loaded there at startup and self-service registrations land in
-  // the same table, so one lookup serves both.
-  const isZapName = (name: string): boolean => store.zapName(name.toLowerCase()) !== null
+  // the same table, so one lookup serves both. A `+tag` names the same
+  // name (LUD-16).
+  const isZapName = (name: string): boolean => store.zapName(addressName(name)) !== null
 
   const payRequest = (name: string): Record<string, unknown> | null => {
-    const lowered = name.toLowerCase()
+    const lowered = addressName(name)
     const registered = store.zapName(lowered)
     if (!registered) return null
-    let advertisedIndex: number | undefined
-    const branch = decodeCx1(registered.cx1 ?? '')
-    if (branch) {
-      let index = registered.nextIndex
-      for (let tries = 0; tries < 1000; tries++, index++) {
-        try {
-          const noteId = bytesToHex(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, NOTE_PURPOSE_LIGHTNING_ADDRESS, index))
-          if (!store.outputIdInUse(noteId)) {
-            advertisedIndex = index
-            break
-          }
-        } catch {
-          // A vanishingly rare unusable tweak consumes this public index.
-        }
-      }
-    }
-    const internalTransfer = advertisedIndex === undefined ? undefined : `${registered.cx1}:${advertisedIndex}`
+    const share = shareOnFile(registered.cx1)
     return {
       tag: 'payRequest',
-      // The index rides in the callback path so the invoice can commit to
-      // this exact metadata (LUD-06): by the time the payer calls back, a
-      // settled payment may have moved the next unused index on. A path
-      // segment rather than a query parameter, because some zap clients
-      // append `?amount=` without looking for an existing query.
-      callback: `${origin}/z/cb/${lowered}${advertisedIndex === undefined ? '' : `/${advertisedIndex}`}`,
+      // The name alone: nothing in the payRequest moves between payments,
+      // so the invoice's description hash is always over the metadata the
+      // payer saw.
+      callback: `${origin}/z/cb/${lowered}`,
       minSendable: deps.minSendableMsat,
       maxSendable: deps.maxSendableMsat,
-      metadata: metadataFor(lowered, host, deps.mintFeeLine, deps.feeInWords, internalTransfer),
-      allowsNostr: true,
-      nostrPubkey: pubkey
-      // Deliberately no withdrawLink: the preimage of this invoice is NOT
-      // a note, and an LNURLcash wallet that paid this must not think it
-      // is one.
+      metadata: metadataFor(lowered, host, deps.mintFeeLine, deps.feeInWords),
+      // A Nostr key owns the name, so a zap to it can be receipted to that
+      // key. A name owned by its share alone has no key to receipt to.
+      ...(registered.pubkey ? {allowsNostr: true, nostrPubkey: pubkey} : {}),
+      // A name with a share is a LUD-26 Lightning Address: it names the
+      // mint it credits, and invites no comment, since the note it mints is
+      // the share's next key, which no comment could choose. A wallet reads
+      // exactly that pair as "same mint, transfer internally". A name with
+      // no share carries neither: its invoice's preimage is NOT a note, and
+      // there is no share for an internal transfer to credit.
+      ...(share ? {withdrawLink: deps.withdrawLink} : {})
     }
+  }
+
+  // LUD-26's internal transfer: a payer holding a note on this mint sends
+  // the note itself, `k1`, instead of asking for an invoice. A rotate whose
+  // output this mint picks: verified like any spend, the whole note's value
+  // credited free of fees to the share's next unused key, which the payer
+  // never learns. A retry of a completed transfer is answered as the first.
+  const transfer = async (name: string, amountMsat: number, k1: string): Promise<ZapCallbackResult> => {
+    const registered = store.zapName(name)
+    if (!registered || !shareOnFile(registered.cx1)) return {reason: 'This address takes Lightning payments only.'}
+    if (!Number.isSafeInteger(amountMsat) || amountMsat <= 0) return {reason: 'Invalid amount.'}
+    if (amountMsat < deps.minSendableMsat || amountMsat > deps.maxSendableMsat) {
+      return {reason: 'Amount outside what this address accepts.'}
+    }
+    const opened = await deps.openNote(k1)
+    if ('reason' in opened) return {reason: opened.reason}
+    // The output is the mint's to pick, so the request is identified by
+    // its input, its payee and its amount.
+    const fingerprint = swapFingerprint({inputIds: [opened.note.id], h: `transfer:${name}`, amountMsat})
+    if (store.swapByFingerprint(fingerprint)) return {status: 'OK'}
+    if (opened.note.state === 'burned') return {reason: 'already in use'}
+    if (opened.note.state === 'pending') return {reason: 'pending'}
+    if (amountMsat !== opened.note.amountMsat) {
+      return {reason: `amount must be the note's full value, ${opened.note.amountMsat} msat - split it first.`}
+    }
+    try {
+      const credited = store.transferToShare({inputIds: [opened.note.id], name, amountMsat, fingerprint})
+      log(`transfer: ${amountMsat} msat to ${name}, key ${credited.index}`)
+    } catch (err) {
+      if (err instanceof NotePendingError) return {reason: 'pending'}
+      if (err instanceof NoteUnavailableError) return {reason: 'already in use'}
+      throw err
+    }
+    return {status: 'OK'}
   }
 
   const callback = async (
     name: string,
     amountMsat: number,
     nostrParam: string | null,
-    advertisedIndex: string | null = null
+    k1: string | null = null
   ): Promise<ZapCallbackResult> => {
-    const lowered = name.toLowerCase()
+    const lowered = addressName(name)
     const registered = store.zapName(lowered)
-    const recipient = registered?.pubkey
-    if (!registered || !recipient) return {reason: 'Unknown user.'}
-    // Below 2^31: a non-hardened index, as the derivation's ser32 needs.
-    if (advertisedIndex !== null && (!/^\d{1,10}$/.test(advertisedIndex) || Number(advertisedIndex) > 0x7fffffff)) {
-      return {reason: 'Invalid callback.'}
-    }
+    if (!registered) return {reason: 'unknown user'}
+    if (k1 !== null && k1 !== '') return transfer(lowered, amountMsat, k1)
     if (!Number.isSafeInteger(amountMsat) || amountMsat <= 0) return {reason: 'Invalid amount.'}
     if (amountMsat < deps.minSendableMsat || amountMsat > deps.maxSendableMsat) return {reason: 'Amount out of range.'}
     const net = deps.netAfterMintFee(amountMsat)
     if (net < deps.minMintMsat) return {reason: 'Amount too small to mint a note.'}
+    const recipient = registered.pubkey
 
     let zapRequest: string | null = null
     if (nostrParam !== null && nostrParam !== '') {
+      if (!recipient) return {reason: `${lowered}@${host} takes no zaps: no Nostr key owns it.`}
       const problem = validateZapRequest(nostrParam)
       if (problem) return {reason: problem}
       const parsed = JSON.parse(nostrParam) as Event
@@ -249,18 +277,9 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
     }
 
     // A throwaway preimage: the payer will learn it, and it must be worth
-    // nothing to them. The note's secret is minted at settlement.
+    // nothing to them. The note's secret, or its key, is settled on later.
     const preimage = bytesToHex(randomBytes(32))
     const paymentHash = hashK1(preimage)
-    // A zap commits to its zap request (NIP-57); any other payment to the
-    // metadata the payer was shown (LUD-06), rebuilt from the index the
-    // payRequest advertised. That index is only a hint and feeds nothing
-    // but this string: settlement derives the note's key itself, so a
-    // forged one changes no more than the forger's own invoice. A cx1
-    // changed or cleared between the two requests still mismatches, and
-    // the payer's wallet fetches the payRequest again.
-    const internalTransfer =
-      advertisedIndex !== null && registered.cx1 ? `${registered.cx1}:${Number(advertisedIndex)}` : undefined
     let pr: string
     try {
       pr = (
@@ -268,7 +287,9 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
           amountMsat,
           preimageHex: preimage,
           memo: `Zap ${lowered}@${host}`,
-          descriptionForHash: zapRequest ?? metadataFor(lowered, host, deps.mintFeeLine, deps.feeInWords, internalTransfer)
+          // A zap commits to its zap request (NIP-57); any other payment to
+          // the metadata the payer was shown (LUD-06).
+          descriptionForHash: zapRequest ?? metadataFor(lowered, host, deps.mintFeeLine, deps.feeInWords)
         })
       ).pr
     } catch (err) {
@@ -280,7 +301,9 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
       log('zap: funding source returned an invoice that does not match the requested preimage/amount')
       return {reason: 'Temporarily unable to issue an invoice.'}
     }
-    store.recordZapInvoice({paymentHash, name: lowered, recipient, pr, grossMsat: amountMsat, netMsat: net, zapRequest})
+    // No Nostr key, no wrap: recorded as '' and never delivered. The note
+    // waits at the mint for the holder's scan of the share.
+    store.recordZapInvoice({paymentHash, name: lowered, recipient: recipient ?? '', pr, grossMsat: amountMsat, netMsat: net, zapRequest})
     return {pr, ...(deps.verify ? {verify: `${origin}/verify/${paymentHash}`} : {})}
   }
 
@@ -345,23 +368,18 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
         continue
       }
       if (!paid) continue
-      const branch = decodeCx1(store.zapName(row.name)?.cx1 ?? '')
-      if (branch) {
+      const share = shareOnFile(store.zapName(row.name)?.cx1)
+      if (share) {
         const receipt = buildReceipt(row)
-        const keyAt = (index: number): string | null => {
-          try {
-            return bytesToHex(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, NOTE_PURPOSE_LIGHTNING_ADDRESS, index))
-          } catch {
-            return null
-          }
-        }
-        const landed = store.settleZapInvoiceToKey(row.paymentHash, keyAt, (noteId, index) => ({
-          wrapJson: JSON.stringify(buildKeyWrap(row, noteId, index)),
+        const landed = store.settleZapInvoiceToKey(row.paymentHash, share.noteAt, (noteId, index) => ({
+          // Only a Nostr key gets a wrap. Without one the note simply waits
+          // for the holder's scan, as LUD-26's auto-mint has it.
+          wrapJson: row.recipient ? JSON.stringify(buildKeyWrap(row, noteId, index)) : null,
           receiptJson: receipt ? JSON.stringify(receipt) : null
         }))
         if (landed) {
           minted += 1
-          log(`zap: ${row.name} received ${row.netMsat} msat; note minted to key ${landed.index}, wrap parked`)
+          log(`zap: ${row.name} received ${row.netMsat} msat; note minted to key ${landed.index}${row.recipient ? ', wrap parked' : ''}`)
         }
         continue
       }
@@ -444,5 +462,43 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
     return swept
   }
 
-  return {pubkey, isZapName, payRequest, callback, settle, publish, sweep}
+  const settleHold = async (paymentHash: string): Promise<boolean> => {
+    let paid: boolean
+    try {
+      paid = await backend.isInvoiceSettled(paymentHash)
+    } catch (err) {
+      log(`address fee: settlement check failed for ${paymentHash.slice(0, 8)}: ${(err as Error).message}`)
+      return false
+    }
+    if (!paid) return false
+    const settled = store.settleHold(paymentHash)
+    if (settled?.registered) log(`address ${settled.name} registered: its fee settled`)
+    else if (settled) log(`address fee for ${settled.name} settled after its hold lapsed and the name was taken: fee kept, nothing registered`)
+    return settled?.registered ?? false
+  }
+
+  // As the zap sweep: an expired hold goes only once the funding source
+  // confirms its invoice unpaid. The name was free again from the moment
+  // the invoice expired; this only tidies the row away.
+  const settleHolds = async (nowMs: number = now()): Promise<number> => {
+    let registered = 0
+    for (const hold of store.unsettledHolds()) {
+      if (await settleHold(hold.paymentHash)) {
+        registered += 1
+        continue
+      }
+      if (nowMs > hold.expiresAt + 3_600_000) {
+        let paid = true
+        try {
+          paid = await backend.isInvoiceSettled(hold.paymentHash)
+        } catch {
+          continue
+        }
+        if (!paid) store.deleteUnsettledHold(hold.paymentHash)
+      }
+    }
+    return registered
+  }
+
+  return {pubkey, isZapName, payRequest, callback, settle, publish, sweep, settleHolds, settleHold}
 }

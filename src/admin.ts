@@ -347,7 +347,7 @@ export const runAdmin = async (argv: string[], deps: AdminDeps = {}): Promise<nu
           }
           for (const row of names) {
             out(
-              `${row.name.padEnd(20)} ${row.pubkey}  ${row.source}${row.paidMsat ? ` (paid ${sats(row.paidMsat)})` : ''}`
+              `${row.name.padEnd(20)} ${row.pubkey ?? '(share only, no Nostr key)'}  ${row.source}${row.paidMsat ? ` (paid ${sats(row.paidMsat)})` : ''}`
             )
           }
           for (const [name, pubkey] of waiting) out(`${name.padEnd(20)} ${pubkey}  env (waiting for a restart)`)

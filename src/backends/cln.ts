@@ -43,7 +43,7 @@ export const createClnBackend = (config: {url: string; rune: string}): Lightning
     name: 'cln',
     acceptsInvoicePreimage: true,
 
-    async createInvoice({amountMsat, preimageHex, memo, descriptionForHash}) {
+    async createInvoice({amountMsat, preimageHex, memo, descriptionForHash, expirySecs}) {
       if (preimageHex === undefined) {
         throw new Error('cln accepts a caller-supplied invoice preimage and was given none.')
       }
@@ -54,7 +54,8 @@ export const createClnBackend = (config: {url: string; rune: string}): Lightning
         // Commit to the hash of the description rather than carry it: the
         // zap request is far over bolt11's description limit.
         ...(descriptionForHash === undefined ? {} : {deschashonly: true}),
-        preimage: preimageHex
+        preimage: preimageHex,
+        ...(expirySecs === undefined ? {} : {expiry: expirySecs})
       })
       if (typeof result?.bolt11 !== 'string') throw new Error('cln did not return a bolt11 invoice.')
       return {pr: result.bolt11}

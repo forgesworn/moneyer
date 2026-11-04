@@ -86,6 +86,10 @@ export interface LightningBackend {
     preimageHex?: string
     memo: string
     descriptionForHash?: string
+    // Seconds the invoice stays payable. The node's default when absent.
+    // A LUD-26 address fee sets it, since the name is held for exactly as
+    // long as its invoice can still be paid.
+    expirySecs?: number
   }): Promise<{pr: string}>
   // Throws PaymentFailedError on a clean terminal failure, anything else on
   // an ambiguous one.

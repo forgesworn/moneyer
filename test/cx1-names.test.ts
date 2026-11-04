@@ -1,30 +1,30 @@
 import {afterEach, describe, expect, it} from 'vitest'
+import {mkdtempSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+import {DatabaseSync} from 'node:sqlite'
 import {finalizeEvent, generateSecretKey, getPublicKey, type Event, type EventTemplate} from 'nostr-tools/pure'
 import {unwrapEvent} from 'nostr-tools/nip59'
 import {matchFilter, type Filter} from 'nostr-tools/filter'
-import {sha256} from '@noble/hashes/sha2.js'
+import {sha256, sha512} from '@noble/hashes/sha2.js'
+import {hmac} from '@noble/hashes/hmac.js'
 import {bytesToHex, randomBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {schnorr, secp256k1} from '@noble/curves/secp256k1.js'
 import {decodeBolt11} from 'farrier-kit/bolt11'
-import {
-  ServiceError,
-  decodeLegacyCx1 as decodeCx1,
-  encodeCk1,
-  encodeCp1,
-  encodeLegacyCx1 as encodeCx1,
-  hashK1,
-  mergeNotesWithHash,
-  signNoteOwnership,
-} from '@lnurlcash/kit'
-import {NOTE_PURPOSE_LIGHTNING_ADDRESS, NOTE_PURPOSE_WALLET, deriveNotePubkey} from '../src/spend.ts'
-import {NIP98_KIND, addressProofVerifies} from '../src/names.ts'
+import {encodeCk1, encodeCp1, encodeCx1, encodeLegacyCx1, signNoteOwnership} from '@lnurlcash/kit'
+import specVectors from 'lnurlcash-conformance/vectors/spec-vectors.json' with {type: 'json'}
+import {NOTE_PURPOSE_LIGHTNING_ADDRESS, deriveNotePubkey} from '../src/spend.ts'
+import {NIP98_KIND} from '../src/names.ts'
+import {decodeShare, proofVerifies, registrationMessage} from '../src/shares.ts'
+import {NoteStore} from '../src/store.ts'
 import {NOTE_KIND, type NostrTransport} from '../src/zap.ts'
 import {createFakeBackend, type FakeBackend} from '../src/backends/fake.ts'
-import {startMint, waitFor, type TestMint, noteIdOf, certifiesNote} from './helpers.ts'
+import {freshK1, startMint, waitFor, type TestMint, noteIdOf, certifiesNote} from './helpers.ts'
 
-// A name with a cx1 is paid to the holder's own keys: the mint derives the
-// next one from the watch-only branch, and the gift wrap says only where to
-// look and at which index. The mint never holds anything that spends it.
+// A name with a share is paid to the holder's own keys: the mint derives the
+// next one from the share's cx1 with BIP-32, and the gift wrap says only
+// where to look and at which index. The mint never holds anything that
+// spends it.
 
 const MINT_NOSTR_KEY = '22'.repeat(32)
 const HOST = 'mint.test'
@@ -94,20 +94,58 @@ const token = (secret: Uint8Array, body: string): string => {
   return `Nostr ${Buffer.from(JSON.stringify(finalizeEvent(template, secret))).toString('base64')}`
 }
 
-// LUD-25's address proof, by the branch's index-0 key, bound to this mint.
-const proof = (who: Holder, action: 'register' | 'unregister', name: string, domain = HOST): string =>
-  bytesToHex(
-    schnorr.sign(
-      sha256(utf8ToBytes(`LNURLcash:${action}:${domain}:${name}`)),
-      deriveNoteSecretKey(who, NOTE_PURPOSE_WALLET, 0),
-      new Uint8Array(32)
-    )
-  )
+// A share, as a wallet holds one: its private key p and chain code. Its
+// notes are BIP-32's non-hardened children, sk_i = p + I_L mod n, written
+// out here with noble so the mint is checked against code it shares
+// nothing with (and against luds' own vectors, below).
+type Holder = {sk: Uint8Array; pubkey: string; shareKey: Uint8Array; chainCode: Uint8Array; cx1: string}
 
-// `prover`, when given, signs the address proof a cx1 change needs.
+const N = secp256k1.Point.CURVE().n
+const toBigInt = (bytes: Uint8Array): bigint => BigInt(`0x${bytesToHex(bytes)}`)
+const ser32 = (n: number): Uint8Array => {
+  const bytes = new Uint8Array(4)
+  new DataView(bytes.buffer).setUint32(0, n, false)
+  return bytes
+}
+const childSecretKey = (shareKey: Uint8Array, chainCode: Uint8Array, index: number): Uint8Array => {
+  const P = secp256k1.getPublicKey(shareKey, true)
+  const I = hmac(sha512, chainCode, new Uint8Array([...P, ...ser32(index)]))
+  const k = (toBigInt(shareKey) + toBigInt(I.subarray(0, 32))) % N
+  return Uint8Array.from(Buffer.from(k.toString(16).padStart(64, '0'), 'hex'))
+}
+
+const holder = (): Holder => {
+  const sk = generateSecretKey()
+  const shareKey = secp256k1.utils.randomSecretKey()
+  const chainCode = randomBytes(32)
+  return {
+    sk,
+    pubkey: getPublicKey(sk),
+    shareKey,
+    chainCode,
+    cx1: encodeCx1({chainCode, pubkey: secp256k1.getPublicKey(shareKey, true)})
+  }
+}
+
+const keyAt = (who: Holder, index: number): string =>
+  bytesToHex(secp256k1.getPublicKey(childSecretKey(who.shareKey, who.chainCode, index), true).subarray(1))
+
+const ck1At = (who: Holder, index: number): string => {
+  const {pubkeyXOnly, signature} = signNoteOwnership(childSecretKey(who.shareKey, who.chainCode, index), HOST)
+  return encodeCk1(pubkeyXOnly, signature)
+}
+
+// LUD-26's proofs, by the share's own key, bound to this mint.
+const message = (action: 'register' | 'update' | 'unregister', name: string, cx1?: string, domain = HOST): string =>
+  `LNURLcash:${action}:${domain}:${name}${action === 'unregister' ? '' : `:${cx1}`}`
+const proof = (who: Holder, action: 'register' | 'update' | 'unregister', name: string, cx1 = who.cx1, domain = HOST): string =>
+  bytesToHex(schnorr.sign(sha256(utf8ToBytes(message(action, name, cx1, domain))), who.shareKey, new Uint8Array(32)))
+
+// `prover`, when given, signs the proof a cx1 change needs: register by the
+// new share, or unregister by the one on file.
 const claim = async (mint: TestMint, secret: Uint8Array, body: Record<string, unknown>, prover?: Holder) => {
   if (prover && body.cx1 !== undefined && typeof body.name === 'string') {
-    body = {...body, sig: proof(prover, body.cx1 === null ? 'unregister' : 'register', body.name)}
+    body = {...body, sig: body.cx1 === null ? proof(prover, 'unregister', body.name) : proof(prover, 'register', body.name, body.cx1 as string)}
   }
   const payload = JSON.stringify(body)
   const res = await fetch(`${mint.moneyer.url}/names`, {
@@ -118,54 +156,14 @@ const claim = async (mint: TestMint, secret: Uint8Array, body: Record<string, un
   return {status: res.status, body: (await res.json()) as Record<string, unknown>}
 }
 
-type Holder = {
-  sk: Uint8Array
-  pubkey: string
-  branchPrivateKey: Uint8Array
-  branchPubkey: Uint8Array
-  chainCode: Uint8Array
-  cx1: string
-}
-
-const holder = (): Holder => {
-  const sk = generateSecretKey()
-  const branchPrivateKey = secp256k1.utils.randomSecretKey()
-  const branchPubkey = secp256k1.getPublicKey(branchPrivateKey, true).subarray(1)
-  const chainCode = randomBytes(32)
-  return {
-    sk,
-    pubkey: getPublicKey(sk),
-    branchPrivateKey,
-    branchPubkey,
-    chainCode,
-    cx1: encodeCx1({pubkeyXOnly: branchPubkey, chainCode})
-  }
-}
-
-// The wallet's half of LUD-26's derivation, which the kit pinned here
-// predates: the branch key taken at even y, plus the same tweak the mint
-// adds to derive the public key.
-const N = secp256k1.Point.CURVE().n
-const toBigInt = (bytes: Uint8Array): bigint => BigInt(`0x${bytesToHex(bytes)}`)
-const ser32 = (n: number): Uint8Array => {
-  const bytes = new Uint8Array(4)
-  new DataView(bytes.buffer).setUint32(0, n, false)
-  return bytes
-}
-const deriveNoteSecretKey = (who: Holder, purpose: number, index: number): Uint8Array => {
-  let d = toBigInt(who.branchPrivateKey)
-  if (secp256k1.getPublicKey(who.branchPrivateKey, true)[0] === 3) d = N - d
-  const t = toBigInt(schnorr.utils.taggedHash('LNURLcash/derive', who.branchPubkey, who.chainCode, ser32(purpose), ser32(index))) % N
-  return Uint8Array.from(Buffer.from(((d + t) % N).toString(16).padStart(64, '0'), 'hex'))
-}
-
-// Lightning Address payments land on their own purpose of the branch.
-const keyAt = (who: Holder, index: number): string =>
-  bytesToHex(deriveNotePubkey(who.branchPubkey, who.chainCode, NOTE_PURPOSE_LIGHTNING_ADDRESS, index))
-
-const ck1At = (who: Holder, index: number): string => {
-  const {pubkeyXOnly, signature} = signNoteOwnership(deriveNoteSecretKey(who, NOTE_PURPOSE_LIGHTNING_ADDRESS, index), HOST)
-  return encodeCk1(pubkeyXOnly, signature)
+// LUD-26's own routes, form-encoded.
+const address = async (mint: TestMint, method: 'POST' | 'PUT' | 'DELETE', name: string, form: Record<string, string>) => {
+  const res = await fetch(`${mint.moneyer.url}/.well-known/lnurlp/${name}`, {
+    method,
+    headers: {'content-type': 'application/x-www-form-urlencoded'},
+    body: new URLSearchParams(form).toString()
+  })
+  return {status: res.status, cors: res.headers.get('access-control-allow-origin'), body: (await res.json()) as Record<string, unknown>}
 }
 
 // Asks for an invoice to `name`, and returns its payment hash.
@@ -185,8 +183,11 @@ const settle = async (mint: TestMint, relay: ReturnType<typeof fakeRelay>, who: 
   return {rumor, url: new URL(rumor.content)}
 }
 
-describe('a name with a cx1', () => {
-  it('is registered by its owner, who alone may change or clear the branch', async () => {
+const payRequestOf = async (mint: TestMint, name: string) =>
+  (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/${name}`)).json()) as Record<string, unknown>
+
+describe('a name with a share', () => {
+  it('is registered by its owner, who alone may set or clear the share', async () => {
     const {mint} = await start()
     const alice = holder()
     const granted = await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
@@ -194,12 +195,75 @@ describe('a name with a cx1', () => {
     expect(granted.body.cx1).toBe(alice.cx1)
     expect(mint.moneyer.store.zapName('alice')).toMatchObject({cx1: alice.cx1, nextIndex: 0})
 
-    expect((await claim(mint, holder().sk, {name: 'alice', cx1: holder().cx1})).status).toBe(409)
+    const bob = holder()
+    expect((await claim(mint, bob.sk, {name: 'alice', cx1: bob.cx1}, bob)).status).toBe(409)
     expect((await claim(mint, alice.sk, {name: 'alice', cx1: 'cx1nonsense'})).status).toBe(400)
 
     const cleared = await claim(mint, alice.sk, {name: 'alice', cx1: null}, alice)
     expect(cleared.status).toBe(200)
     expect(mint.moneyer.store.zapName('alice')?.cx1).toBeNull()
+  })
+
+  it('refuses the whole-branch cx1 and the proof that bound no cx1', async () => {
+    const {mint} = await start()
+    const alice = holder()
+    const branch = encodeLegacyCx1({pubkeyXOnly: secp256k1.getPublicKey(alice.shareKey, true).subarray(1), chainCode: alice.chainCode})
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: branch})).status).toBe(400)
+    // 0.21.0's message: no cx1 in it, so it could be replayed with any.
+    const unbound = bytesToHex(schnorr.sign(sha256(utf8ToBytes(`LNURLcash:register:${HOST}:alice`)), alice.shareKey, new Uint8Array(32)))
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1, sig: unbound})).status).toBe(403)
+    expect(mint.moneyer.store.zapName('alice')).toBeNull()
+  })
+
+  it('needs the share proof to point a name at a share, or away from one', async () => {
+    const {mint} = await start()
+    const alice = holder()
+    const stranger = holder()
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})).status).toBe(403)
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1, sig: proof(stranger, 'register', 'alice', alice.cx1)})).status).toBe(403)
+    const elsewhere = proof(alice, 'register', 'alice', alice.cx1, 'other.example')
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1, sig: elsewhere})).status).toBe(403)
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1, sig: proof(alice, 'unregister', 'alice')})).status).toBe(403)
+    expect(mint.moneyer.store.zapName('alice')).toBeNull()
+
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)).status).toBe(200)
+    // A cx1 on file is never overwritten here: a move is LUD-26's PUT.
+    const next = holder()
+    const overwrite = await claim(mint, alice.sk, {name: 'alice', cx1: next.cx1}, next)
+    expect(overwrite.status).toBe(409)
+    expect(overwrite.body.reason).toMatch(/^already registered/)
+    // The same share again is no change.
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)).status).toBe(200)
+    // Clearing is an unregister by the share on file.
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: null}, next)).status).toBe(403)
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: null}, alice)).status).toBe(200)
+    expect(mint.moneyer.store.zapName('alice')?.cx1).toBeNull()
+    // ...and the share it held is never accepted again, here or elsewhere.
+    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)).body.reason).toBe('cx1 already used')
+    const bob = holder()
+    expect((await claim(mint, bob.sk, {name: 'bobby', cx1: alice.cx1}, alice)).body.reason).toBe('cx1 already used')
+  })
+
+  it('publishes a LUD-26 Lightning Address that names its mint and no key', async () => {
+    const {mint} = await start()
+    const alice = holder()
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
+    const pay = await payRequestOf(mint, 'alice')
+    expect(pay.callback).toBe(`http://${HOST}/z/cb/alice`)
+    expect(pay.withdrawLink).toBe(`http://${HOST}/w`)
+    expect(pay).not.toHaveProperty('commentAllowed')
+    expect(pay.allowsNostr).toBe(true)
+    const entries = JSON.parse(pay.metadata as string) as unknown[][]
+    expect(entries.some(entry => entry[0] === 'text/cpub' || entry[0] === 'text/xpub')).toBe(false)
+    expect(JSON.stringify(pay)).not.toMatch(/cx1[02-9ac-hj-np-z]{20,}/)
+    // mint@'s mint fees, without the address fee only mint@ advertises.
+    expect(entries).toContainEqual(['text/plain', 'Mint fees: 1000,0'])
+    // A +tag is the same address.
+    expect((await payRequestOf(mint, 'alice+coffee')).callback).toBe(`http://${HOST}/z/cb/alice`)
+
+    const custodial = holder()
+    await claim(mint, custodial.sk, {name: 'bobby'})
+    expect(await payRequestOf(mint, 'bobby')).not.toHaveProperty('withdrawLink')
   })
 
   it('pays each zap to the next key, wrapping only where to look', async () => {
@@ -212,19 +276,15 @@ describe('a name with a cx1', () => {
     expect(first.url.searchParams.has('k1')).toBe(false)
     expect(first.url.searchParams.get('p')).toBe(encodeCp1(Buffer.from(keyAt(alice, 0), 'hex')))
     expect(first.url.searchParams.get('i')).toBe('0')
-    expect(first.url.searchParams.has('amount')).toBe(false)
     expect(first.rumor.tags).toContainEqual(['i', '0'])
-    // the holder checks the certificate, then opens the note with its own key
     // The wrap names the mint's public origin, so that is the domain certified.
-    expect(certifiesNote(ck1At(alice, 0), 20_000, first.url.searchParams.get('c')!, mint.moneyer.signer.pubkey, HOST)).toBe(
-      true
-    )
+    expect(certifiesNote(ck1At(alice, 0), 20_000, first.url.searchParams.get('c')!, mint.moneyer.signer.pubkey, HOST)).toBe(true)
     const opened = (await (await fetch(`${mint.moneyer.url}/w?k1=${ck1At(alice, 0)}`)).json()) as {maxWithdrawable: number}
     expect(opened.maxWithdrawable).toBe(20_000)
 
-    const second = await settle(mint, relay, alice, await invoice(mint, 'alice', 11_000))
+    const second = await settle(mint, relay, alice, await invoice(mint, 'alice', 21_000))
     expect(second.url.searchParams.get('i')).toBe('1')
-    expect(mint.moneyer.store.noteById(keyAt(alice, 1))?.amountMsat).toBe(10_000)
+    expect(mint.moneyer.store.noteById(keyAt(alice, 1))?.amountMsat).toBe(20_000)
   })
 
   it('takes no index for an invoice nobody pays', async () => {
@@ -237,120 +297,18 @@ describe('a name with a cx1', () => {
     expect(paid.url.searchParams.get('i')).toBe('0')
   })
 
-  it('publishes the next free branch key as an internal-transfer hint', async () => {
-    const {mint} = await start()
-    const alice = holder()
-    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
-    mint.moneyer.store.creditNote(keyAt(alice, 0), 5_000)
-
-    const pay = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/alice`)).json()) as {metadata: string}
-    const entries = JSON.parse(pay.metadata) as unknown[][]
-    expect(entries).toContainEqual(['text/cpub', `${alice.cx1}:1`])
-    // Never the older name: a wallet reading it would derive without a purpose.
-    expect(entries.some(entry => entry[0] === 'text/xpub')).toBe(false)
-
-    const custodial = holder()
-    await claim(mint, custodial.sk, {name: 'bobby'})
-    const oldPay = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/bobby`)).json()) as {metadata: string}
-    expect(JSON.parse(oldPay.metadata).some((entry: unknown[]) => entry[0] === 'text/cpub')).toBe(false)
-  })
-
-  it('issues each invoice committed to the metadata its payer was shown', async () => {
+  it('commits every invoice to the metadata its payer was shown', async () => {
     const {backend, committed} = recordingBackend()
-    const {mint, relay} = await start({}, backend)
+    const {mint} = await start({}, backend)
     const alice = holder()
     await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
-    await claim(mint, holder().sk, {name: 'bobby'})
-
-    const payRequest = async (name: string) =>
-      (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/${name}`)).json()) as {callback: string; metadata: string}
-    const callBack = async (callback: string, extra = '') => {
-      const url = `${callback.replace(`http://${HOST}`, mint.moneyer.url)}?amount=21000${extra}`
-      return (await (await fetch(url)).json()) as {pr?: string; reason?: string}
-    }
-
-    // A name without a branch advertises no index and needs none.
-    const bobby = await payRequest('bobby')
-    expect(bobby.callback).toBe(`http://${HOST}/z/cb/bobby`)
-    expect((await callBack(bobby.callback)).pr).toBeTypeOf('string')
-    expect(committed.at(-1)).toBe(bobby.metadata)
-
-    // A payment settles between the payer reading alice's payRequest and
-    // calling back, so the next free index moves on. The invoice still
-    // commits to the metadata the payer read, hint and all.
-    const shown = await payRequest('alice')
-    expect(shown.callback).toBe(`http://${HOST}/z/cb/alice/0`)
-    await settle(mint, relay, alice, await invoice(mint, 'alice', 21_000))
-    const later = await payRequest('alice')
-    expect(later.callback).toBe(`http://${HOST}/z/cb/alice/1`)
-    expect(later.metadata).not.toBe(shown.metadata)
-    expect((await callBack(shown.callback)).pr).toBeTypeOf('string')
-    expect(committed.at(-1)).toBe(shown.metadata)
-
-    // The index is a hint only: the payment it paid for lands on the next
-    // free key, whatever the callback said.
-    const paymentHash = decodeBolt11((await callBack(`http://${HOST}/z/cb/alice/7`)).pr!).paymentHashHex
-    const landed = await settle(mint, relay, alice, paymentHash)
-    expect(landed.url.searchParams.get('i')).toBe('1')
-
-    // A zap still commits to its zap request, index or not.
-    const zap = JSON.stringify(
-      finalizeEvent(
-        {
-          kind: 9734,
-          created_at: Math.floor(Date.now() / 1000),
-          content: '',
-          tags: [['p', alice.pubkey], ['relays', 'wss://zapper.example'], ['amount', '21000']]
-        },
-        generateSecretKey()
-      )
-    )
-    expect((await callBack(later.callback, `&nostr=${encodeURIComponent(zap)}`)).pr).toBeTypeOf('string')
-    expect(committed.at(-1)).toBe(zap)
-
-    // A malformed index is refused rather than dropped.
-    for (const bad of ['x', '-1', '1.5', '2147483648', '00000000001']) {
-      const before = committed.length
-      expect(await callBack(`http://${HOST}/z/cb/alice/${bad}`)).toMatchObject({reason: 'Invalid callback.'})
-      expect(committed.length).toBe(before)
-    }
-  })
-
-  it('accepts an internal transfer on the address purpose and advances after a raced hint', async () => {
-    const {mint} = await start()
-    const alice = holder()
-    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
-    const pay = (await (await fetch(`${mint.moneyer.url}/.well-known/lnurlp/alice`)).json()) as {metadata: string}
-    const hint = (JSON.parse(pay.metadata) as string[][]).find(entry => entry[0] === 'text/cpub')![1]!
-    const sep = hint.lastIndexOf(':')
-    const branch = decodeCx1(hint.slice(0, sep))!
-    expect(Number(hint.slice(sep + 1))).toBe(0)
-
-    // The payRequest was honest when read, but another transfer wins index
-    // zero before this one lands. The specific collision answer lets the
-    // payer retry at one without risking the input, as LUD-25's internal
-    // transfer does (the kit pinned here predates purposes, so this walks
-    // the same merge by hand).
+    const pay = await payRequestOf(mint, 'alice')
+    await invoice(mint, 'alice', 21_000)
     mint.moneyer.store.creditNote(keyAt(alice, 0), 5_000)
-    const source = bytesToHex(randomBytes(32))
-    mint.moneyer.store.creditNote(noteIdOf(source), 21_000)
-    let index = Number(hint.slice(sep + 1))
-    let signature: string | undefined
-    for (;; index++) {
-      const output = encodeCp1(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, NOTE_PURPOSE_LIGHTNING_ADDRESS, index))
-      try {
-        signature = (await mergeNotesWithHash(`${mint.moneyer.url}/w/cb`, [source], output)).signature
-        break
-      } catch (err) {
-        // The kit reads "already in use" as a spent note now (LUD-25 92abbb3).
-        if (!(err instanceof Error && /already in use/.test(err.message)) || index > 3) throw err
-      }
-    }
-
-    expect(index).toBe(1)
-    expect(mint.moneyer.store.noteById(noteIdOf(source))?.state).toBe('burned')
-    expect(mint.moneyer.store.noteById(keyAt(alice, 1))).toMatchObject({amountMsat: 21_000, state: 'outstanding'})
-    expect(certifiesNote(ck1At(alice, 1), 21_000, signature!, mint.moneyer.signer.pubkey, HOST)).toBe(true)
+    await invoice(mint, 'alice', 21_000)
+    // Nothing in the payRequest moves when the next key does.
+    expect(committed).toEqual([pay.metadata, pay.metadata])
+    expect((await payRequestOf(mint, 'alice')).metadata).toBe(pay.metadata)
   })
 
   it('skips a key that already names a note', async () => {
@@ -364,17 +322,6 @@ describe('a name with a cx1', () => {
     expect(mint.moneyer.store.zapName('alice')?.nextIndex).toBe(2)
   })
 
-  it('starts a new branch at index 0, and keeps its place when the same one is sent again', async () => {
-    const {mint, relay} = await start()
-    const alice = holder()
-    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
-    await settle(mint, relay, alice, await invoice(mint, 'alice', 21_000))
-    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
-    expect(mint.moneyer.store.zapName('alice')?.nextIndex).toBe(1)
-    await claim(mint, alice.sk, {name: 'alice', cx1: holder().cx1}, alice)
-    expect(mint.moneyer.store.zapName('alice')?.nextIndex).toBe(0)
-  })
-
   it('leaves a name without one on the custodial path', async () => {
     const {mint, relay} = await start()
     const alice = holder()
@@ -384,7 +331,7 @@ describe('a name with a cx1', () => {
     expect(paid.url.searchParams.has('p')).toBe(false)
   })
 
-  it('lets the owner of an operator name set a branch while registration is closed', async () => {
+  it('lets the owner of an operator name set a share while registration is closed', async () => {
     const alice = holder()
     const {mint} = await start({
       namePriceMsat: undefined,
@@ -393,37 +340,12 @@ describe('a name with a cx1', () => {
     const set = await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
     expect(set.status).toBe(200)
     expect(mint.moneyer.store.zapName('alice')?.cx1).toBe(alice.cx1)
-    // still closed to anyone wanting a new name, and still not a stranger's
-    expect((await claim(mint, holder().sk, {name: 'bobby', cx1: holder().cx1})).status).toBe(404)
-    expect((await claim(mint, holder().sk, {name: 'alice', cx1: holder().cx1})).status).toBe(409)
-  })
-
-  it('needs the address proof to point a name at a branch, or away from one', async () => {
-    const {mint} = await start()
-    const alice = holder()
     const stranger = holder()
-    // No proof, a proof by some other branch, one bound to another mint,
-    // and one for the other action are all refused, and nothing is set.
-    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1})).status).toBe(403)
-    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, stranger)).status).toBe(403)
-    const elsewhere = proof(alice, 'register', 'alice', 'other.example')
-    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1, sig: elsewhere})).status).toBe(403)
-    const wrongAction = proof(alice, 'unregister', 'alice')
-    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1, sig: wrongAction})).status).toBe(403)
-    expect(mint.moneyer.store.zapName('alice')).toBeNull()
-
-    expect((await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)).status).toBe(200)
-    // Switching is proven by the branch on file, not the one switched to.
-    const next = holder()
-    expect((await claim(mint, alice.sk, {name: 'alice', cx1: next.cx1}, next)).status).toBe(403)
-    expect(mint.moneyer.store.zapName('alice')?.cx1).toBe(alice.cx1)
-    // Clearing is an unregister by the branch on file.
-    expect((await claim(mint, alice.sk, {name: 'alice', cx1: null}, next)).status).toBe(403)
-    expect((await claim(mint, alice.sk, {name: 'alice', cx1: null}, alice)).status).toBe(200)
-    expect(mint.moneyer.store.zapName('alice')?.cx1).toBeNull()
+    expect((await claim(mint, stranger.sk, {name: 'bobby', cx1: stranger.cx1}, stranger)).status).toBe(404)
+    expect((await claim(mint, stranger.sk, {name: 'alice', cx1: stranger.cx1}, stranger)).status).toBe(409)
   })
 
-  it("keeps an operator name's branch across a restart, and drops it when the operator gives the name away", async () => {
+  it("keeps an operator name's share across a restart, and drops it when the operator gives the name away", async () => {
     const alice = holder()
     const {mint, relay} = await start({
       namePriceMsat: undefined,
@@ -433,38 +355,238 @@ describe('a name with a cx1', () => {
     await settle(mint, relay, alice, await invoice(mint, 'alice', 21_000))
     const store = mint.moneyer.store
     expect(store.zapName('alice')).toMatchObject({cx1: alice.cx1, nextIndex: 1})
-
-    // What every startup does with the environment's names.
     store.putOperatorZapName('alice', alice.pubkey)
     expect(store.zapName('alice')).toMatchObject({pubkey: alice.pubkey, cx1: alice.cx1, nextIndex: 1})
-
     const bob = holder()
     store.putOperatorZapName('alice', bob.pubkey)
     expect(store.zapName('alice')).toMatchObject({pubkey: bob.pubkey, cx1: null, nextIndex: 0})
   })
 })
 
-// LUD-25's test vector 2: the address proof, by the branch's purpose-0
-// index-0 key.
-describe('the address proof', () => {
-  const cx1 =
-    'cx1vjy9489tj0kq29mphzstsrsc2jnpsev834v0w23kth7kgzzs7e6kh9tet7vq0tdgtjx22rkf8jfpfqapsw4la49rkj47dw2u3xyqxpspgvxpa'
-  const register =
-    '9169a81db3372d8bb8a080f271f8036192131d4ed02596c0baa181613fdc5d6e17b3230b01f510a759fdb6c46b53671e57678f57ac0a6a3deb6300761225adc7'
-  const unregister =
-    'fcc6a96f560d6505bfc475d8c2d4383047f2ece6593412af9b2834913af60f108b6e194cef31c377a23a051f8c80c1660efc2313b7876a2f80bc1f0f423c7835'
-  const check = (action: 'register' | 'unregister', sig: string, domains = ['cash.example.com'], name = 'alice') =>
-    addressProofVerifies({cx1, action, name, domains, sig})
+describe('an internal transfer (LUD-26)', () => {
+  const send = async (mint: TestMint, name: string, k1: string, amountMsat: number) =>
+    (await (await fetch(`${mint.moneyer.url}/z/cb/${name}?amount=${amountMsat}&k1=${encodeURIComponent(k1)}`)).json()) as Record<
+      string,
+      unknown
+    >
 
-  it("verifies the spec's register and unregister signatures", () => {
-    expect(check('register', register)).toBe(true)
-    expect(check('unregister', unregister)).toBe(true)
+  it("credits the whole note, free, to the share's next key, and answers a retry as the first", async () => {
+    const {mint} = await start()
+    const alice = holder()
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
+    mint.moneyer.store.creditNote(keyAt(alice, 0), 5_000)
+    const source = freshK1()
+    mint.moneyer.store.creditNote(noteIdOf(source), 21_000)
+
+    expect(await send(mint, 'alice', source, 20_000)).toMatchObject({status: 'ERROR', reason: expect.stringMatching(/full value, 21000 msat/)})
+    expect(mint.moneyer.store.noteById(noteIdOf(source))?.state).toBe('outstanding')
+
+    expect(await send(mint, 'alice', source, 21_000)).toEqual({status: 'OK'})
+    expect(mint.moneyer.store.noteById(noteIdOf(source))?.state).toBe('burned')
+    // key 0 already named a note, so key 1, worth all of it: no mint fee
+    expect(mint.moneyer.store.noteById(keyAt(alice, 1))).toMatchObject({amountMsat: 21_000, state: 'outstanding'})
+    expect(await send(mint, 'alice', source, 21_000)).toEqual({status: 'OK'})
+    expect(mint.moneyer.store.zapName('alice')?.nextIndex).toBe(2)
+    // The same note to anyone else, or for another amount, is a double spend.
+    const bob = holder()
+    await claim(mint, bob.sk, {name: 'bobby', cx1: bob.cx1}, bob)
+    expect(await send(mint, 'bobby', source, 21_000)).toEqual({status: 'ERROR', reason: 'already in use'})
   })
 
-  it('binds each to its action, name and domain', () => {
-    expect(check('unregister', register)).toBe(false)
-    expect(check('register', register, ['cash.example.com'], 'bob')).toBe(false)
-    expect(check('register', register, ['mint.example'])).toBe(false)
-    expect(check('register', register, ['mint.example', 'cash.example.com'])).toBe(true)
+  it('refuses a name with no share, and a note that does not open', async () => {
+    const {mint} = await start()
+    const custodial = holder()
+    await claim(mint, custodial.sk, {name: 'bobby'})
+    const source = freshK1()
+    mint.moneyer.store.creditNote(noteIdOf(source), 21_000)
+    expect((await send(mint, 'bobby', source, 21_000)).status).toBe('ERROR')
+    const alice = holder()
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
+    expect((await send(mint, 'alice', freshK1(), 21_000)).status).toBe('ERROR')
+    expect(mint.moneyer.store.noteById(noteIdOf(source))?.state).toBe('outstanding')
+  })
+})
+
+describe('registration at the address (LUD-26)', () => {
+  it('registers, moves and unregisters a name its share alone owns', async () => {
+    const {mint} = await start()
+    const alice = holder()
+    const registered = await address(mint, 'POST', 'Alice', {cx1: alice.cx1, sig: proof(alice, 'register', 'alice')})
+    expect(registered).toMatchObject({status: 200, cors: '*', body: {status: 'OK'}})
+    expect(mint.moneyer.store.zapName('alice')).toMatchObject({pubkey: null, cx1: alice.cx1})
+    // No Nostr key owns it: no NIP-05, no zaps, but a Lightning Address all the same.
+    expect(await (await fetch(`${mint.moneyer.url}/.well-known/nostr.json?name=alice`)).json()).toEqual({names: {}})
+    const pay = await payRequestOf(mint, 'alice')
+    expect(pay.withdrawLink).toBe(`http://${HOST}/w`)
+    expect(pay).not.toHaveProperty('allowsNostr')
+
+    const next = holder()
+    const moved = await address(mint, 'PUT', 'alice', {
+      cx1: next.cx1,
+      sig: proof(alice, 'update', 'alice', next.cx1),
+      newsig: proof(next, 'register', 'alice', next.cx1)
+    })
+    expect(moved.body).toEqual({status: 'OK'})
+    expect(mint.moneyer.store.zapName('alice')).toMatchObject({cx1: next.cx1, nextIndex: 0})
+
+    expect((await address(mint, 'DELETE', 'alice', {sig: proof(alice, 'unregister', 'alice')})).body.reason).toBe('Invalid ownership signature.')
+    expect((await address(mint, 'DELETE', 'alice', {sig: proof(next, 'unregister', 'alice')})).body).toEqual({status: 'OK'})
+    expect(mint.moneyer.store.zapName('alice')).toBeNull()
+    expect(await payRequestOf(mint, 'alice')).toEqual({status: 'ERROR', reason: 'unknown user'})
+  })
+
+  it('leaves a name a Nostr key owns with that key when its share unregisters', async () => {
+    const {mint} = await start()
+    const alice = holder()
+    await claim(mint, alice.sk, {name: 'alice', cx1: alice.cx1}, alice)
+    expect((await address(mint, 'POST', 'alice', {cx1: holder().cx1, sig: '00'.repeat(64)})).body.reason).toBe('Invalid ownership signature.')
+    const fresh = holder()
+    expect((await address(mint, 'POST', 'alice', {cx1: fresh.cx1, sig: proof(fresh, 'register', 'alice')})).body.reason).toBe('already registered')
+    expect((await address(mint, 'DELETE', 'alice', {sig: proof(alice, 'unregister', 'alice')})).body).toEqual({status: 'OK'})
+    expect(mint.moneyer.store.zapName('alice')).toMatchObject({pubkey: alice.pubkey, cx1: null})
+  })
+
+  it('takes no unsigned npub, and no reserved or tagged username', async () => {
+    const {mint} = await start()
+    const alice = holder()
+    const npubbed = await address(mint, 'POST', 'alice', {cx1: alice.cx1, sig: proof(alice, 'register', 'alice'), npub: 'npub1xyz'})
+    expect(npubbed.body.reason).toMatch(/NIP-98/)
+    for (const name of ['mint', 'admin', 'alice+tag']) {
+      expect((await address(mint, 'POST', name, {cx1: alice.cx1, sig: proof(alice, 'register', name)})).body.status).toBe('ERROR')
+    }
+    expect(mint.moneyer.store.keyAccepted(alice.cx1)).toBe(false)
+  })
+
+  it('holds a name for its address fee, and publishes it once paid', async () => {
+    const {mint} = await start({namePriceMsat: 21_000})
+    const mintPay = await payRequestOf(mint, 'mint')
+    expect(JSON.parse(mintPay.metadata as string)).toContainEqual(['text/plain', 'Mint fees: 1000,0,21000'])
+    const alice = holder()
+    const held = await address(mint, 'POST', 'alice', {cx1: alice.cx1, sig: proof(alice, 'register', 'alice')})
+    expect(held.body.status).toBe('OK')
+    const pr = held.body.pr as string
+    expect(decodeBolt11(pr).amountMsats).toBe(21_000n)
+    expect(await payRequestOf(mint, 'alice')).toEqual({status: 'ERROR', reason: 'unknown user'})
+    const rival = holder()
+    expect((await address(mint, 'POST', 'alice', {cx1: rival.cx1, sig: proof(rival, 'register', 'alice')})).body.reason).toBe('already registered')
+    expect((await claim(mint, rival.sk, {name: 'alice', note: 'x'})).status).toBe(409)
+
+    mint.backend.control.settleInvoice(decodeBolt11(pr).paymentHashHex)
+    expect((await payRequestOf(mint, 'alice')).withdrawLink).toBe(`http://${HOST}/w`)
+    expect(mint.moneyer.store.zapName('alice')).toMatchObject({cx1: alice.cx1, paidMsat: 21_000})
+  })
+
+  it('frees a held name once its fee invoice expires unpaid', async () => {
+    const {mint} = await start({namePriceMsat: 21_000})
+    const alice = holder()
+    await address(mint, 'POST', 'alice', {cx1: alice.cx1, sig: proof(alice, 'register', 'alice')})
+    const later = Date.now() + 2 * 3_600_000
+    expect(mint.moneyer.store.nameTaken('alice', later)).toBe(false)
+    const bob = holder()
+    expect(mint.moneyer.store.nameTaken('alice')).toBe(true)
+    mint.moneyer.store.registerShareName({name: 'alice', cx1: bob.cx1, nowMs: later})
+    expect(mint.moneyer.store.zapName('alice')?.cx1).toBe(bob.cx1)
+  })
+})
+
+// A name registered before LUD-26 holds a whole branch's 64-byte cx1. It
+// keeps working as it did, deriving the old purpose-2 keys, publishes no
+// key any more, and moves to a share with a PUT proven by its old key.
+describe('a name from before LUD-26', () => {
+  const legacy = () => {
+    const sk = generateSecretKey()
+    const branchKey = secp256k1.utils.randomSecretKey()
+    const branchPubkey = secp256k1.getPublicKey(branchKey, true).subarray(1)
+    const chainCode = randomBytes(32)
+    return {sk, pubkey: getPublicKey(sk), branchKey, branchPubkey, chainCode, cx1: encodeLegacyCx1({pubkeyXOnly: branchPubkey, chainCode})}
+  }
+
+  it('keeps crediting the old purpose-2 keys and publishes none of them', async () => {
+    const {mint} = await start()
+    const old = legacy()
+    mint.moneyer.store.buyZapName({name: 'carol', pubkey: old.pubkey, paidMsat: 0, cx1: old.cx1})
+    const pay = await payRequestOf(mint, 'carol')
+    expect(JSON.stringify(pay)).not.toContain(old.cx1)
+    expect(pay.withdrawLink).toBe(`http://${HOST}/w`)
+    const paymentHash = await invoice(mint, 'carol', 21_000)
+    mint.backend.control.settleInvoice(paymentHash)
+    const expected = bytesToHex(deriveNotePubkey(old.branchPubkey, old.chainCode, NOTE_PURPOSE_LIGHTNING_ADDRESS, 0))
+    await waitFor(() => mint.moneyer.store.noteById(expected) !== null)
+    expect(mint.moneyer.store.noteById(expected)?.amountMsat).toBe(20_000)
+  })
+
+  it('moves to a share on the old branch key, and its x(P) is never accepted again', async () => {
+    const {mint} = await start()
+    const old = legacy()
+    mint.moneyer.store.buyZapName({name: 'carol', pubkey: old.pubkey, paidMsat: 0, cx1: old.cx1})
+    const share = holder()
+    const sig = bytesToHex(schnorr.sign(sha256(utf8ToBytes(message('update', 'carol', share.cx1))), old.branchKey, new Uint8Array(32)))
+    const moved = await address(mint, 'PUT', 'carol', {cx1: share.cx1, sig, newsig: proof(share, 'register', 'carol', share.cx1)})
+    expect(moved.body).toEqual({status: 'OK'})
+    expect(mint.moneyer.store.zapName('carol')).toMatchObject({cx1: share.cx1, pubkey: old.pubkey, nextIndex: 0})
+    // A share around the old branch's x(P) is the same key.
+    const twin = encodeCx1({chainCode: randomBytes(32), pubkey: secp256k1.getPublicKey(old.branchKey, true)})
+    expect(mint.moneyer.store.keyAccepted(twin)).toBe(true)
+  })
+
+  it('is backfilled into the accepted keys when an older database is opened', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'moneyer-legacy-'))
+    const path = join(dir, 'mint.db')
+    const old = legacy()
+    // What 0.21.0 left behind: the name and its cx1, and no accepted_keys.
+    new NoteStore(path).close()
+    const raw = new DatabaseSync(path)
+    raw.exec('DROP TABLE accepted_keys')
+    raw
+      .prepare("INSERT INTO zap_names (name, pubkey, created_at, paid_msat, source, cx1, next_index) VALUES ('carol', ?, 0, 0, 'self', ?, 3)")
+      .run(old.pubkey, old.cx1)
+    raw.close()
+    const store = new NoteStore(path)
+    expect(store.keyAccepted(old.cx1)).toBe(true)
+    expect(store.zapName('carol')).toMatchObject({cx1: old.cx1, nextIndex: 3, pubkey: old.pubkey})
+    store.close()
+    rmSync(dir, {recursive: true, force: true})
+  })
+})
+
+// luds 26-vectors.json, as lnurlcash-conformance ships it: the mint's
+// derivation and proofs byte for byte against the spec's own.
+describe('the LUD-26 vectors', () => {
+  const lud26 = specVectors.lud26
+
+  it("derives every share note from the share's cx1 alone", () => {
+    let checked = 0
+    for (const seed of lud26.derivation) {
+      for (const account of seed.accounts) {
+        for (const shared of account.shareable) {
+          const share = decodeShare(shared.cx1)!
+          expect(share.legacy).toBe(false)
+          for (const note of shared.notes) {
+            expect(share.noteAt(note.i)).toBe(note.Q)
+            checked++
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0)
+  })
+
+  it('verifies the register, update and unregister proofs, and binds each', () => {
+    const r = lud26.registration
+    const first = decodeShare(r.cx1)!
+    const second = decodeShare(r.new_cx1)!
+    const ok = (action: 'register' | 'update' | 'unregister', keys: Uint8Array[], sig: string, cx1?: string, domains = [r.domain], username = r.username) =>
+      proofVerifies({action, domains, username, cx1, keys, sig})
+    expect(ok('register', first.proofKeys(), r.register.sig, r.cx1)).toBe(true)
+    expect(ok('update', first.proofKeys(), r.update.sig.sig, r.new_cx1)).toBe(true)
+    expect(ok('register', second.proofKeys(), r.update.newsig.sig, r.new_cx1)).toBe(true)
+    expect(ok('unregister', second.proofKeys(), r.unregister.sig)).toBe(true)
+    expect(registrationMessage('register', r.domain, r.username, r.cx1)).toBe(r.register.message)
+    // bound to its cx1, action, username and domain
+    expect(ok('register', first.proofKeys(), r.register.sig, r.new_cx1)).toBe(false)
+    expect(ok('unregister', first.proofKeys(), r.register.sig)).toBe(false)
+    expect(ok('register', first.proofKeys(), r.register.sig, r.cx1, [r.domain], 'bob')).toBe(false)
+    expect(ok('register', first.proofKeys(), r.register.sig, r.cx1, ['mint.example'])).toBe(false)
+    expect(ok('register', first.proofKeys(), r.register.sig, r.cx1, ['mint.example', r.domain])).toBe(true)
   })
 })

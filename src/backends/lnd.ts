@@ -134,7 +134,7 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
     name: 'lnd',
     acceptsInvoicePreimage: true,
 
-    async createInvoice({amountMsat, preimageHex, memo, descriptionForHash}) {
+    async createInvoice({amountMsat, preimageHex, memo, descriptionForHash, expirySecs}) {
       if (preimageHex === undefined) {
         throw new Error('lnd accepts a caller-supplied invoice preimage and was given none.')
       }
@@ -143,6 +143,7 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
         body: {
           value_msat: String(amountMsat),
           r_preimage: hexToBase64(preimageHex),
+          ...(expirySecs === undefined ? {} : {expiry: String(expirySecs)}),
           ...(descriptionForHash === undefined
             ? {memo}
             : {description_hash: hexToBase64(bytesToHex(sha256(utf8ToBytes(descriptionForHash))))})

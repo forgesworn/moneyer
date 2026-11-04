@@ -2,6 +2,7 @@ import {DatabaseSync} from 'node:sqlite'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, utf8ToBytes} from '@noble/hashes/utils.js'
 import {bearerNoteId} from './spend.ts'
+import {shareOnFile} from './shares.ts'
 
 // The store holds note ids and never a secret. Per LUD-25 a note is its
 // taproot output key Q, and is stored under hex(Q): the cp1 a wallet named,
@@ -111,7 +112,10 @@ const BUSY_TIMEOUT_MS = 5_000
 
 export type ZapNameRow = {
   name: string
-  pubkey: string
+  // The Nostr key that owns the name (NIP-98), or null for a LUD-26
+  // address registered by its share alone, which no Nostr key owns. Stored
+  // as '' in that case, so the column keeps its NOT NULL.
+  pubkey: string | null
   createdAt: number
   paidMsat: number
   source: 'env' | 'self'
@@ -144,6 +148,29 @@ export class OutputCollisionError extends Error {}
 // An earlier melt into this invoice paid it, or has not yet resolved. Only
 // one the funding source confirmed never paid may be melted into again.
 export class InvoiceUsedError extends Error {}
+// LUD-26's two registration refusals, with the reasons it fixes.
+export class NameTakenError extends Error {
+  constructor() {
+    super('already registered')
+  }
+}
+export class KeyUsedError extends Error {
+  constructor() {
+    super('cx1 already used')
+  }
+}
+
+// A LUD-26 registration held for its address fee: the name is taken for
+// everyone else until the invoice settles or expires.
+export type AddressHoldRow = {
+  paymentHash: string
+  pr: string
+  name: string
+  cx1: string
+  feeMsat: number
+  expiresAt: number
+  settled: boolean
+}
 
 export class NoteStore {
   private db: DatabaseSync
@@ -279,6 +306,34 @@ export class NoteStore {
         .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('address_purpose_counter', ?)")
         .run(String(Date.now()))
       if (moved.changes > 0) this.db.exec('UPDATE zap_names SET next_index = 0')
+    })
+    // LUD-26: every share key this mint ever accepted, by x(P), so none is
+    // registered twice and a captured proof never applies again. Kept when
+    // a name is unregistered or moved. Backfilled from the cx1s on file,
+    // whichever form, every start (it is idempotent).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS accepted_keys (
+        x_only TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS address_holds (
+        payment_hash TEXT PRIMARY KEY,
+        pr TEXT NOT NULL,
+        name TEXT NOT NULL,
+        cx1 TEXT NOT NULL,
+        fee_msat INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        settled INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS address_holds_name ON address_holds (name);
+    `)
+    this.tx(() => {
+      const insert = this.db.prepare('INSERT OR IGNORE INTO accepted_keys (x_only, created_at) VALUES (?, ?)')
+      for (const row of this.db.prepare('SELECT cx1 FROM zap_names WHERE cx1 IS NOT NULL').all() as Array<{cx1: string}>) {
+        const share = shareOnFile(row.cx1)
+        if (share) insert.run(bytesToHex(share.xOnly), Date.now())
+      }
     })
   }
 
@@ -738,7 +793,7 @@ export class NoteStore {
   settleZapInvoiceToKey(
     paymentHash: string,
     keyAt: (index: number) => string | null,
-    build: (noteId: string, index: number) => {wrapJson: string; receiptJson: string | null}
+    build: (noteId: string, index: number) => {wrapJson: string | null; receiptJson: string | null}
   ): {noteId: string; index: number} | null {
     return this.tx(() => {
       const row = this.zapInvoiceByHash(paymentHash)
@@ -791,7 +846,7 @@ export class NoteStore {
   private nameRow(row: Record<string, unknown>): ZapNameRow {
     return {
       name: row.name as string,
-      pubkey: row.pubkey as string,
+      pubkey: (row.pubkey as string) || null,
       createdAt: row.created_at as number,
       paidMsat: row.paid_msat as number,
       source: row.source as 'env' | 'self',
@@ -816,10 +871,160 @@ export class NoteStore {
 
   // A new branch starts at index 0; the same branch sent again keeps its
   // place, so re-registering cannot walk the holder's keys backwards.
+  //
+  // Setting a cx1 accepts its key, refusing one accepted before
+  // (KeyUsedError), unless it is the very cx1 already on file.
   setZapNameCx1(name: string, cx1: string | null): void {
-    this.db
-      .prepare('UPDATE zap_names SET next_index = CASE WHEN cx1 IS ? THEN next_index ELSE 0 END, cx1 = ? WHERE name = ?')
-      .run(cx1, cx1, name.toLowerCase())
+    this.tx(() => {
+      const current = this.zapName(name)
+      if (cx1 !== null && current?.cx1 !== cx1) this.acceptKey(cx1)
+      this.db
+        .prepare('UPDATE zap_names SET next_index = CASE WHEN cx1 IS ? THEN next_index ELSE 0 END, cx1 = ? WHERE name = ?')
+        .run(cx1, cx1, name.toLowerCase())
+    })
+  }
+
+  // ---- LUD-26 registration ----
+
+  // Has this share's x(P) ever been accepted here?
+  keyAccepted(cx1: string): boolean {
+    const share = shareOnFile(cx1)
+    return share !== null && this.db.prepare('SELECT 1 FROM accepted_keys WHERE x_only = ?').get(bytesToHex(share.xOnly)) !== undefined
+  }
+
+  // Inside a transaction: record the key, or refuse one seen before.
+  private acceptKey(cx1: string): void {
+    const share = shareOnFile(cx1)
+    if (!share) throw new Error('not a cx1')
+    const inserted = this.db
+      .prepare('INSERT OR IGNORE INTO accepted_keys (x_only, created_at) VALUES (?, ?)')
+      .run(bytesToHex(share.xOnly), Date.now())
+    if (inserted.changes !== 1) throw new KeyUsedError()
+  }
+
+  // A hold that still keeps the name from everyone else.
+  private liveHold(name: string, nowMs: number): AddressHoldRow | null {
+    const row = this.db
+      .prepare(
+        'SELECT payment_hash, pr, name, cx1, fee_msat, expires_at, settled FROM address_holds WHERE name = ? AND settled = 0 AND expires_at > ? ORDER BY created_at DESC LIMIT 1'
+      )
+      .get(name.toLowerCase(), nowMs) as Record<string, unknown> | undefined
+    return row ? this.holdRow(row) : null
+  }
+
+  private holdRow(row: Record<string, unknown>): AddressHoldRow {
+    return {
+      paymentHash: row.payment_hash as string,
+      pr: row.pr as string,
+      name: row.name as string,
+      cx1: row.cx1 as string,
+      feeMsat: row.fee_msat as number,
+      expiresAt: row.expires_at as number,
+      settled: row.settled === 1
+    }
+  }
+
+  // Registered, or held for an unpaid address fee: LUD-26's "already
+  // registered" either way.
+  nameTaken(name: string, nowMs: number = Date.now()): boolean {
+    return this.zapName(name) !== null || this.liveHold(name, nowMs) !== null
+  }
+
+  heldAddress(name: string, nowMs: number = Date.now()): AddressHoldRow | null {
+    return this.liveHold(name, nowMs)
+  }
+
+  // A free registration by a share alone: no Nostr key owns the name.
+  registerShareName(args: {name: string; cx1: string; nowMs?: number}): void {
+    this.tx(() => {
+      if (this.nameTaken(args.name, args.nowMs ?? Date.now())) throw new NameTakenError()
+      this.acceptKey(args.cx1)
+      this.db
+        .prepare("INSERT INTO zap_names (name, pubkey, created_at, paid_msat, source, cx1) VALUES (?, '', ?, 0, 'self', ?)")
+        .run(args.name.toLowerCase(), Date.now(), args.cx1)
+    })
+  }
+
+  // A registration that waits on its address fee. The key is accepted now:
+  // the proof has been seen, so it must never apply again.
+  holdAddress(args: {paymentHash: string; pr: string; name: string; cx1: string; feeMsat: number; expiresAt: number; nowMs?: number}): void {
+    this.tx(() => {
+      if (this.nameTaken(args.name, args.nowMs ?? Date.now())) throw new NameTakenError()
+      this.acceptKey(args.cx1)
+      this.db
+        .prepare(
+          'INSERT INTO address_holds (payment_hash, pr, name, cx1, fee_msat, expires_at, settled, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)'
+        )
+        .run(args.paymentHash, args.pr, args.name.toLowerCase(), args.cx1, args.feeMsat, args.expiresAt, Date.now())
+    })
+  }
+
+  unsettledHolds(): AddressHoldRow[] {
+    return (
+      this.db
+        .prepare('SELECT payment_hash, pr, name, cx1, fee_msat, expires_at, settled FROM address_holds WHERE settled = 0')
+        .all() as Record<string, unknown>[]
+    ).map(row => this.holdRow(row))
+  }
+
+  // The fee is paid: register the name, unless the hold lapsed and somebody
+  // else has it now, in which case the fee is kept and nothing registered.
+  // Null if the hold was already settled (a racing poll) or never existed.
+  settleHold(paymentHash: string): {name: string; registered: boolean} | null {
+    return this.tx(() => {
+      const row = this.db
+        .prepare('SELECT payment_hash, pr, name, cx1, fee_msat, expires_at, settled FROM address_holds WHERE payment_hash = ?')
+        .get(paymentHash) as Record<string, unknown> | undefined
+      if (!row) return null
+      const hold = this.holdRow(row)
+      if (hold.settled) return null
+      this.db.prepare('UPDATE address_holds SET settled = 1 WHERE payment_hash = ?').run(paymentHash)
+      if (this.zapName(hold.name)) return {name: hold.name, registered: false}
+      this.db
+        .prepare("INSERT INTO zap_names (name, pubkey, created_at, paid_msat, source, cx1) VALUES (?, '', ?, ?, 'self', ?)")
+        .run(hold.name, Date.now(), hold.feeMsat, hold.cx1)
+      return {name: hold.name, registered: true}
+    })
+  }
+
+  deleteUnsettledHold(paymentHash: string): void {
+    this.db.prepare('DELETE FROM address_holds WHERE payment_hash = ? AND settled = 0').run(paymentHash)
+  }
+
+  // LUD-26's internal transfer: burn the inputs and credit their value to
+  // the share's next unused key, in one transaction, recording the request
+  // under `fingerprint` so a retry is answered as the first. The key is
+  // picked here, as at a zap's settlement, skipping any that names a note.
+  transferToShare(args: {
+    inputIds: string[]
+    name: string
+    amountMsat: number
+    fingerprint: string
+  }): {noteId: string; index: number} {
+    return this.tx(() => {
+      const row = this.zapName(args.name)
+      const share = shareOnFile(row?.cx1)
+      if (!row || !share) throw new NoteUnavailableError(`${args.name} has no share`)
+      if (new Set(args.inputIds).size !== args.inputIds.length) {
+        throw new NoteUnavailableError('a note is named twice among the inputs')
+      }
+      for (const id of args.inputIds) this.assertOutstanding(id)
+      let index = row.nextIndex
+      let noteId: string | null = null
+      for (let tries = 0; tries < 1000 && noteId === null; tries++) {
+        const candidate = share.noteAt(index)
+        if (candidate !== null && !this.outputIdInUse(candidate)) noteId = candidate
+        else index += 1
+      }
+      if (noteId === null) throw new Error(`no free key on the share of ${args.name}`)
+      for (const id of args.inputIds) this.setNoteState(id, 'burned')
+      this.insertNote(noteId, args.amountMsat)
+      this.db.prepare('UPDATE zap_names SET next_index = ? WHERE name = ?').run(index + 1, row.name)
+      this.db
+        .prepare('INSERT OR REPLACE INTO swaps (fingerprint, outputs, created_at) VALUES (?, ?, ?)')
+        .run(args.fingerprint, JSON.stringify([[noteId, args.amountMsat]]), Date.now())
+      return {noteId, index}
+    })
   }
 
   // The operator's own names, re-applied at every startup. Idempotent, and
@@ -847,8 +1052,17 @@ export class NoteStore {
   // failure modes either side of it are both bad - a name nobody paid
   // for, or a note burned for a name somebody else got first. The INSERT
   // is also the race check: two requests for one name cannot both win.
-  buyZapName(args: {name: string; pubkey: string; noteId?: string; paidMsat: number; cx1?: string | null}): void {
+  buyZapName(args: {
+    name: string
+    pubkey: string
+    noteId?: string
+    paidMsat: number
+    cx1?: string | null
+    nowMs?: number
+  }): void {
     this.tx(() => {
+      if (this.liveHold(args.name, args.nowMs ?? Date.now())) throw new NameTakenError()
+      if (args.cx1) this.acceptKey(args.cx1)
       if (args.noteId !== undefined) {
         this.assertOutstanding(args.noteId)
         this.setNoteState(args.noteId, 'burned')
