@@ -91,8 +91,13 @@ describe('a zap name', () => {
     expect(mintBody.withdrawLink).toBe('http://mint.test/w')
     expect(mintBody).not.toHaveProperty('allowsNostr')
 
-    expect((await fetch(`${mint.moneyer.url}/.well-known/lnurlp/bob`)).status).toBe(404)
-    expect((await fetch(`${mint.moneyer.url}/z/cb/bob?amount=5000`)).status).toBe(404)
+    // LNURL answers an unknown name in its JSON, not with a status code;
+    // LUD-26 fixes the reason, which a wallet reads as "this name is free".
+    for (const path of ['/.well-known/lnurlp/bob', '/z/cb/bob?amount=5000']) {
+      const res = await fetch(`${mint.moneyer.url}${path}`)
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({status: 'ERROR', reason: 'unknown user'})
+    }
   })
 
   it('turns a settled zap into a note alice can open and rotate, and a receipt the zapper can see', async () => {

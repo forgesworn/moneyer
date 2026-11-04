@@ -23,7 +23,7 @@ import {mkdtempSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {NoteStore} from '../src/store.ts'
-import {freshK1, mintFeeBand, startMint, type TestMint, noteIdOf, certifiesNote} from './helpers.ts'
+import {freshK1, mintFeeBand, startMint, type TestMint, noteIdOf, certifiesNote, TEST_DOMAIN} from './helpers.ts'
 
 // Naming the note you are buying.
 //
@@ -130,7 +130,7 @@ describe('minting to a named note', () => {
     const verification = await fetchInvoiceVerification(reply.verify!)
     expect(verification.mint?.signature).toBeDefined()
     expect(() =>
-      validateBoundMintReceipt({pr: reply.pr!} as InvoiceResult, verification, cp1, 21_000, mint.moneyer.signer!.pubkey)
+      validateBoundMintReceipt({pr: reply.pr!} as InvoiceResult, verification, cp1, 21_000, mint.moneyer.signer!.pubkey, TEST_DOMAIN)
     ).not.toThrow()
   })
 
@@ -166,10 +166,10 @@ describe('minting to a named note', () => {
     // The receipt carries the note's ordinary certificate, a cs1 over its
     // Q, and the kit's own validator accepts it against the quote.
     expect(
-      verifyNoteSignatureForKey(bearerNoteIdOfHash(receipt.mint.h), 21_000, receipt.mint.sig, mint.moneyer.signer!.pubkey)
+      verifyNoteSignatureForKey(bearerNoteIdOfHash(receipt.mint.h), TEST_DOMAIN, 21_000, receipt.mint.sig, mint.moneyer.signer!.pubkey)
     ).toBe(true)
     expect(() =>
-      validateBoundMintReceipt({pr: reply.pr!} as InvoiceResult, verification, hashK1(secret), 21_000, mint.moneyer.signer!.pubkey)
+      validateBoundMintReceipt({pr: reply.pr!} as InvoiceResult, verification, hashK1(secret), 21_000, mint.moneyer.signer!.pubkey, TEST_DOMAIN)
     ).not.toThrow()
 
     // It is not a note. Neither reading it nor spending it works.

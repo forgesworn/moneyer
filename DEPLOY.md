@@ -314,3 +314,34 @@ be JSON, a table, or empty: the check ignores it and proves settlement from
 LUD-21 instead. If either command or the network is interrupted, keep the
 state file and rerun the exact command. On success the refund has settled,
 the test note is burned, and the state file retains only public audit fields.
+
+## Upgrading across LUD-26 (the release after 0.21.0)
+
+The first start adds two tables, `accepted_keys` and `address_holds`, and
+fills `accepted_keys` from the `cx1`s already on file. Nothing existing is
+rewritten, but take a snapshot first all the same:
+
+```bash
+moneyer admin snapshot /var/backups/moneyer-pre-lud26.db
+```
+
+What changes for people already using the mint:
+
+- **Certificates bind the domain.** Every `cs1` issued from now on signs
+  `LNURLcash:<domain>:<amount_msat>:<hex(Q)>`. Certificates already handed
+  out keep the old message, which current wallets still read as legacy.
+- **Names registered before keep working.** A name holding a whole-branch
+  `cx1` keeps crediting the old purpose-2 keys, but its payRequest stops
+  publishing that `cx1` (`text/cpub`). A wallet that used the hint for a
+  same-mint transfer pays by Lightning instead, or by LUD-26's internal
+  transfer once it has one.
+- **New registrations need a LUD-26 share.** A wallet still on the
+  whole-branch `cx1` and the proof without a `cx1` in it (notecase on kit
+  0.20.x, heartwood's `cash_address` before its LUD-26 support) is refused
+  at both `POST /names` and the new routes. Holders move a name with a PUT
+  once their wallet speaks LUD-26.
+- **The address fee is the name price.** With `MONEYER_NAME_PRICE_MSAT`
+  above zero, `mint@` advertises it and a registration at the address is
+  charged by invoice. At `0` the new route is free and has no per-key cap
+  (it has no key to count): rate limit `/.well-known/lnurlp/` POSTs at the
+  reverse proxy, or set a price.

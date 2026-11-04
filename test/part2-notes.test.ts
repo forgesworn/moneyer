@@ -13,7 +13,7 @@ import {bech32m} from '@scure/base'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
 import {keyPathSighash} from '../src/spend.ts'
-import {freshK1, startMint, type TestMint, noteIdOf, certifiesNote} from './helpers.ts'
+import {freshK1, startMint, type TestMint, noteIdOf, certifiesNote, TEST_DOMAIN} from './helpers.ts'
 
 // LUD-25 Part 2: a note keyed by a public key (cp1), spent with a recoverable
 // ownership signature (ck1), certified by the mint as cs1.
@@ -137,7 +137,7 @@ describe('looking a cp1 note up', () => {
     expect(byKey.maxWithdrawable).toBe(42_000)
     expect(byKey).not.toHaveProperty('k1')
     expect(certifies(mint, key, 42_000, byKey.c)).toBe(true)
-    expect(verifyNoteSignatureForKey(key.id, 42_000, byKey.c as string, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(verifyNoteSignatureForKey(key.id, TEST_DOMAIN, 42_000, byKey.c as string, mint.moneyer.signer.pubkey)).toBe(true)
   })
 
   it('not by its key as bare hex, which LUD-25 reads as a bearer note h', async () => {
@@ -175,7 +175,7 @@ describe('spending with a ck1', () => {
     const reply = await callback(mint, [['k1', from.ck1], ['p1', to.cp1]])
     expect(reply.status).toBe('OK')
     expect(certifies(mint, to, 30_000, reply.c)).toBe(true)
-    expect((await info(mint, [['k1', from.ck1]])).reason).toBe('Note already spent.')
+    expect((await info(mint, [['k1', from.ck1]])).reason).toBe('already in use')
     expect((await info(mint, [['k1', to.ck1]])).maxWithdrawable).toBe(30_000)
   })
 
@@ -244,7 +244,7 @@ describe('spending with a ck1', () => {
     const pr = fakeBolt11({amountMsat: 21_000, paymentHashHex: freshK1()})
     expect((await callback(mint, [['k1', key.ck1], ['pr', pr]])).status).toBe('OK')
     // reserved while the payment is in flight, burned once it lands
-    expect((await info(mint, [['k1', key.ck1]])).reason).toMatch(/^pending$|^Note already spent\.$/)
+    expect((await info(mint, [['k1', key.ck1]])).reason).toMatch(/^pending$|^already in use$/)
   })
 
   it('refuses a ck1 whose key holds no note, burning nothing', async () => {
@@ -283,7 +283,7 @@ describe('a note held under an older ck1 shape', () => {
       expect(reply.status).toBe('OK')
       expect(certifies(mint, to, 40_000, reply.c)).toBe(true)
       // the rotate burned the note itself, whichever spelling named it
-      expect((await info(mint, [['k1', key.ck1]])).reason).toBe('Note already spent.')
+      expect((await info(mint, [['k1', key.ck1]])).reason).toBe('already in use')
     })
 
     it(`melts a ${how} ck1`, async () => {

@@ -5,6 +5,7 @@ import {applyMintFee, encodeCs1WithAmount, grossUpForMintFee, hashK1} from '@lnu
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import type {MoneyerConfig} from './config.ts'
 import {
+  HoldUnavailableError,
   InvoiceUsedError,
   NotePendingError,
   NoteStore,
@@ -24,10 +25,11 @@ import {PaymentPendingError, type LightningBackend, type NodeInfo} from './backe
 import {reconcilePendingMelts, runMelt, type MeltOutcome} from './melt.ts'
 import {landingPage} from './landing.ts'
 import {packageVersion} from './version.ts'
-import {createZapBridge, poolTransport, type NostrTransport, type ZapBridge} from './zap.ts'
+import {addressName, createZapBridge, poolTransport, type NostrTransport, type ZapBridge} from './zap.ts'
 import {STATS_D_TAG, STATS_KIND, buildStats, statsSnapshotContent, type MintStats} from './stats.ts'
 import {ANNOUNCE_D_TAG, ANNOUNCE_KIND, announcementContent} from './announce.ts'
 import {isRefusal, registerName, validateNip98} from './names.ts'
+import {registerAddress, unregisterAddress, updateAddress, type AddressContext, type FeeInvoice} from './addresses.ts'
 import {CONFIG_TOKEN, loadWebAssets, type WebAssets} from './web-assets.ts'
 
 const HEX32 = /^[0-9a-f]{64}$/
@@ -126,6 +128,8 @@ const MAX_BODY_BYTES = 8 * 1024
 // OK. Long enough for a no-route failure, short against a wallet's timeout.
 const MELT_ANSWER_WINDOW_MS = 2_000
 
+const ADDRESS_FEE_EXPIRY_SECS = 3_600
+
 const readBody = async (req: IncomingMessage, limit = MAX_BODY_BYTES): Promise<string | null> => {
   const chunks: Buffer[] = []
   let size = 0
@@ -174,15 +178,16 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   const kernel =
     deps.scriptVerifier === undefined && config.scriptVerifier ? createKernelVerifier({command: config.scriptVerifier, log}) : null
   const scriptVerifier = deps.scriptVerifier ?? kernel ?? undefined
-  // LUD-25 offline verification: a cs1 over hex(Q) and the amount, for
-  // every note, bearer notes included.
-  const certify = (q: string, amountMsat: number): string =>
-    encodeCs1WithAmount(amountMsat, hexToBytes(signer.sign(q, amountMsat)))
+  // LUD-25 offline verification: a cs1 over the domain, hex(Q) and the
+  // amount, for every note, bearer notes included. The domain is the host
+  // the note was asked about on, which is the host its URL names.
+  const certify = (q: string, amountMsat: number, domain: string): string =>
+    encodeCs1WithAmount(amountMsat, hexToBytes(signer.sign(q, domain, amountMsat)))
   // LUD-25 names the certificate `c` (and `c2` for split change). The
   // `sig`/`sig2` that went out alongside them from 0.17.0 to 0.20.1 are
   // gone: the draft never named them, and every wallet reads `c`.
-  const certified = (field: 'c' | 'c2', q: string, amountMsat: number): Record<string, string> => ({
-    [field]: certify(q, amountMsat)
+  const certified = (domain: string, field: 'c' | 'c2', q: string, amountMsat: number): Record<string, string> => ({
+    [field]: certify(q, amountMsat, domain)
   })
 
   // Every host this mint answers on. A spend's signature is bound to one
@@ -190,6 +195,9 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   // bound to any of this mint's own hosts is this mint's. Without a
   // configured origin (development) the host a request reached is used.
   const configuredDomains = [...new Set([config.publicOrigin, config.onionUrl].filter(Boolean).map(origin => spendDomainOf(origin!)))]
+  // An internal transfer reaches the zap bridge without its request, so it
+  // takes this mint's configured domains; zaps need a public origin anyway.
+  const zapSpendDomains = (): string[] => configuredDomains
   const webAssets = deps.webAssets === undefined ? loadWebAssets() : deps.webAssets
 
   // Node identity for the discovery endpoint, fetched once, best-effort: a
@@ -250,6 +258,14 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     Math.max(Math.round(amountMsat * 0.005), 5_000, mintFeeMsat(amountMsat))
 
   const mintFeeLine = config.mintFee ? `Mint fees: ${config.mintFee.baseFeeMsat},${config.mintFee.feePpm}` : null
+  // LUD-26's address fee is what registering a name costs, so it is the
+  // name price, and it is advertised only where a wallet looks before it
+  // registers: mint@'s payRequest, as a third value of the same token. A
+  // name's own payRequest carries the two-value line, mint@'s mint fees.
+  const addressFeeMsat = config.zap && config.namePriceMsat ? config.namePriceMsat : 0
+  const mintFeeLineWithAddressFee = addressFeeMsat
+    ? `Mint fees: ${config.mintFee?.baseFeeMsat ?? 0},${config.mintFee?.feePpm ?? 0},${addressFeeMsat}`
+    : mintFeeLine
   // The same fee for a person: "Mint fees: 5000,1000" is for wallets that
   // parse LUD-25, and reads as nonsense to anyone who does not.
   const feeInWords = config.mintFee ? describeFee(config.mintFee, config.roundFeeToSat !== false) : null
@@ -269,6 +285,11 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           feeInWords,
           verify: config.verify,
           certify,
+          withdrawLink: `${config.publicOrigin ?? ''}/w`,
+          openNote: async k1 => {
+            const opened = await openNote(k1, zapSpendDomains())
+            return 'reason' in opened ? {reason: opened.reason} : {q: opened.q, note: opened.note}
+          },
           // configFromEnv guarantees this when zap is set; a caller
           // building the config by hand gets the same rule.
           origin: config.publicOrigin ?? (() => {
@@ -277,6 +298,26 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
           log
         })
       : null
+
+  // LUD-26's address fee invoice. Payable for an hour, as the reference
+  // mint's is: the name is held for exactly as long as it can be paid, and
+  // a name held is taken from everyone else, so not for a node's default
+  // day. Its preimage redeems nothing; only its payment hash is kept.
+  const issueFeeInvoice = async (feeMsat: number, name: string, host: string): Promise<FeeInvoice> => {
+    const preimage = bytesToHex(randomBytes(32))
+    const {pr} = await backend.createInvoice({
+      amountMsat: feeMsat,
+      preimageHex: preimage,
+      memo: `Register ${name}@${host}`,
+      expirySecs: ADDRESS_FEE_EXPIRY_SECS
+    })
+    const decoded = tryDecodeBolt11(pr)
+    if (!decoded || decoded.amountMsats !== BigInt(feeMsat)) throw new Error('the funding source invoiced another amount')
+    if (backend.acceptsInvoicePreimage && decoded.paymentHashHex !== hashK1(preimage)) {
+      throw new Error('the funding source ignored the preimage it was given')
+    }
+    return {pr, paymentHash: decoded.paymentHashHex, expiresAt: (decoded.timestamp + decoded.expirySeconds) * 1000}
+  }
 
   // A note whose Q we do not know yet may be a settled mint invoice whose
   // claim simply has not been observed: settle it lazily against the
@@ -515,6 +556,9 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     )
     const host = new URL(origin).host
     const spendDomains = configuredDomains.length ? configuredDomains : [spendDomainOf(origin)]
+    // What every certificate in this response is bound to: the host this
+    // request reached, the one the note URLs it hands out name.
+    const certDomain = spendDomainOf(origin)
 
     const send = (body: unknown, status = 200): void => {
       res.writeHead(status, {
@@ -539,7 +583,13 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       send({status: 'ERROR', reason}, status)
     }
 
-    const knownUser = (user: string): boolean => user === config.username || user === '_'
+    // `mint` always names the mint's own payRequest, whatever the mint is
+    // called: LUD-26 has a wallet find the withdrawLink and the address fee
+    // at mint@<domain> from the domain alone.
+    const knownUser = (user: string): boolean => {
+      const lowered = user.toLowerCase()
+      return lowered === config.username.toLowerCase() || lowered === '_' || lowered === 'mint'
+    }
 
     // ---- the mint's face ----
     if (requestUrl.pathname === '/' && (req.method === 'GET' || req.method === 'HEAD')) {
@@ -654,6 +704,57 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       })
     }
 
+    // ---- LUD-26 registration, at the Lightning Address itself ----
+    //
+    // Also above the GET-only gate: POST registers, PUT moves a name to a
+    // new share, DELETE unregisters, each proven by a share's own key (see
+    // src/addresses.ts). Form-encoded, so a browser wallet's POST needs no
+    // preflight; PUT and DELETE do, and it is answered here. Every answer is
+    // HTTP 200 with CORS, the reason in the body, as LNURL answers.
+    const addressPath = /^\/\.well-known\/lnurlp\/([^/]+)$/.exec(requestUrl.pathname)
+    if (addressPath && req.method !== 'GET' && req.method !== 'HEAD') {
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, {
+          'access-control-allow-origin': '*',
+          'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
+          'access-control-allow-headers': req.headers['access-control-request-headers'] ?? 'content-type',
+          'access-control-max-age': '86400'
+        })
+        res.end()
+        return
+      }
+      if (req.method !== 'POST' && req.method !== 'PUT' && req.method !== 'DELETE') return fail('Not found.', 404)
+      if (!zap) return fail('This mint is not registering names.')
+      // A sunsetting mint takes no new names, and no fee for one that could
+      // never be paid into. Moving or freeing a name stays open.
+      if (config.sunset && req.method === 'POST') return fail('This mint is sunsetting - registration is closed.')
+      const body = await readBody(req)
+      if (body === null) return fail('Request body too large.')
+      const form = new URLSearchParams(body)
+      for (const [key, value] of q) if (!form.has(key)) form.set(key, value)
+      let username: string
+      try {
+        username = decodeURIComponent(addressPath[1]!)
+      } catch {
+        return fail('unknown user')
+      }
+      const ctx: AddressContext = {
+        store,
+        domains: spendDomains,
+        reserved: [config.username],
+        feeMsat: config.namePriceMsat,
+        issueFeeInvoice: (feeMsat, name) => issueFeeInvoice(feeMsat, name, host),
+        log
+      }
+      const result =
+        req.method === 'POST'
+          ? await registerAddress(ctx, username, form)
+          : req.method === 'PUT'
+            ? updateAddress(ctx, username, form)
+            : unregisterAddress(ctx, username, form)
+      return 'reason' in result ? fail(result.reason) : send(result)
+    }
+
     // Every LNURL endpoint below is a GET. The method matters: /w/cb
     // mutates on whatever arrives, and an OPTIONS preflight or a stray
     // retry carrying the same query string must never burn a note.
@@ -666,7 +767,8 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     if (requestUrl.pathname === '/.well-known/nostr.json') {
       const wanted = q.get('name')?.toLowerCase()
       const entry = wanted ? store.zapName(wanted) : null
-      return send({names: entry ? {[entry.name]: entry.pubkey} : {}})
+      // A name owned by its share alone names no Nostr key.
+      return send({names: entry?.pubkey ? {[entry.name]: entry.pubkey} : {}})
     }
 
     // ---- machine-readable operating figures ----
@@ -725,29 +827,39 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
 
     // ---- Zap-to-note: a name that pays out as a note over Nostr ----
     const lnurlpMatch = requestUrl.pathname.match(/^\/\.well-known\/lnurlp\/(.+)$/)
-    if (lnurlpMatch && zap && zap.isZapName(lnurlpMatch[1]!)) {
-      return send(zap.payRequest(lnurlpMatch[1]!))
+    if (lnurlpMatch && zap && !knownUser(lnurlpMatch[1]!)) {
+      const wanted = addressName(lnurlpMatch[1]!)
+      if (zap.isZapName(wanted)) return send(zap.payRequest(wanted))
+      // Held for its address fee: published the moment the fee is seen
+      // paid, so a lookup checks rather than waiting for the next poll.
+      const held = store.heldAddress(wanted)
+      if (held && (await zap.settleHold(held.paymentHash)) && zap.isZapName(wanted)) return send(zap.payRequest(wanted))
+      return fail('unknown user')
     }
-    // `/z/cb/<name>`, or `/z/cb/<name>/<index>` for a name advertising a cx1.
+    // `/z/cb/<name>`. A trailing `/<index>` from the payRequests of 0.21.0
+    // and before is read and ignored: the index fed nothing but the old
+    // metadata, so such an invoice simply mismatches and the wallet fetches
+    // the payRequest again.
     const zapCbMatch = requestUrl.pathname.match(/^\/z\/cb\/([^/]+)(?:\/([^/]+))?$/)
     if (zapCbMatch) {
-      if (!zap || !zap.isZapName(zapCbMatch[1]!)) return fail('Unknown user.', 404)
-      if (config.sunset) return fail('This mint is sunsetting - minting is disabled.')
-      const result = await zap.callback(zapCbMatch[1]!, Number(q.get('amount')), q.get('nostr'), zapCbMatch[2] ?? null)
+      if (!zap || !zap.isZapName(zapCbMatch[1]!)) return fail('unknown user')
+      const k1 = q.get('k1')
+      // An internal transfer moves a note; it grows no liability, so a
+      // sunsetting mint takes it as it takes a rotate.
+      if (config.sunset && !k1) return fail('This mint is sunsetting - minting is disabled.')
+      const result = await zap.callback(zapCbMatch[1]!, Number(q.get('amount')), q.get('nostr'), k1)
       if ('reason' in result) return fail(result.reason)
-      return send({...result, disposable: false})
+      return send('pr' in result ? {...result, disposable: false} : result)
     }
 
     // ---- LUD-16 payRequest: paying this mints a note ----
     if (lnurlpMatch) {
-      if (!knownUser(lnurlpMatch[1]!)) return fail('Unknown user.', 404)
+      if (!knownUser(lnurlpMatch[1]!)) return fail('unknown user')
       const metadata: Array<[string, string]> = [
         ['text/plain', `Mint an LNURLcash bearer note at ${config.username}@${host}${feeInWords ? ` (${feeInWords})` : ''}`],
         ['text/identifier', `${lnurlpMatch[1]}@${host}`]
       ]
-      if (config.mintFee) {
-        metadata.push(['text/plain', `Mint fees: ${config.mintFee.baseFeeMsat},${config.mintFee.feePpm}`])
-      }
+      if (mintFeeLineWithAddressFee) metadata.push(['text/plain', mintFeeLineWithAddressFee])
       return send({
         tag: 'payRequest',
         callback: `${origin}/p/cb`,
@@ -1008,7 +1120,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
                   mint: {
                     h: echoedName(q, named),
                     amount: currentInvoice.netMsat,
-                    ...(settled ? {sig: certify(q, currentInvoice.netMsat)} : {})
+                    ...(settled ? {sig: certify(q, currentInvoice.netMsat, certDomain)} : {})
                   }
                 }
               })()
@@ -1062,7 +1174,9 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       }
       // Hash lookups protect the secret, not the note's spent state.
       // Retained burned rows let a wallet reconcile without revealing k1.
-      if (note.state === 'burned') return fail('Note already spent.')
+      // LUD-25 fixes the answer for a burned note, here as at the callback:
+      // a recovery scan counts exactly "already in use" as a used index.
+      if (note.state === 'burned') return fail(IN_USE)
       // A note reserved by an in-flight melt is not withdrawable, and must
       // not be advertised as though it were. LUD-25 makes this GET the way
       // anyone checks what a note is worth, so answering "live, worth all
@@ -1101,7 +1215,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // Every note gets its certificate here, so a wallet need not rotate
         // just to obtain one, and a recovery scan probing ?p= gets one free.
         // A certificate is no spend authorisation, so p needs no proof.
-        ...certified('c', noteQ, note.amountMsat)
+        ...certified(certDomain, 'c', noteQ, note.amountMsat)
       })
     }
 
@@ -1188,14 +1302,16 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         if (first) {
           return send({
             status: 'OK',
-            ...certified('c', o1!.q, first.amountMsat),
-            ...(second ? certified('c2', o2!.q, second.amountMsat) : {})
+            ...certified(certDomain, 'c', o1!.q, first.amountMsat),
+            ...(second ? certified(certDomain, 'c2', o2!.q, second.amountMsat) : {})
           })
         }
       }
 
+      // Not a retry, so a burned input is a double spend, or a retry whose
+      // p1, p2 or amount differ: LUD-25 answers both "already in use".
       for (const {note} of opened) {
-        if (note.state === 'burned') return fail(INVALID_K1)
+        if (note.state === 'burned') return fail(IN_USE)
         if (note.state === 'pending') return fail('pending')
       }
       const found = opened.map(input => input.note)
@@ -1235,6 +1351,21 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // source's money back at itself; refuse synchronously.
         if (store.mintInvoiceByHash(paymentHash)) {
           return fail('Cannot melt into an invoice this mint issued itself.')
+        }
+        // A LUD-26 address fee is this mint's own invoice too, and LUD-26
+        // lets a wallet pay it by melting a note here. Settled in the store,
+        // never routed: the node would only be paying itself.
+        if (store.holdByHash(paymentHash)) {
+          try {
+            const paid = store.payHoldWithNote(paymentHash, inputIds[0]!)
+            log(paid.registered ? `address ${paid.name} registered: fee paid with a note` : `address fee for ${paid.name} paid with a note, but the name was taken: fee kept`)
+            return send({status: 'OK'})
+          } catch (err) {
+            if (err instanceof NotePendingError) return fail('pending')
+            if (err instanceof NoteUnavailableError) return fail(IN_USE)
+            if (err instanceof HoldUnavailableError) return fail(`Cannot pay that address fee: ${err.message}.`)
+            throw err
+          }
         }
         // The funding source dedupes payments by hash, so a second melt
         // into the same invoice would be "confirmed" against the first
@@ -1347,8 +1478,8 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         }
         return send({
           status: 'OK',
-          ...certified('c', o1!.q, amount),
-          ...certified('c2', o2!.q, changeMsat)
+          ...certified(certDomain, 'c', o1!.q, amount),
+          ...certified(certDomain, 'c2', o2!.q, changeMsat)
         })
       }
 
@@ -1364,7 +1495,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         if (err instanceof OutputCollisionError) return fail(IN_USE)
         return fail(INVALID_K1)
       }
-      return send({status: 'OK', ...certified('c', o1!.q, mergedMsat)})
+      return send({status: 'OK', ...certified(certDomain, 'c', o1!.q, mergedMsat)})
     }
 
     return fail('Not found.', 404)
@@ -1417,6 +1548,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     zapPass = (async () => {
       try {
         await zap.settle()
+        await zap.settleHolds()
         await zap.publish()
       } catch (err) {
         log(`zap pass failed: ${(err as Error).message}`)

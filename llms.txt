@@ -140,26 +140,35 @@ signStats(stats, privHex) -> string   the signature alone, hex r || s || recover
 
 ## Endpoints
 
-/.well-known/lnurlp/{user}  LUD-16 payRequest (mints)
+/.well-known/lnurlp/{user}  LUD-16 payRequest (mints); mint@ always, with the address fee as a third Mint fees value
 /.well-known/lnurlw/{user}  LUD-25 mint address (experimental)
 /p/cb                       LUD-06 pay callback: ?amount=<msat>&comment=<hex(sha256(secret)) or cp1> (comment is mandatory)
 /verify/{payment_hash}      LUD-21 verify (mint invoices AND melt payments)
-/w                          LUD-03 informational GET by k1 (preimage, ck1 or cw1, verified in full) or p (a bearer h or a cp1, older h); every note carries its cs1 over Q as c
-/w/cb                       melt / rotate / split / merge; inputs preimages, ck1 or cw1, outputs p1/p2 as a bearer h or cp1 (or older h/h2); every output certified as cs1 over Q; a taken output is `already in use`
+/w                          LUD-03 informational GET by k1 (preimage, ck1 or cw1, verified in full) or p (a bearer h or a cp1, older h); every note carries its cs1 over LNURLcash:<domain>:<amount>:<hex(Q)> as c; a burned note is "already in use"
+/w/cb                       melt / rotate / split / merge; inputs preimages, ck1 or cw1, outputs p1/p2 as a bearer h or cp1 (or older h/h2); every output certified as cs1 over the domain and Q; a taken output is `already in use`
                             melt:   ?k1=<spend>&pr=<bolt11>  (pr cannot combine with amount or several k1)
                             rotate: ?k1=<spend>&p1=<new note>
                             split:  ?k1=<spend>&amount=<msat>&p1=<note for amount>&p2=<change note>
                             merge:  ?k1=<spend>&k1=<spend>...&p1=<new note>
-POST /names                 claim a name (NIP-98; the signer owns it); body {name, note?, cx1?}.
-                            The owner may resend {name, cx1} to set a branch, or cx1: null to clear it
-/z/cb/{name}                zap invoice for a name. Without a cx1 the mint creates the note's secret at
-                            settlement, wraps it to the recipient and knows it until they rotate the note.
-                            With a cx1 the settled note is credited to the
-                            holder's next key on the branch's Lightning Address purpose (2), and the kind 2525 gift wrap carries no secret:
-                            /w?p=<cp1>&c=<amount-bearing-cs1>&i=<index> plus an `i` tag. The index is
-                            taken at settlement, never at the invoice, and occupied keys are skipped
-                            Its payRequest metadata publishes text/cpub = cx1:<next-free-purpose-2-index> for
-                            same-mint rotate/split/merge transfers; a raced key returns "already in use".
-                            Such a name's callback is /z/cb/{name}/{index}: the index it advertised, so a
-                            non-zap invoice's description hash is sha256 of that exact metadata (a zap's
-                            is of its kind 9734). The index feeds only the metadata, never the note's key
+POST /names                 claim a name (NIP-98; the signer owns it); body {name, note?, cx1?, sig?}.
+                            cx1 is a LUD-26 share (65 bytes, chaincode || P); sig is the share key's BIP-340
+                            signature over sha256("LNURLcash:register:<domain>:<name>:<cx1>"). The owner may
+                            set one later, or send cx1: null with the share on file signing
+                            "LNURLcash:unregister:<domain>:<name>" to clear it. A cx1 on file is never overwritten.
+POST|PUT|DELETE /.well-known/lnurlp/{name}
+                            LUD-26 registration at the address: form-encoded cx1/sig, cx1/sig/newsig (move,
+                            sig by the key on file over LNURLcash:update:<domain>:<name>:<new cx1>), or sig
+                            (unregister). HTTP 200 + CORS always; refusals "already registered",
+                            "cx1 already used", "unknown user", "Invalid ownership signature.". Owned by the
+                            share, no Nostr key; an unsigned npub is refused. With MONEYER_NAME_PRICE_MSAT set
+                            the answer is {status: OK, pr} and the name is held until that invoice settles;
+                            mint@ advertises it as "Mint fees: <base>,<ppm>,<address fee>".
+/z/cb/{name}                invoice for a name (+tag ignored). Without a cx1 the mint creates the note's
+                            secret at settlement, wraps it to the owner's npub and knows it until they
+                            rotate the note. With a cx1 (a share) the note is credited at settlement to the
+                            share's next unused BIP-32 key; a Nostr-owned name also gets a kind 2525 wrap
+                            with no secret: /w?p=<cp1>&c=<cs1>&i=<index>. Such a name's payRequest carries
+                            withdrawLink and the mint fees, no commentAllowed, and no key (no text/cpub).
+                            With k1=<spend>&amount=<the note's full value>: LUD-26 internal transfer, the note
+                            burned and credited free to the share's next key; a retry answers {status: OK}.
+                            Names from before LUD-26 keep a 64-byte whole-branch cx1 and purpose-2 keys.

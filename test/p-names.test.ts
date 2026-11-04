@@ -61,7 +61,7 @@ describe('the informational GET by p', () => {
 
     const spent = creditNote(mint, 21_000)
     expect((await callback(mint, [['k1', spent], ['p1', hashK1(freshK1())]])).status).toBe('OK')
-    expect((await info(mint, [['p', hashK1(spent)]])).reason).toBe('Note already spent.')
+    expect((await info(mint, [['p', hashK1(spent)]])).reason).toBe('already in use')
 
     const melting = creditNote(mint, 21_000)
     const paymentHash = freshK1()
@@ -103,7 +103,7 @@ describe('the callback under p1 and p2', () => {
     expect(body.status).toBe('OK')
     expect(certifiesNote(fresh, 21_000, body.c as string, mint.moneyer.signer.pubkey)).toBe(true)
     expect(await worth(mint, fresh)).toBe(21_000)
-    expect((await info(mint, [['k1', k1]])).reason).toBe('Note already spent.')
+    expect((await info(mint, [['k1', k1]])).reason).toBe('already in use')
   })
 
   it('splits to p1 and p2', async () => {
@@ -240,7 +240,7 @@ describe('the callback under p1 and p2', () => {
     const k1 = creditNote(mint, 21_000)
     expect((await callback(mint, [['k1', k1], ['h', hashK1(freshK1())]])).status).toBe('OK')
     expect((await callback(mint, [['k1', k1], ['p1', hashK1(freshK1())]])).reason).toBe(
-      'Invalid or already spent k1.'
+      'already in use'
     )
   })
 })

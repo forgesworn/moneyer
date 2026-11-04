@@ -334,6 +334,10 @@ export const configFromEnv = (env: NodeJS.ProcessEnv = process.env): MoneyerConf
   if (zap && zap.names[env.MONEYER_USERNAME ?? DEFAULTS.username]) {
     throw new Error('MONEYER_ZAP_NAMES must not reuse the mint username.')
   }
+  // mint@ is the mint's own payRequest whatever it is called (LUD-26).
+  if (zap && (zap.names.mint || zap.names._)) {
+    throw new Error('MONEYER_ZAP_NAMES must not use "mint" or "_": both name the mint itself.')
+  }
   if (flag(env.MONEYER_ANNOUNCE, DEFAULTS.announce) && !zap) {
     // An announcement is a Nostr event, and the mint's Nostr identity is
     // the zap one. Turning this on without it would be a mint that thinks

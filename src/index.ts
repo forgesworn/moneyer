@@ -19,13 +19,26 @@ export {
   NotePendingError,
   NoteUnavailableError,
   OutputCollisionError,
+  NameTakenError,
+  HoldUnavailableError,
+  HOLD_GRACE_MS,
+  KeyUsedError,
+  type AddressHoldRow,
+  type ZapNameRow,
   type NoteRow,
   type NoteState,
   type MeltRow,
   type MintInvoiceRow,
   type Liabilities
 } from './store.ts'
-export {createNoteSigner, noteIdSignatureDigest, recoversToPubkey, signDigestRecoverable, type NoteSigner} from './signing.ts'
+export {
+  createNoteSigner,
+  legacyNoteIdSignatureDigest,
+  noteIdSignatureDigest,
+  recoversToPubkey,
+  signDigestRecoverable,
+  type NoteSigner
+} from './signing.ts'
 export {
   bearerNoteId,
   bearerNoteIdOfPreimage,
@@ -44,6 +57,8 @@ export {
   type Spend,
   type SpendVerdict
 } from './spend.ts'
+export {decodeShare, proofVerifies, registrationMessage, shareOnFile, type ProofAction, type Share} from './shares.ts'
+export {registerAddress, unregisterAddress, updateAddress, type AddressAnswer, type AddressContext, type FeeInvoice} from './addresses.ts'
 export {createKernelVerifier, type KernelVerifier} from './kernel.ts'
 export {
   STATS_D_TAG,

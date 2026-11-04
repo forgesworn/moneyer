@@ -15,6 +15,7 @@ import {
   probeBurnedNote,
   requestInvoiceShort,
   requireBoundMintQuote,
+  serviceDomainOf,
   validateBoundMintReceipt,
   withinMintFeeBand,
   type InvoiceResult,
@@ -336,7 +337,9 @@ export const runLiveBoundMintCheck = async (options: LiveBoundMintCheckOptions):
       verification,
       state.h,
       quoted.netMsat,
-      quoted.mintPubkey
+      quoted.mintPubkey,
+      // The receipt's certificate binds the domain the note URL will name.
+      serviceDomainOf(quoted.withdrawLink.replace(/^lnurlw:/i, 'https:'))
     )
     const paymentHash = decodeBolt11(quoted.quote.pr).paymentHashHex
     if (!verification.preimage || hashK1(verification.preimage) !== paymentHash) {

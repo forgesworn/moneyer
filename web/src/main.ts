@@ -51,15 +51,19 @@ import {noteImage} from './note-image.ts'
 // note over hex(Q), read here off the spend itself; a bearer note certified
 // before that was signed over its old id, sha256(k1). The kit's verifiers
 // that take a k1 derive Q from it themselves, so both go through the
-// explicit-id check.
-const certifiesNote = (k1: string, amountMsat: number, signature: string, mintPubkey: string): boolean => {
+// explicit-id check. A certificate binds the domain the note URL names
+// (luds 92abbb3); the kit still reads one made before that as legacy.
+const certifiesNote = (k1: string, domain: string, amountMsat: number, signature: string, mintPubkey: string): boolean => {
   const spend = decodeSpend(k1)
   const q = spend ? Array.from(spend.outputKey, byte => byte.toString(16).padStart(2, '0')).join('') : null
   return Boolean(
-    (q && verifyNoteSignatureForKey(q, amountMsat, signature, mintPubkey)) ||
-      (isPreimage(k1) && verifyNoteSignatureForKey(hashK1(k1), amountMsat, signature, mintPubkey))
+    (q && verifyNoteSignatureForKey(q, domain, amountMsat, signature, mintPubkey)) ||
+      (isPreimage(k1) && verifyNoteSignatureForKey(hashK1(k1), domain, amountMsat, signature, mintPubkey))
   )
 }
+
+// The lowercase hostname a note URL (lnurlw:// or https://) names.
+const noteDomain = (url: string): string => new URL(url.replace(/^lnurlw:\/\//i, 'https://')).hostname.toLowerCase()
 
 // The mint's own website: mint a note right here, check one, read the
 // terms. Every protocol step goes through @lnurlcash/kit against the same
@@ -994,7 +998,13 @@ const viewInvoice = (args: {
               result.pr.trim().toLowerCase() === args.pr.trim().toLowerCase() &&
               receipt.h === bearerNoteIdOfHash(args.bound.h) &&
               receipt.amountMsat === args.bound.amountMsat &&
-              verifyNoteSignatureForKey(receipt.h, receipt.amountMsat, receipt.signature, mintPubkey)
+              verifyNoteSignatureForKey(
+                receipt.h,
+                noteDomain(pay?.withdrawLink ?? API),
+                receipt.amountMsat,
+                receipt.signature,
+                mintPubkey
+              )
           )
           if (!valid) throw new Error('The settled receipt does not match or authenticate this note.')
           claimed = true
@@ -1063,7 +1073,7 @@ const claimNote = async (preimage: string, grossMsat: number): Promise<void> => 
     const verified = Boolean(
       rotated.signature &&
         info.mintPubkey &&
-        certifiesNote(rotated.k1, info.maxWithdrawable, rotated.signature, info.mintPubkey)
+        certifiesNote(rotated.k1, noteDomain(rawUrl), info.maxWithdrawable, rotated.signature, info.mintPubkey)
     )
     viewNote({url: finalUrl, amountMsat: info.maxWithdrawable, verified, secured: true})
   } catch (err) {
@@ -1256,7 +1266,7 @@ const viewCheck = (): void => {
           const k1 = noteK1(url)!
           const signature = noteSignature(url)
           const verified = Boolean(
-            signature && info.mintPubkey && certifiesNote(k1, info.maxWithdrawable, signature, info.mintPubkey)
+            signature && info.mintPubkey && certifiesNote(k1, noteDomain(url), info.maxWithdrawable, signature, info.mintPubkey)
           )
           const node = renderResult(
             'good',

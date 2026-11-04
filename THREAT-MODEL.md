@@ -117,13 +117,35 @@ only the buyer ever held, the preimage is bearer material for nothing, and
 what `/verify` serves is an ordinary payment proof. Wallets should prefer
 that path wherever a mint advertises `mintToHash`.
 
-**What a `cx1` on a name gives away.** A name with a watch-only branch is
-paid to the holder's keys, so the mint never holds a secret for those notes.
-But the mint can work out every key on the branch, so it can link every
-payment to that name, and see when each note is spent. That is no more than
-a custodial name already reveals. A wallet should keep the branch for
-receiving and rotate what arrives onto keys the mint cannot enumerate, which
-is what notecase and lnurl-wallet do.
+**What a `cx1` on a name gives away.** A name with a LUD-26 share is paid
+to the holder's keys, so the mint never holds a secret for those notes. But
+the mint can work out every key on the share, so it can link every payment
+to that name, and see when each note is spent. That is no more than a
+custodial name already reveals, and it is one share: a wallet hands out a
+fresh one per address, so the mint sees nothing of its other notes. A wallet
+should rotate what arrives onto its own wallet chain, which no share
+reaches, as notecase and lnurl-wallet do. The payRequest publishes no key
+of the share, so a payer learns nothing either.
+
+A name registered before LUD-26 holds a whole branch's `cx1`, and its
+payRequest published that `cx1` in `text/cpub` until 0.21.0. Under the old
+scheme the same branch covered the holder's wallet and change keys, so
+anyone who fetched such a payRequest can link every key-path note of that
+wallet at this mint. It is a linkability leak, not a spending one, and it
+cannot be undone for those names; the holder's way out is to move the name
+to a share and sweep onto keys derived under LUD-26.
+
+**Registration.** A `cx1` is public, so every change of where a name pays is
+proven by a share key: a register by the new share, a move by the key on
+file and the new share together, an unregister by the key on file. Each
+proof binds this mint's domain, the name and (for register and move) the
+`cx1` itself, and no share's `x(P)` is ever accepted twice, so a proof
+captured here can be replayed neither elsewhere nor here. A NIP-98 key owns
+a name registered through `/names`; a name registered at the address is
+owned by its share alone. An unsigned `npub` is refused: binding one would
+let anyone tie a name here to somebody else's Nostr identity. A registration
+held for its address fee holds the name for the invoice's hour only, so a
+squatter has to pay to keep a name from anyone.
 
 ## Out of scope
 
