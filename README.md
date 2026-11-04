@@ -11,7 +11,8 @@ named to the mint only as a hash - so the mint never holds it, and neither
 does any node that forwards the payment. The exception is zap-to-note, where
 the mint creates the secret itself and knows it until the recipient rotates
 the note (see [Zap-to-note](#zap-to-note-a-lightning-address-that-pays-out-as-a-note)),
-unless the name carries a `cx1` key branch. It passes the full
+unless the name has a LUD-26 share, a `cx1`, when payments go to the
+holder's own keys. It passes the full
 [lnurlcash-conformance](https://github.com/lnurlcash/lnurlcash-conformance)
 grader, including the spending checks, and the grader runs in this repo's
 own test suite.
@@ -343,8 +344,10 @@ Everything exported from `src/index.ts`. Amounts are millisatoshis, and a
 | `keyPathSighash(outputKey: Uint8Array, domain: string): Uint8Array` | what a `ck1` signs |
 | `scriptPathSighash(outputKey: Uint8Array, domain: string, leafScript: Uint8Array, locktime: number, sequence: number): Uint8Array` | what a signature inside a `cw1` leaf signs |
 | `spendDomainOf(origin: string): string` | the bare lower-case hostname a spend is bound to |
-| `deriveNotePubkey(branchPubkeyXOnly: Uint8Array, chainCode: Uint8Array, purpose: number, index: number): Uint8Array` | a `cx1` branch's note key |
-| `NOTE_PURPOSE_WALLET` (0), `NOTE_PURPOSE_CHANGE` (1), `NOTE_PURPOSE_LIGHTNING_ADDRESS` (2) | the branch purposes |
+| `decodeShare(cx1: unknown): Share \| null`, `shareOnFile(cx1: string \| null): Share \| null` | a LUD-26 share, or (on file only) a whole branch from before it; `Share` has `cx1`, `legacy`, `xOnly`, `noteAt(index): string \| null` and `proofKeys()` |
+| `registrationMessage(action, domain, username, cx1?): string`, `proofVerifies({action, domains, username, cx1?, keys, sig}): boolean` | LUD-26's registration message and its BIP-340 proof |
+| `deriveNotePubkey(branchPubkeyXOnly: Uint8Array, chainCode: Uint8Array, purpose: number, index: number): Uint8Array` | a pre-LUD-26 whole branch's note key, for names registered before it |
+| `NOTE_PURPOSE_WALLET` (0), `NOTE_PURPOSE_CHANGE` (1), `NOTE_PURPOSE_LIGHTNING_ADDRESS` (2) | that branch's purposes |
 | `Spend`, `ScriptSpend`, `SpendVerdict`, `ScriptVerifier` | `SpendVerdict` is `{ok: true} \| {ok: false, reason, specific}`; `ScriptVerifier` is `({outputKey, domain, spend, now, lockedAt}) => Promise<string \| null>`, resolving to the refusal reason or `null` |
 | `createKernelVerifier(options: {command: string[], timeoutMs?: number, log?}): KernelVerifier` | a `ScriptVerifier` that runs a command speaking the line protocol of `scripts/kernel-verifier.py`, with a `close()` |
 | `buildStats(args: {liabilities, localBalanceMsat?, reconciledAt?, at?, ratioOnly?}): MintStats` | the `/stats` document; `liabilities` is `store.liabilities()` |
@@ -589,9 +592,14 @@ mint (or pass a `scriptVerifier` to `createMoneyer`). Without one such a
 spend is refused with a reason and the note stays outstanding; a verifier
 that crashes, errors or stalls refuses too, and never accepts.
 
-Every note gets a certificate, `cs1` over hex(Q) and its amount: `c` on
-the informational GET, `c`/`c2` on every rotate, split and merge, and
-under no other name. The
+Every note gets a certificate, a `cs1` over
+`LNURLcash:<domain>:<amount_msat>:<hex(Q)>`, `<domain>` being the hostname
+the note's URL names (luds 92abbb3), so a certificate never vouches for a
+note at another mint: `c` on the informational GET, `c`/`c2` on every
+rotate, split and merge, and under no other name. A mint on two hosts
+(clearnet and onion) certifies for the host it was asked on. A burned note
+is answered `already in use`, at the informational GET, a lookup by `p` and
+the callback alike, which a LUD-26 recovery scan counts as a used index. The
 informational GET verifies a `k1` in full before answering, so a wallet
 checking a note it was handed learns whether its spend really opens it.
 
@@ -769,9 +777,10 @@ host. Nothing is burned unless the name is granted: the burn and the
 registration are one transaction.
 
 Names are `^[a-z0-9][a-z0-9_.-]{2,31}$`. The mint's own username, `_`,
-`admin` and `mint` are reserved, as is any name already taken. Names are
-permanent in this version; removing one is the operator's, through
-`moneyer admin names rm`.
+`admin` and `mint` are reserved, as is any name already taken, or held for
+an unpaid address fee. A name a Nostr key owns is permanent; removing one is
+the operator's, through `moneyer admin names rm`. A name registered by its
+share alone is freed by that share's own unregister (below).
 
 A registered name resolves on both rails at once:
 
@@ -784,49 +793,80 @@ A registered name resolves on both rails at once:
 The discovery endpoint advertises `namePriceMsat` while registration is
 open, so a wallet can offer the flow without asking.
 
-### A name that pays to your own keys (LUD-26 auto-mint)
+### A name that pays to your own keys (LUD-26 Lightning Address)
 
-Add `"cx1": "cx1..."` to the registration body, or send `{"name", "cx1"}`
-again later from the key that owns the name, and payments to it stop being
-custodial. A `cx1` is a watch-only branch: from it the mint can work out each
-of the holder's note keys in turn, but never spend one.
+A name with a share is an ordinary LUD-26 Lightning Address: payments to it
+are minted to the holder's own keys, never to a secret this mint draws. A
+share is a BIP-32 extended public key the wallet hands out for this one
+address, `cx1 = bech32m("cx", chaincode || P)` (65 bytes, 113 characters),
+and its notes are `S/a'/2/n'/i`, which the mint works out with plain BIP-32
+`CKDpub` and can never spend.
 
-A `cx1` is public, so pointing a name at one has to be proven by the branch
-itself, as LUD-26 requires: the body also carries `"sig"`, a BIP-340
-signature by the branch's purpose-0 index-0 key over
-`sha256("LNURLcash:register:<domain>:<name>")`, `<domain>` being this mint's
-hostname. Changing the branch later is proven by the branch on file, not the
-new one, and clearing it takes the same signature over
-`LNURLcash:unregister:...` instead. The NIP-98 key still decides who owns
-the name; the proof decides where it may pay.
+There are two doors onto the same names.
 
-When a zap to the name settles, the mint takes the next index on the
-branch's Lightning Address purpose (LUD-25's purpose 2, a counter of its
-own) and credits the note to that key. It skips any key already holding a note,
-and an invoice nobody pays takes no index at all, so a wallet scanning its
-branch never meets a gap it did not make. The gift wrap still goes to the
-owner's npub, but it carries no secret: a lookup URL,
-`https://mint.example/w?p=<cp1>&c=<amount-bearing-cs1>&i=<index>`, plus an
-`i` tag. The wallet derives the key at that index, checks the certificate,
-and spends with its own `ck1`. A wallet that only knows note URLs sees no
-`k1` and passes the wrap by, and the note waits at the mint for a scan of the
-branch.
+**LUD-26's own**, at the address itself, form-encoded, every answer HTTP 200
+with `Access-Control-Allow-Origin: *` and the PUT/DELETE preflight answered:
 
-`"cx1": null` clears the branch and puts the name back on the custodial path.
-This works while registration is closed too: closing it stops new names, not
-the owner of one choosing where it pays, including a name the operator set up
-in `MONEYER_ZAP_NAMES`.
-Sending a new branch starts it at index 0; sending the same one again keeps
-its place. Zap receipts are unchanged.
+```
+POST   /.well-known/lnurlp/<name>   cx1=<cx1>&sig=<hex>                  register
+PUT    /.well-known/lnurlp/<name>   cx1=<new cx1>&sig=<hex>&newsig=<hex> move to a new share
+DELETE /.well-known/lnurlp/<name>   sig=<hex>                            unregister
+```
 
-The name's payRequest also publishes `['text/cpub', '<cx1>:<index>']`, where
-the index is the next purpose-2 key not already present in this mint's
-ledger. It never publishes the older `text/xpub`: a wallet reading that
-derives without a purpose, so it pays by Lightning instead. A payer
-already holding a note here can therefore rotate, split or merge straight to
-that `cp1` without creating or routing a Lightning invoice. The index is a
-hint: if another payment wins the key first, Moneyer returns LUD-25's
-`already in use`, so the reference kit advances and retries.
+`sig` is a BIP-340 signature by the share's own key `p` over
+`sha256("LNURLcash:register:<domain>:<name>:<cx1>")`, `<domain>` being this
+mint's hostname; a PUT's `sig` is by the key on file over
+`LNURLcash:update:<domain>:<name>:<new cx1>` and its `newsig` by the new
+share over the register message; DELETE signs
+`LNURLcash:unregister:<domain>:<name>`. A name registered this way is owned
+by its share and by no Nostr key, so it has no NIP-05 entry and takes no
+zaps, though any wallet can pay it. An unsigned `npub` is refused, not
+bound: it would let anyone tie a name here to somebody else's Nostr
+identity. The refusals are LUD-26's: `already registered`, `cx1 already
+used`, `unknown user`, and `Invalid ownership signature.`
+
+The address fee is the name price, `MONEYER_NAME_PRICE_MSAT`. With one set,
+a valid registration is answered `{"status": "OK", "pr": "<invoice>"}` and
+the name is held for that registration only while the hour-long invoice can
+still be paid; it is published once the invoice settles and freed if it
+expires. `mint@` advertises it as the third value of its fee token,
+`Mint fees: <base_fee_msat>,<fee_ppm>,<address_fee_msat>`. A PUT is free.
+
+**`POST /names`**, NIP-98 as above, with `"cx1"` and `"sig"` (the same
+register proof) in the body: the Nostr key owns the name and the share
+decides where it pays. `"cx1": null` with an unregister proof by the share
+on file clears it, and the name pays out as a gift-wrapped note again. A cx1
+on file is never overwritten by either door's POST: a move is the PUT.
+Deleting a share from a name a Nostr key owns only clears the share; the
+name stays that key's. This works while registration is closed too: closing
+it stops new names, not the owner of one choosing where it pays, including a
+name the operator set up in `MONEYER_ZAP_NAMES`.
+
+Either way, no share's `x(P)` is ever accepted twice, here or under another
+name, even after it is unregistered, so a captured proof never applies again.
+
+When a payment to the name settles, the mint takes the share's next index,
+skipping any key already holding a note, and credits the note to that key.
+An invoice nobody pays takes no index, so a wallet scanning its share never
+meets a gap it did not make. A name a Nostr key owns still gets a gift
+wrap, carrying no secret: `https://mint.example/w?p=<cp1>&c=<cs1>&i=<index>`
+and an `i` tag. A name with no Nostr key gets nothing: the note waits for
+the holder's scan.
+
+The payRequest carries this mint's `withdrawLink` and mint fees and sets no
+`commentAllowed`, which is how a wallet knows the address is on this mint.
+It publishes no key of the share: the `text/cpub` hint is gone, since anyone
+who fetched it could watch the share. A payer holding a note here pays
+without Lightning instead, sending the note to the callback:
+`/z/cb/<name>?amount=<the note's full value>&k1=<spend>`. The note is burned
+and its whole value credited to the share's next key, free of any fee; a
+retry is answered `{"status": "OK"}` again. A `+tag` names the same address.
+
+A name registered before LUD-26 keeps the whole-branch `cx1` it was given
+and the old purpose-2 keys, so it keeps working, but publishes no key any
+more. Its owner moves it to a share with a PUT, signed by the old branch
+key (or the old purpose-0 index-0 key), or clears it and sets a share.
+
 
 ## Reaching the mint over Tor
 
@@ -887,10 +927,11 @@ clearnet.
 | | |
 | --- | --- |
 | `/.well-known/lnurlp/<user>` | LUD-16 payRequest; paying mints a note |
-| `/.well-known/lnurlp/<zap name>` | NIP-57 payRequest; paying mints a note *to the name's pubkey* |
+| `/.well-known/lnurlp/<name>` | a registered name's payRequest: with a share, a LUD-26 Lightning Address (`withdrawLink`, no `commentAllowed`, no key); without, NIP-57, paying mints a note gift-wrapped *to the name's pubkey*. `mint@` is always the mint's own; `<name>+<tag>` is `<name>` |
+| `POST`/`PUT`/`DELETE /.well-known/lnurlp/<name>` | LUD-26 registration, move and unregister, proven by the share's key; form-encoded, HTTP 200 with CORS |
 | `/.well-known/lnurlw/<user>` | LUD-25 mint address discovery (experimental) |
 | `/p/cb` | LUD-06 pay callback; issues the mint invoice for the note the `comment` names, a hash or a `cp1` key (`h` is an older spelling for a hash) |
-| `/z/cb/<zap name>` | the zap callback; validates the kind 9734 and issues the invoice. A name with a `cx1` calls back at `/z/cb/<zap name>/<index>`, the index its payRequest advertised, so the invoice commits to exactly the metadata the payer was shown |
+| `/z/cb/<name>` | the name's callback: an invoice (validating a kind 9734 when zapped), or with `k1` a LUD-26 internal transfer of a note of this mint |
 | `/verify/<hash>` | LUD-21 verify, for mint invoices and melt payments |
 | `/w` | LUD-03 informational GET; accepts `k1` (a preimage, `ck1` or `cw1`, verified in full) or the non-disclosing LUD-25 `p` check (a bearer note's h or any `cp1`; `h` is its older name, still accepted); a live note carries `payLink` and its `cs1` as `c` |
 | `/w/cb` | the mutating callback: melt, rotate, split, merge; inputs as preimages, `ck1`s or `cw1`s, outputs as `p1`/`p2` (a bearer note's h or a `cp1`), or their older names `h`/`h2` |

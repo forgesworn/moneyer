@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+Breaking. Follows luds `lnurlcash` through `92e430f` (LUD-26 as plain BIP-32,
+registration at the address, address fee, internal transfer) and lnurl-mint
+#77 and #78. Graded by lnurlcash-conformance 0.16.2, its registration and
+address checks included. See DEPLOY.md before upgrading a live mint.
+
+- **Certificates bind the domain** the note URL names:
+  `LNURLcash:<domain>:<amount_msat>:<hex(Q)>`, on every `c`/`c2`, the
+  bound-mint receipt and a zap's key wrap. `admin verify-note` still checks a
+  certificate made before, and says so.
+- **A burned note is `already in use`**, at the informational GET, a lookup
+  by `p` and the callback, where it was `Note already spent.` or
+  `Invalid or already spent k1.`
+- **A name's `cx1` is a LUD-26 share**, `bech32m("cx", chaincode || P)`,
+  65 bytes, its notes plain BIP-32 children. Registering one is proven by the
+  share's own key over `LNURLcash:register:<domain>:<name>:<cx1>`. The
+  64-byte whole-branch `cx1` and the proof that bound no `cx1` are refused
+  for new registrations; the names that already hold one keep their old
+  purpose-2 keys until moved.
+- **Registration at the address**: `POST`, `PUT` and `DELETE
+  /.well-known/lnurlp/<name>`, form-encoded, HTTP 200 with CORS and the
+  preflight. A name registered there is owned by its share and no Nostr key;
+  an unsigned `npub` is refused. `POST /names` takes the same shares and
+  proofs. Neither overwrites a `cx1` on file (`already registered`), and no
+  `x(P)` is accepted twice, ever (`cx1 already used`).
+- **The address fee** is `MONEYER_NAME_PRICE_MSAT`: a registration is held on
+  an hour-long invoice and published once it settles, and `mint@` advertises
+  it as `Mint fees: <base>,<ppm>,<address fee>`.
+- **A name with a share is a LUD-26 Lightning Address**: its payRequest
+  carries the mint's `withdrawLink` and mint fees and no `commentAllowed`.
+  `text/cpub` and the `/z/cb/<name>/<index>` callback are gone (an old
+  indexed callback is still answered, the index ignored). A payer holding a
+  note here sends it to `/z/cb/<name>?amount=&k1=`, credited free to the
+  share's next key.
+- `mint@` always serves the mint payRequest, `<name>+<tag>` is `<name>`, and
+  an unknown name answers `unknown user` with HTTP 200 rather than a 404.
+- lnd and cln invoices take an optional expiry (`expirySecs`).
+- `@lnurlcash/kit` 0.21.2 and lnurlcash-conformance 0.16.2.
+
 - `scripts/verify-stats.mjs` ships in the package, so the README's snapshot
   check runs from an npm install, and the README says how to invoke it from
   one. The quickstart's melt step builds its invoice with `fakeBolt11`
