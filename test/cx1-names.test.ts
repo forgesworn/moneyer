@@ -8,10 +8,10 @@ import {schnorr, secp256k1} from '@noble/curves/secp256k1.js'
 import {decodeBolt11} from 'farrier-kit/bolt11'
 import {
   ServiceError,
-  decodeCx1,
+  decodeLegacyCx1 as decodeCx1,
   encodeCk1,
   encodeCp1,
-  encodeCx1,
+  encodeLegacyCx1 as encodeCx1,
   hashK1,
   mergeNotesWithHash,
   signNoteOwnership,
@@ -138,7 +138,7 @@ const holder = (): Holder => {
     branchPrivateKey,
     branchPubkey,
     chainCode,
-    cx1: encodeCx1(branchPubkey, chainCode)
+    cx1: encodeCx1({pubkeyXOnly: branchPubkey, chainCode})
   }
 }
 
@@ -215,7 +215,8 @@ describe('a name with a cx1', () => {
     expect(first.url.searchParams.has('amount')).toBe(false)
     expect(first.rumor.tags).toContainEqual(['i', '0'])
     // the holder checks the certificate, then opens the note with its own key
-    expect(certifiesNote(ck1At(alice, 0), 20_000, first.url.searchParams.get('c')!, mint.moneyer.signer.pubkey)).toBe(
+    // The wrap names the mint's public origin, so that is the domain certified.
+    expect(certifiesNote(ck1At(alice, 0), 20_000, first.url.searchParams.get('c')!, mint.moneyer.signer.pubkey, HOST)).toBe(
       true
     )
     const opened = (await (await fetch(`${mint.moneyer.url}/w?k1=${ck1At(alice, 0)}`)).json()) as {maxWithdrawable: number}
@@ -341,14 +342,15 @@ describe('a name with a cx1', () => {
         signature = (await mergeNotesWithHash(`${mint.moneyer.url}/w/cb`, [source], output)).signature
         break
       } catch (err) {
-        if (!(err instanceof ServiceError && err.reason === 'already in use') || index > 3) throw err
+        // The kit reads "already in use" as a spent note now (LUD-25 92abbb3).
+        if (!(err instanceof Error && /already in use/.test(err.message)) || index > 3) throw err
       }
     }
 
     expect(index).toBe(1)
     expect(mint.moneyer.store.noteById(noteIdOf(source))?.state).toBe('burned')
     expect(mint.moneyer.store.noteById(keyAt(alice, 1))).toMatchObject({amountMsat: 21_000, state: 'outstanding'})
-    expect(certifiesNote(ck1At(alice, 1), 21_000, signature!, mint.moneyer.signer.pubkey)).toBe(true)
+    expect(certifiesNote(ck1At(alice, 1), 21_000, signature!, mint.moneyer.signer.pubkey, HOST)).toBe(true)
   })
 
   it('skips a key that already names a note', async () => {

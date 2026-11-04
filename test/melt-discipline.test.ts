@@ -241,14 +241,14 @@ describe('melt discipline', () => {
     expect(noteState(mint, noteId)).toBe('burned')
     for (const lookup of [`h=${hashK1(k1)}`, `k1=${k1}`]) {
       expect(await fetch(`${mint.moneyer.url}/w?${lookup}`).then(r => r.json()))
-        .toEqual({status: 'ERROR', reason: 'Note already spent.'})
+        .toEqual({status: 'ERROR', reason: 'already in use'})
     }
 
     await mint.moneyer.close()
     active = null
     const reborn = (active = await startMint({dbPath}, {backend: mint.backend}))
     expect(await fetch(`${reborn.moneyer.url}/w?h=${hashK1(k1)}`).then(r => r.json()))
-      .toEqual({status: 'ERROR', reason: 'Note already spent.'})
+      .toEqual({status: 'ERROR', reason: 'already in use'})
     expect(await fetch(`${reborn.moneyer.url}/w?h=${hashK1(freshK1())}`).then(r => r.json()))
       .toEqual({status: 'ERROR', reason: 'Unknown note.'})
     expect(noteState(reborn, noteId)).toBe('burned')

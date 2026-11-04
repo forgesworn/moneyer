@@ -174,15 +174,16 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
   const kernel =
     deps.scriptVerifier === undefined && config.scriptVerifier ? createKernelVerifier({command: config.scriptVerifier, log}) : null
   const scriptVerifier = deps.scriptVerifier ?? kernel ?? undefined
-  // LUD-25 offline verification: a cs1 over hex(Q) and the amount, for
-  // every note, bearer notes included.
-  const certify = (q: string, amountMsat: number): string =>
-    encodeCs1WithAmount(amountMsat, hexToBytes(signer.sign(q, amountMsat)))
+  // LUD-25 offline verification: a cs1 over the domain, hex(Q) and the
+  // amount, for every note, bearer notes included. The domain is the host
+  // the note was asked about on, which is the host its URL names.
+  const certify = (q: string, amountMsat: number, domain: string): string =>
+    encodeCs1WithAmount(amountMsat, hexToBytes(signer.sign(q, domain, amountMsat)))
   // LUD-25 names the certificate `c` (and `c2` for split change). The
   // `sig`/`sig2` that went out alongside them from 0.17.0 to 0.20.1 are
   // gone: the draft never named them, and every wallet reads `c`.
-  const certified = (field: 'c' | 'c2', q: string, amountMsat: number): Record<string, string> => ({
-    [field]: certify(q, amountMsat)
+  const certified = (domain: string, field: 'c' | 'c2', q: string, amountMsat: number): Record<string, string> => ({
+    [field]: certify(q, amountMsat, domain)
   })
 
   // Every host this mint answers on. A spend's signature is bound to one
@@ -515,6 +516,9 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
     )
     const host = new URL(origin).host
     const spendDomains = configuredDomains.length ? configuredDomains : [spendDomainOf(origin)]
+    // What every certificate in this response is bound to: the host this
+    // request reached, the one the note URLs it hands out name.
+    const certDomain = spendDomainOf(origin)
 
     const send = (body: unknown, status = 200): void => {
       res.writeHead(status, {
@@ -1008,7 +1012,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
                   mint: {
                     h: echoedName(q, named),
                     amount: currentInvoice.netMsat,
-                    ...(settled ? {sig: certify(q, currentInvoice.netMsat)} : {})
+                    ...(settled ? {sig: certify(q, currentInvoice.netMsat, certDomain)} : {})
                   }
                 }
               })()
@@ -1062,7 +1066,9 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       }
       // Hash lookups protect the secret, not the note's spent state.
       // Retained burned rows let a wallet reconcile without revealing k1.
-      if (note.state === 'burned') return fail('Note already spent.')
+      // LUD-25 fixes the answer for a burned note, here as at the callback:
+      // a recovery scan counts exactly "already in use" as a used index.
+      if (note.state === 'burned') return fail(IN_USE)
       // A note reserved by an in-flight melt is not withdrawable, and must
       // not be advertised as though it were. LUD-25 makes this GET the way
       // anyone checks what a note is worth, so answering "live, worth all
@@ -1101,7 +1107,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // Every note gets its certificate here, so a wallet need not rotate
         // just to obtain one, and a recovery scan probing ?p= gets one free.
         // A certificate is no spend authorisation, so p needs no proof.
-        ...certified('c', noteQ, note.amountMsat)
+        ...certified(certDomain, 'c', noteQ, note.amountMsat)
       })
     }
 
@@ -1188,14 +1194,16 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         if (first) {
           return send({
             status: 'OK',
-            ...certified('c', o1!.q, first.amountMsat),
-            ...(second ? certified('c2', o2!.q, second.amountMsat) : {})
+            ...certified(certDomain, 'c', o1!.q, first.amountMsat),
+            ...(second ? certified(certDomain, 'c2', o2!.q, second.amountMsat) : {})
           })
         }
       }
 
+      // Not a retry, so a burned input is a double spend, or a retry whose
+      // p1, p2 or amount differ: LUD-25 answers both "already in use".
       for (const {note} of opened) {
-        if (note.state === 'burned') return fail(INVALID_K1)
+        if (note.state === 'burned') return fail(IN_USE)
         if (note.state === 'pending') return fail('pending')
       }
       const found = opened.map(input => input.note)
@@ -1347,8 +1355,8 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         }
         return send({
           status: 'OK',
-          ...certified('c', o1!.q, amount),
-          ...certified('c2', o2!.q, changeMsat)
+          ...certified(certDomain, 'c', o1!.q, amount),
+          ...certified(certDomain, 'c2', o2!.q, changeMsat)
         })
       }
 
@@ -1364,7 +1372,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         if (err instanceof OutputCollisionError) return fail(IN_USE)
         return fail(INVALID_K1)
       }
-      return send({status: 'OK', ...certified('c', o1!.q, mergedMsat)})
+      return send({status: 'OK', ...certified(certDomain, 'c', o1!.q, mergedMsat)})
     }
 
     return fail('Not found.', 404)

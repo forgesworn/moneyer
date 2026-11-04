@@ -2,7 +2,7 @@ import {sha256} from '@noble/hashes/sha2.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {verifyEvent, type Event} from 'nostr-tools/pure'
-import {decodeCx1, noteK1} from '@lnurlcash/kit'
+import {decodeLegacyCx1 as decodeCx1, noteK1} from '@lnurlcash/kit'
 import {NotePendingError, NoteStore, NoteUnavailableError, type NoteRow} from './store.ts'
 import {NOTE_PURPOSE_WALLET, decodeSpend, deriveNotePubkey} from './spend.ts'
 

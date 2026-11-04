@@ -9,7 +9,7 @@ import {buildNoteUrl, encodeCs1WithAmount, hashK1, withNewK1} from '@lnurlcash/k
 import {runAdmin} from '../src/admin.ts'
 import {NoteStore} from '../src/store.ts'
 import {createFakeBackend, FAKE_LOCAL_BALANCE_MSAT} from '../src/backends/fake.ts'
-import {createNoteSigner} from '../src/signing.ts'
+import {createNoteSigner, legacyNoteIdSignatureDigest, signDigestRecoverable} from '../src/signing.ts'
 import {fakeBolt11} from '../src/backends/fake-bolt11.ts'
 import {TEST_SIGNING_KEY, freshK1, noteIdOf} from './helpers.ts'
 
@@ -153,7 +153,7 @@ describe('moneyer admin', () => {
     const k1 = freshK1()
     store.creditNote(noteIdOf(k1), 21_000)
     // LUD-25 certifies a note over its Q, as a cs1 the amount rides in.
-    const cs1Over = (id: string, from = signer) => encodeCs1WithAmount(21_000, hexToBytes(from.sign(id, 21_000)))
+    const cs1Over = (id: string, from = signer) => encodeCs1WithAmount(21_000, hexToBytes(from.sign(id, 'mint.example', 21_000)))
     const url = withNewK1('https://mint.example/w', k1, 21_000, cs1Over(noteIdOf(k1)))
     const good = await run(['verify-note', url], {store})
     expect(good.code).toBe(0)
@@ -163,7 +163,7 @@ describe('moneyer admin', () => {
     // A bearer note certified before that: the bare signature in hex, in
     // `sig`, over sha256(k1) rather than Q.
     const legacy = new URL(buildNoteUrl('https://mint.example/w', k1, 21_000))
-    legacy.searchParams.set('sig', signer.sign(hashK1(k1), 21_000))
+    legacy.searchParams.set('sig', signDigestRecoverable(legacyNoteIdSignatureDigest(hashK1(k1), 21_000), TEST_SIGNING_KEY))
     const old = await run(['verify-note', legacy.toString()], {store})
     expect(old.code).toBe(0)
     expect(old.out).toContain('verifies against the current key')

@@ -1,7 +1,8 @@
 import {existsSync} from 'node:fs'
 import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
-import {encodeCs1WithAmount, hashK1, noteDeclaredAmount, noteK1, noteSignature, verifyNoteSignatureForKey} from '@lnurlcash/kit'
+import {decodeCs1WithAmount, encodeCs1WithAmount, hashK1, noteDeclaredAmount, noteK1, noteSignature, verifyNoteSignatureForKey} from '@lnurlcash/kit'
+import {legacyNoteIdSignatureDigest, recoversToPubkey} from './signing.ts'
 import {decodeNote, decodeSpend} from './spend.ts'
 import {configFromEnv, pubkeyHex, type MoneyerConfig} from './config.ts'
 import {NoteStore, type NoteState} from './store.ts'
@@ -439,16 +440,35 @@ export const runAdmin = async (argv: string[], deps: AdminDeps = {}): Promise<nu
           // Over Q, as LUD-25 certifies every note now, or, for a bearer
           // note certified before that, over its old id sha256(k1). A key
           // note's old id was its key, which is Q already.
+          //
+          // Since luds 92abbb3 a certificate also binds the note URL's
+          // domain. One made before that signs the message without it, and
+          // still proves issuance to the operator, so it is reported as such.
           const legacyId = spend.kind === 'script' && /^[0-9a-f]{64}$/i.test(k1.trim()) ? hashK1(k1.trim()) : null
-          const signedBy = keys.find(
-            pubkey =>
-              verifyNoteSignatureForKey(id, declared, signature, pubkey) ||
-              (legacyId !== null && verifyNoteSignatureForKey(legacyId, declared, signature, pubkey))
-          )
+          let domain = ''
+          try {
+            domain = new URL(url.replace(/^lnurlw:\/\//i, 'https://')).hostname.toLowerCase()
+          } catch {}
+          const decoded = decodeCs1WithAmount(signature)
+          const preDomain = (noteId: string, pubkey: string): boolean =>
+            decoded !== null &&
+            decoded.amountMsat === declared &&
+            recoversToPubkey(legacyNoteIdSignatureDigest(noteId, declared), bytesToHex(decoded.signature), pubkey)
+          let undomained = false
+          const signedBy = keys.find(pubkey => {
+            if (verifyNoteSignatureForKey(id, domain, declared, signature, pubkey)) return true
+            if (preDomain(id, pubkey) || (legacyId !== null && preDomain(legacyId, pubkey))) {
+              undomained = true
+              return true
+            }
+            return false
+          })
           out(
             signedBy === undefined
               ? 'signature DOES NOT verify against this mint'
-              : `signature verifies against ${signedBy === current ? 'the current key' : `a previous key (${signedBy})`}`
+              : `signature verifies against ${signedBy === current ? 'the current key' : `a previous key (${signedBy})`}${
+                  undomained ? ', over the message from before certificates bound the domain' : ''
+                }`
           )
         }
         const note = store.noteByQ(id)

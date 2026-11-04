@@ -1,8 +1,9 @@
 import {describe, expect, it} from 'vitest'
 import {encodeCs1WithAmount, hashK1, verifyNoteSignature, verifyNoteSignatureForKey} from '@lnurlcash/kit'
 import {sha256} from '@noble/hashes/sha2.js'
-import {hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
-import {createNoteSigner, noteIdSignatureDigest} from '../src/signing.ts'
+import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
+import specVectors from 'lnurlcash-conformance/vectors/spec-vectors.json' with {type: 'json'}
+import {createNoteSigner, legacyNoteIdSignatureDigest, noteIdSignatureDigest, recoversToPubkey} from '../src/signing.ts'
 import {
   buildStats,
   canonicalJson,
@@ -17,52 +18,83 @@ import {TEST_SIGNING_KEY, freshK1, noteIdOf} from './helpers.ts'
 // from the secret. These tests are the byte-level handshake between the
 // two: if either drifts, every note this mint issues stops verifying.
 
+const DOMAIN = 'mint.example'
+
 describe('note signing', () => {
   const signer = createNoteSigner(TEST_SIGNING_KEY)
   // The kit reads a certificate only as a cs1, and checks a bearer note's
   // over its taproot output key Q, which it derives from the secret itself.
-  const certificate = (k1: string, amountMsat: number, from = signer): string =>
-    encodeCs1WithAmount(amountMsat, hexToBytes(from.sign(noteIdOf(k1), amountMsat)))
+  const certificate = (k1: string, amountMsat: number, from = signer, domain = DOMAIN): string =>
+    encodeCs1WithAmount(amountMsat, hexToBytes(from.sign(noteIdOf(k1), domain, amountMsat)))
+
+  // luds 25-vectors.json: the spec's own certificates, byte for byte.
+  // RFC 6979 makes the signature deterministic, so the cs1 must match.
+  it('reproduces every certificate in the LUD-25 vectors', () => {
+    const vectors = specVectors.lud25.certificates
+    const vectorSigner = createNoteSigner(vectors.service_sk)
+    expect(vectorSigner.pubkey).toBe(vectors.mintPubkey)
+    for (const vector of vectors.cases) {
+      expect(bytesToHex(noteIdSignatureDigest(vectors.Q, vectors.domain, vector.amount_msat))).toBe(
+        bytesToHex(sha256(sha256(utf8ToBytes(`Lightning Signed Message:${vector.message}`))))
+      )
+      expect(vectorSigner.sign(vectors.Q, vectors.domain, vector.amount_msat)).toBe(vector.signature)
+      expect(encodeCs1WithAmount(vector.amount_msat, hexToBytes(vector.signature))).toBe(vector.cs1)
+    }
+  })
 
   it('agrees with the kit digest built from the secret', () => {
     const k1 = freshK1()
     const expected = sha256(
-      sha256(utf8ToBytes(`Lightning Signed Message:LNURLcash:21000:${hashK1(k1)}`))
+      sha256(utf8ToBytes(`Lightning Signed Message:LNURLcash:${DOMAIN}:21000:${hashK1(k1)}`))
     )
-    expect(noteIdSignatureDigest(hashK1(k1), 21_000)).toEqual(expected)
+    expect(noteIdSignatureDigest(hashK1(k1), DOMAIN, 21_000)).toEqual(expected)
   })
 
   it('produces signatures the kit verifies against the mint pubkey', () => {
     const k1 = freshK1()
-    expect(signer.sign(noteIdOf(k1), 21_000)).toHaveLength(130)
-    expect(verifyNoteSignature(k1, 21_000, certificate(k1, 21_000), signer.pubkey)).toBe(true)
+    expect(signer.sign(noteIdOf(k1), DOMAIN, 21_000)).toHaveLength(130)
+    expect(verifyNoteSignature(k1, DOMAIN, 21_000, certificate(k1, 21_000), signer.pubkey)).toBe(true)
+  })
+
+  it('binds the signature to the domain', () => {
+    const k1 = freshK1()
+    const signature = certificate(k1, 21_000)
+    expect(verifyNoteSignature(k1, 'other.example', 21_000, signature, signer.pubkey)).toBe(false)
+  })
+
+  it('no longer signs the message without a domain', () => {
+    const k1 = freshK1()
+    const signature = certificate(k1, 21_000)
+    const decoded = hexToBytes(signer.sign(noteIdOf(k1), DOMAIN, 21_000))
+    expect(recoversToPubkey(legacyNoteIdSignatureDigest(noteIdOf(k1), 21_000), bytesToHex(decoded), signer.pubkey)).toBe(false)
+    expect(verifyNoteSignature(k1, DOMAIN, 21_000, signature, signer.pubkey)).toBe(true)
   })
 
   it('still signs over the note id it is given, a note\'s old id included', () => {
     const k1 = freshK1()
-    const signature = encodeCs1WithAmount(21_000, hexToBytes(signer.sign(hashK1(k1), 21_000)))
-    expect(verifyNoteSignatureForKey(hashK1(k1), 21_000, signature, signer.pubkey)).toBe(true)
+    const signature = encodeCs1WithAmount(21_000, hexToBytes(signer.sign(hashK1(k1), DOMAIN, 21_000)))
+    expect(verifyNoteSignatureForKey(hashK1(k1), DOMAIN, 21_000, signature, signer.pubkey)).toBe(true)
     // ...and that is not the certificate of the note the secret opens now.
-    expect(verifyNoteSignature(k1, 21_000, signature, signer.pubkey)).toBe(false)
+    expect(verifyNoteSignature(k1, DOMAIN, 21_000, signature, signer.pubkey)).toBe(false)
   })
 
   it('binds the signature to the amount', () => {
     const k1 = freshK1()
     const signature = certificate(k1, 21_000)
-    expect(verifyNoteSignature(k1, 21_001, signature, signer.pubkey)).toBe(false)
+    expect(verifyNoteSignature(k1, DOMAIN, 21_001, signature, signer.pubkey)).toBe(false)
   })
 
   it('binds the signature to the note', () => {
     const k1 = freshK1()
     const signature = certificate(k1, 21_000)
-    expect(verifyNoteSignature(freshK1(), 21_000, signature, signer.pubkey)).toBe(false)
+    expect(verifyNoteSignature(freshK1(), DOMAIN, 21_000, signature, signer.pubkey)).toBe(false)
   })
 
   it('never verifies against a different pubkey', () => {
     const other = createNoteSigner('22'.repeat(32))
     const k1 = freshK1()
     const signature = certificate(k1, 21_000)
-    expect(verifyNoteSignature(k1, 21_000, signature, other.pubkey)).toBe(false)
+    expect(verifyNoteSignature(k1, DOMAIN, 21_000, signature, other.pubkey)).toBe(false)
   })
 })
 

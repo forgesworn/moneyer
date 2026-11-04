@@ -82,7 +82,17 @@ export {bearerNoteIdOfPreimage as noteIdOf} from '../src/spend.ts'
 // preimage, a ck1 or a cw1 - and verifies over it with
 // verifyNoteSignatureForKey, as the kit's verifyNoteSignature now derives Q
 // from a bearer k1 itself.
-export const certifiesNote = (k1: string, amountMsat: number, signature: string, mintPubkey: string): boolean => {
+//
+// A certificate also binds the domain the note's URL names; the test mint
+// answers on 127.0.0.1.
+export const TEST_DOMAIN = '127.0.0.1'
+export const certifiesNote = (
+  k1: string,
+  amountMsat: number,
+  signature: string,
+  mintPubkey: string,
+  domain = TEST_DOMAIN
+): boolean => {
   const spend = decodeSpend(k1)
-  return spend !== null && verifyNoteSignatureForKey(bytesToHex(spend.outputKey), amountMsat, signature, mintPubkey)
+  return spend !== null && verifyNoteSignatureForKey(bytesToHex(spend.outputKey), domain, amountMsat, signature, mintPubkey)
 }

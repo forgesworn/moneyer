@@ -1,5 +1,5 @@
 import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
-import {decodeCx1, encodeCp1, hashK1} from '@lnurlcash/kit'
+import {decodeLegacyCx1 as decodeCx1, encodeCp1, hashK1} from '@lnurlcash/kit'
 import {NOTE_PURPOSE_LIGHTNING_ADDRESS, bearerNoteIdOfPreimage, deriveNotePubkey} from './spend.ts'
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import {finalizeEvent, getPublicKey, type Event, type UnsignedEvent} from 'nostr-tools/pure'
@@ -108,9 +108,9 @@ export type ZapBridgeDeps = {
   // The mint's public origin. Required when zaps are on: a settled zap is
   // minted by a timer, with no request to read a Host header from.
   origin: string
-  // The mint's certificate for a Part 2 note, as cs1: what lets the holder
-  // check what arrived before touching the mint.
-  certify: (noteIdHex: string, amountMsat: number) => string
+  // The mint's certificate for a key note, as cs1 over the domain its URL
+  // names: what lets the holder check what arrived before touching the mint.
+  certify: (noteIdHex: string, amountMsat: number, domain: string) => string
   log?: (message: string) => void
   now?: () => number
 }
@@ -323,7 +323,7 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
     wrap(
       row,
       [...wrapTags(row), ['i', String(index)]],
-      `${origin}/w?p=${encodeCp1(hexToBytes(noteId))}&c=${deps.certify(noteId, row.netMsat)}&i=${index}`
+      `${origin}/w?p=${encodeCp1(hexToBytes(noteId))}&c=${deps.certify(noteId, row.netMsat, new URL(origin).hostname.toLowerCase())}&i=${index}`
     )
 
   // NIP-57 receipt, without the preimage tag: it is optional there, and

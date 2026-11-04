@@ -43,7 +43,7 @@ describe('lnurlcash-conformance', () => {
       'spends a key-path note by a ck1 bound to its own domain',
       'certifies a bearer output over hex(Q)',
       'a certificate on the informational GET verifies over hex(Q)',
-      'every certificate verifies over hex(Q) and the note value'
+      'every certificate verifies over the domain, hex(Q) and the note value'
     ]) {
       expect(report.results.find(result => result.name === name)?.status, name).toBe('pass')
     }

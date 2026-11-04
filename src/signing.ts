@@ -5,15 +5,21 @@ import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 // LUD-25 offline verification, from the SERVICE side. The construction is
 // the standard "Lightning Signed Message" wrapping over
 //
-//   "LNURLcash:" || amount_msat || ":" || note_id
+//   "LNURLcash:" || domain || ":" || amount_msat || ":" || hex(Q)
 //
-// where note_id is hex(sha256(k1)). @lnurlcash/kit's noteSignatureDigest
-// takes the SECRET and hashes it itself, which a wallet holds and a mint
-// never does - so the digest is rebuilt here from the id. The two must
-// agree byte for byte; the test suite proves they do by verifying every
-// signature this module makes with the kit's verifyNoteSignature.
+// where domain is the lowercase hostname the note's URL names, the same
+// string its canonical spend transaction commits to (luds 92abbb3), so a
+// certificate never vouches for a note at another mint. A mint answering
+// on several hosts certifies for the host the note was asked about on.
+// The test suite verifies every signature this module makes with the
+// kit's verifyNoteSignatureForKey, so the two agree byte for byte.
 
-export const noteIdSignatureDigest = (noteId: string, amountMsat: number): Uint8Array =>
+export const noteIdSignatureDigest = (noteId: string, domain: string, amountMsat: number): Uint8Array =>
+  sha256(sha256(utf8ToBytes(`Lightning Signed Message:LNURLcash:${domain}:${amountMsat}:${noteId}`)))
+
+// The message before luds 92abbb3, with no domain. Only read back: an
+// operator checking a note certified before the upgrade.
+export const legacyNoteIdSignatureDigest = (noteId: string, amountMsat: number): Uint8Array =>
   sha256(sha256(utf8ToBytes(`Lightning Signed Message:LNURLcash:${amountMsat}:${noteId}`)))
 
 // A recoverable signature in the LUD-25 wire layout, r || s || recovery_id.
@@ -50,7 +56,7 @@ export const recoversToPubkey = (digest: Uint8Array, signatureHex: string, pubke
 
 export type NoteSigner = {
   pubkey: string
-  sign: (noteId: string, amountMsat: number) => string
+  sign: (noteId: string, domain: string, amountMsat: number) => string
 }
 
 // Signs with the mint's own dedicated key, in process. The reference mint
@@ -64,10 +70,10 @@ export const createNoteSigner = (privateKeyHex: string): NoteSigner => {
   const pubkey = bytesToHex(secp256k1.getPublicKey(priv, true))
   return {
     pubkey,
-    sign: (noteId, amountMsat) => {
+    sign: (noteId, domain, amountMsat) => {
       // noble v2 emits recovery_id || r || s; the LUD-25 wire layout is
       // r || s || recovery_id, so the leading byte moves to the back.
-      const lead = secp256k1.sign(noteIdSignatureDigest(noteId, amountMsat), priv, {
+      const lead = secp256k1.sign(noteIdSignatureDigest(noteId, domain, amountMsat), priv, {
         format: 'recovered',
         prehash: false
       })

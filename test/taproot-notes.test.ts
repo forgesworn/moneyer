@@ -22,7 +22,7 @@ import {
 import {NoteStore, swapFingerprint} from '../src/store.ts'
 import {createFakeBackend} from '../src/backends/fake.ts'
 import {decodeBolt11} from 'farrier-kit/bolt11'
-import {certifiesNote, freshK1, noteIdOf, startMint, type TestMint} from './helpers.ts'
+import {certifiesNote, TEST_DOMAIN, freshK1, noteIdOf, startMint, type TestMint} from './helpers.ts'
 
 // LUD-25's unified model at the mint: every note is a taproot output key Q,
 // a ck1 is bound to this mint's domain, a cw1 opens a note by one of its
@@ -165,7 +165,7 @@ describe('a bearer note', () => {
     const rotated = await callback(mint, [['k1', k1], ['p1', hashK1(next)]])
     expect(certifiesNote(next, 21_000, rotated.c as string, pubkey)).toBe(true)
     // Over Q, and so NOT over h the way certificates used to be made.
-    expect(mint.moneyer.signer.sign(hashK1(next), 21_000)).not.toBe(mint.moneyer.signer.sign(noteIdOf(next), 21_000))
+    expect(mint.moneyer.signer.sign(hashK1(next), TEST_DOMAIN, 21_000)).not.toBe(mint.moneyer.signer.sign(noteIdOf(next), TEST_DOMAIN, 21_000))
   })
 
   it('cannot be credited again once burned: "already in use"', async () => {
@@ -292,8 +292,8 @@ describe('a database from before notes were keyed by Q', () => {
       expect((await callback(mint, [['k1', other], ['p1', named]])).reason).toBe('already in use')
     }
     expect((await callback(mint, [['k1', k1], ['p1', hashK1(freshK1())]])).status).toBe('OK')
-    expect((await info(mint, [['k1', k1]])).reason).toBe('Note already spent.')
-    expect((await callback(mint, [['k1', fullCw1(k1)], ['p1', hashK1(freshK1())]])).reason).toBe('Invalid or already spent k1.')
+    expect((await info(mint, [['k1', k1]])).reason).toBe('already in use')
+    expect((await callback(mint, [['k1', fullCw1(k1)], ['p1', hashK1(freshK1())]])).reason).toBe('already in use')
   })
 
   it('still answers a rotate completed before the upgrade as a replay', async () => {
