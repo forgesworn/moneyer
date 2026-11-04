@@ -303,7 +303,16 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
     }
     // No Nostr key, no wrap: recorded as '' and never delivered. The note
     // waits at the mint for the holder's scan of the share.
-    store.recordZapInvoice({paymentHash, name: lowered, recipient: recipient ?? '', pr, grossMsat: amountMsat, netMsat: net, zapRequest})
+    store.recordZapInvoice({
+      paymentHash,
+      name: lowered,
+      recipient: recipient ?? '',
+      pr,
+      grossMsat: amountMsat,
+      netMsat: net,
+      zapRequest,
+      cx1: shareOnFile(registered.cx1)?.cx1 ?? null
+    })
     return {pr, ...(deps.verify ? {verify: `${origin}/verify/${paymentHash}`} : {})}
   }
 
@@ -368,10 +377,11 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
         continue
       }
       if (!paid) continue
-      const share = shareOnFile(store.zapName(row.name)?.cx1)
+      // The name's share now, or failing that the one it was paid to.
+      const share = shareOnFile(store.zapName(row.name)?.cx1) ?? shareOnFile(row.cx1)
       if (share) {
         const receipt = buildReceipt(row)
-        const landed = store.settleZapInvoiceToKey(row.paymentHash, share.noteAt, (noteId, index) => ({
+        const landed = store.settleZapInvoiceToKey(row.paymentHash, share, (noteId, index) => ({
           // Only a Nostr key gets a wrap. Without one the note simply waits
           // for the holder's scan, as LUD-26's auto-mint has it.
           wrapJson: row.recipient ? JSON.stringify(buildKeyWrap(row, noteId, index)) : null,
@@ -381,6 +391,13 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
           minted += 1
           log(`zap: ${row.name} received ${row.netMsat} msat; note minted to key ${landed.index}${row.recipient ? ', wrap parked' : ''}`)
         }
+        continue
+      }
+      // A custodial note needs someone to wrap it to. Every name without a
+      // share has a Nostr key, so this is only a row no code path makes;
+      // leave it rather than stall every zap behind it.
+      if (!row.recipient) {
+        log(`zap: ${row.paymentHash.slice(0, 8)} for ${row.name} has neither a share nor a Nostr key; left unsettled`)
         continue
       }
       const k1 = bytesToHex(randomBytes(32))

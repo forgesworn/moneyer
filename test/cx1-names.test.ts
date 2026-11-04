@@ -446,6 +446,18 @@ describe('registration at the address (LUD-26)', () => {
     expect(mint.moneyer.store.zapName('alice')).toMatchObject({pubkey: alice.pubkey, cx1: null})
   })
 
+  it('credits a payment to the share it was paid to, even once the name is gone', async () => {
+    const {mint} = await start()
+    const alice = holder()
+    await address(mint, 'POST', 'alice', {cx1: alice.cx1, sig: proof(alice, 'register', 'alice')})
+    const paymentHash = await invoice(mint, 'alice', 21_000)
+    expect((await address(mint, 'DELETE', 'alice', {sig: proof(alice, 'unregister', 'alice')})).body).toEqual({status: 'OK'})
+    mint.backend.control.settleInvoice(paymentHash)
+    await waitFor(() => mint.moneyer.store.noteById(keyAt(alice, 0)) !== null)
+    expect(mint.moneyer.store.noteById(keyAt(alice, 0))).toMatchObject({amountMsat: 20_000, state: 'outstanding'})
+    expect(mint.moneyer.store.zapInvoiceByHash(paymentHash)?.settled).toBe(true)
+  })
+
   it('takes no unsigned npub, and no reserved or tagged username', async () => {
     const {mint} = await start()
     const alice = holder()

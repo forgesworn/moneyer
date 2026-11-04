@@ -69,6 +69,11 @@ export type ZapInvoiceRow = {
   wrapJson: string | null
   receiptJson: string | null
   settledAt: number | null
+  // The share the name held when the invoice was made, so a payment that
+  // settles after the name moved or was unregistered still lands on the
+  // share it was paid to. Null for a name without one, and for invoices
+  // made before this was recorded.
+  cx1: string | null
 }
 
 // What identifies one mutation request, so a retry of it can be answered
@@ -267,6 +272,10 @@ export class NoteStore {
       column => column.name
     )
     if (!nameColumns.includes('cx1')) this.db.exec('ALTER TABLE zap_names ADD COLUMN cx1 TEXT')
+    const zapInvoiceColumns = (this.db.prepare('PRAGMA table_info(zap_invoices)').all() as Array<{name: string}>).map(
+      column => column.name
+    )
+    if (!zapInvoiceColumns.includes('cx1')) this.db.exec('ALTER TABLE zap_invoices ADD COLUMN cx1 TEXT')
     if (!nameColumns.includes('next_index')) {
       this.db.exec('ALTER TABLE zap_names ADD COLUMN next_index INTEGER NOT NULL DEFAULT 0')
     }
@@ -718,12 +727,13 @@ export class NoteStore {
     grossMsat: number
     netMsat: number
     zapRequest: string | null
+    cx1?: string | null
   }): void {
     this.db
       .prepare(
-        'INSERT INTO zap_invoices (payment_hash, name, recipient, pr, gross_msat, net_msat, zap_request, settled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)'
+        'INSERT INTO zap_invoices (payment_hash, name, recipient, pr, gross_msat, net_msat, zap_request, settled, created_at, cx1) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)'
       )
-      .run(row.paymentHash, row.name, row.recipient, row.pr, row.grossMsat, row.netMsat, row.zapRequest, Date.now())
+      .run(row.paymentHash, row.name, row.recipient, row.pr, row.grossMsat, row.netMsat, row.zapRequest, Date.now(), row.cx1 ?? null)
   }
 
   private zapRow(row: Record<string, unknown>): ZapInvoiceRow {
@@ -739,12 +749,13 @@ export class NoteStore {
       noteId: (row.note_id as string | null) ?? null,
       wrapJson: (row.wrap_json as string | null) ?? null,
       receiptJson: (row.receipt_json as string | null) ?? null,
-      settledAt: (row.settled_at as number | null) ?? null
+      settledAt: (row.settled_at as number | null) ?? null,
+      cx1: (row.cx1 as string | null) ?? null
     }
   }
 
   private static readonly ZAP_COLUMNS =
-    'payment_hash, name, recipient, pr, gross_msat, net_msat, zap_request, settled, note_id, wrap_json, receipt_json, settled_at'
+    'payment_hash, name, recipient, pr, gross_msat, net_msat, zap_request, settled, note_id, wrap_json, receipt_json, settled_at, cx1'
 
   zapInvoiceByHash(paymentHash: string): ZapInvoiceRow | null {
     const row = this.db
@@ -792,24 +803,27 @@ export class NoteStore {
   // `keyAt` answers null for an index that yields no usable key.
   settleZapInvoiceToKey(
     paymentHash: string,
-    keyAt: (index: number) => string | null,
+    share: {cx1: string; noteAt: (index: number) => string | null},
     build: (noteId: string, index: number) => {wrapJson: string | null; receiptJson: string | null}
   ): {noteId: string; index: number} | null {
     return this.tx(() => {
       const row = this.zapInvoiceByHash(paymentHash)
       if (!row || row.settled) return null
+      // The name's own counter while it still holds this share; otherwise
+      // (it moved on, or was unregistered) the share is scanned from 0,
+      // every key in use skipped, so nothing lands twice.
       const name = this.zapName(row.name)
-      if (!name?.cx1) return null
-      let index = name.nextIndex
+      const current = name?.cx1 === share.cx1
+      let index = current ? name!.nextIndex : 0
       let noteId: string | null = null
-      for (let tries = 0; tries < 1000 && noteId === null; tries++) {
-        const candidate = keyAt(index)
+      for (let tries = 0; tries < 10_000 && noteId === null; tries++) {
+        const candidate = share.noteAt(index)
         if (candidate !== null && !this.outputIdInUse(candidate)) noteId = candidate
         else index += 1
       }
-      if (noteId === null) throw new Error(`no free key on the branch of ${row.name}`)
+      if (noteId === null) throw new Error(`no free key on the share of ${row.name}`)
       this.insertNote(noteId, row.netMsat)
-      this.db.prepare('UPDATE zap_names SET next_index = ? WHERE name = ?').run(index + 1, row.name)
+      if (current) this.db.prepare('UPDATE zap_names SET next_index = ? WHERE name = ?').run(index + 1, row.name)
       const {wrapJson, receiptJson} = build(noteId, index)
       this.db
         .prepare(
