@@ -28,7 +28,9 @@ address checks included. See DEPLOY.md before upgrading a live mint.
   `x(P)` is accepted twice, ever (`cx1 already used`).
 - **The address fee** is `MONEYER_NAME_PRICE_MSAT`: a registration is held on
   an hour-long invoice and published once it settles, and `mint@` advertises
-  it as `Mint fees: <base>,<ppm>,<address fee>`.
+  it as `Mint fees: <base>,<ppm>,<address fee>`. The hold outlives the
+  invoice by ten minutes, and a melt of a note worth the fee into the
+  invoice pays it without routing.
 - **A name with a share is a LUD-26 Lightning Address**: its payRequest
   carries the mint's `withdrawLink` and mint fees and no `commentAllowed`.
   `text/cpub` and the `/z/cb/<name>/<index>` callback are gone (an old

@@ -828,8 +828,11 @@ used`, `unknown user`, and `Invalid ownership signature.`
 The address fee is the name price, `MONEYER_NAME_PRICE_MSAT`. With one set,
 a valid registration is answered `{"status": "OK", "pr": "<invoice>"}` and
 the name is held for that registration only while the hour-long invoice can
-still be paid; it is published once the invoice settles and freed if it
-expires. `mint@` advertises it as the third value of its fee token,
+still be paid, and ten minutes beyond, so a payment in its last seconds is
+seen before anyone else can take the name; it is published once the invoice
+settles and freed if it expires. The fee may be paid from any wallet, or by
+melting a note of this mint worth exactly the fee into it (`/w/cb?k1=&pr=`),
+which the mint settles itself rather than routing. `mint@` advertises it as the third value of its fee token,
 `Mint fees: <base_fee_msat>,<fee_ppm>,<address_fee_msat>`. A PUT is free.
 
 **`POST /names`**, NIP-98 as above, with `"cx1"` and `"sig"` (the same
