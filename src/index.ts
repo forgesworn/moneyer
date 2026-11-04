@@ -20,6 +20,8 @@ export {
   NoteUnavailableError,
   OutputCollisionError,
   NameTakenError,
+  HoldUnavailableError,
+  HOLD_GRACE_MS,
   KeyUsedError,
   type AddressHoldRow,
   type ZapNameRow,

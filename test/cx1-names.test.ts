@@ -16,7 +16,7 @@ import specVectors from 'lnurlcash-conformance/vectors/spec-vectors.json' with {
 import {NOTE_PURPOSE_LIGHTNING_ADDRESS, deriveNotePubkey} from '../src/spend.ts'
 import {NIP98_KIND} from '../src/names.ts'
 import {decodeShare, proofVerifies, registrationMessage} from '../src/shares.ts'
-import {NoteStore} from '../src/store.ts'
+import {HOLD_GRACE_MS, NoteStore} from '../src/store.ts'
 import {NOTE_KIND, type NostrTransport} from '../src/zap.ts'
 import {createFakeBackend, type FakeBackend} from '../src/backends/fake.ts'
 import {freshK1, startMint, waitFor, type TestMint, noteIdOf, certifiesNote} from './helpers.ts'
@@ -458,6 +458,45 @@ describe('registration at the address (LUD-26)', () => {
     expect(mint.moneyer.store.zapInvoiceByHash(paymentHash)?.settled).toBe(true)
   })
 
+  it('never credits a payment to whoever took the name since', async () => {
+    const {mint} = await start()
+    const alice = holder()
+    await address(mint, 'POST', 'alice', {cx1: alice.cx1, sig: proof(alice, 'register', 'alice')})
+    const paymentHash = await invoice(mint, 'alice', 21_000)
+    await address(mint, 'DELETE', 'alice', {sig: proof(alice, 'unregister', 'alice')})
+    const mallory = holder()
+    expect((await address(mint, 'POST', 'alice', {cx1: mallory.cx1, sig: proof(mallory, 'register', 'alice')})).body).toEqual({status: 'OK'})
+    mint.backend.control.settleInvoice(paymentHash)
+    await waitFor(() => mint.moneyer.store.zapInvoiceByHash(paymentHash)?.settled === true)
+    expect(mint.moneyer.store.noteById(keyAt(alice, 0))?.amountMsat).toBe(20_000)
+    expect(mint.moneyer.store.noteById(keyAt(mallory, 0))).toBeNull()
+  })
+
+  it('takes a melt of a note of this mint as payment of the address fee', async () => {
+    const {mint} = await start({namePriceMsat: 21_000})
+    const alice = holder()
+    const pr = (await address(mint, 'POST', 'alice', {cx1: alice.cx1, sig: proof(alice, 'register', 'alice')})).body.pr as string
+    const k1 = freshK1()
+    mint.moneyer.store.creditNote(noteIdOf(k1), 21_000)
+    const melted = (await (await fetch(`${mint.moneyer.url}/w/cb?k1=${k1}&pr=${pr}`)).json()) as Record<string, unknown>
+    expect(melted).toEqual({status: 'OK'})
+    expect(mint.moneyer.store.noteById(noteIdOf(k1))?.state).toBe('burned')
+    expect(mint.moneyer.store.zapName('alice')).toMatchObject({cx1: alice.cx1, paidMsat: 21_000})
+    // never routed: the node paid nothing
+    expect(mint.backend.control.sentAmountMsat(decodeBolt11(pr).paymentHashHex)).toBeUndefined()
+    // and the same invoice cannot be paid twice
+    const again = freshK1()
+    mint.moneyer.store.creditNote(noteIdOf(again), 21_000)
+    expect(((await (await fetch(`${mint.moneyer.url}/w/cb?k1=${again}&pr=${pr}`)).json()) as {status: string}).status).toBe('ERROR')
+    expect(mint.moneyer.store.noteById(noteIdOf(again))?.state).toBe('outstanding')
+  })
+
+  it('takes no new registration while sunsetting', async () => {
+    const {mint} = await start({sunset: true})
+    const alice = holder()
+    expect((await address(mint, 'POST', 'alice', {cx1: alice.cx1, sig: proof(alice, 'register', 'alice')})).body.reason).toMatch(/sunsetting/)
+  })
+
   it('takes no unsigned npub, and no reserved or tagged username', async () => {
     const {mint} = await start()
     const alice = holder()
@@ -486,6 +525,24 @@ describe('registration at the address (LUD-26)', () => {
     mint.backend.control.settleInvoice(decodeBolt11(pr).paymentHashHex)
     expect((await payRequestOf(mint, 'alice')).withdrawLink).toBe(`http://${HOST}/w`)
     expect(mint.moneyer.store.zapName('alice')).toMatchObject({cx1: alice.cx1, paidMsat: 21_000})
+  })
+
+  it('keeps a lapsed hold for its grace, and a late payment never beats a rival hold', () => {
+    const store = new NoteStore(':memory:')
+    const t0 = Date.now()
+    const a = holder()
+    const b = holder()
+    store.holdAddress({paymentHash: 'aa'.repeat(32), pr: 'lnbcA', name: 'carol', cx1: a.cx1, feeMsat: 21_000, expiresAt: t0 + 1_000, nowMs: t0})
+    // just expired: a payment in its last seconds may not be seen yet
+    expect(store.nameTaken('carol', t0 + 2_000)).toBe(true)
+    const later = t0 + 1_000 + HOLD_GRACE_MS + 1
+    expect(store.nameTaken('carol', later)).toBe(false)
+    store.holdAddress({paymentHash: 'bb'.repeat(32), pr: 'lnbcB', name: 'carol', cx1: b.cx1, feeMsat: 21_000, expiresAt: later + 3_600_000, nowMs: later})
+    // A's payment is seen only now: B's live hold keeps the name
+    expect(store.settleHold('aa'.repeat(32), later)).toEqual({name: 'carol', registered: false})
+    expect(store.zapName('carol')).toBeNull()
+    expect(store.settleHold('bb'.repeat(32), later)).toEqual({name: 'carol', registered: true})
+    expect(store.zapName('carol')?.cx1).toBe(b.cx1)
   })
 
   it('frees a held name once its fee invoice expires unpaid', async () => {

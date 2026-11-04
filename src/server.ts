@@ -5,6 +5,7 @@ import {applyMintFee, encodeCs1WithAmount, grossUpForMintFee, hashK1} from '@lnu
 import {tryDecodeBolt11} from 'farrier-kit/bolt11'
 import type {MoneyerConfig} from './config.ts'
 import {
+  HoldUnavailableError,
   InvoiceUsedError,
   NotePendingError,
   NoteStore,
@@ -724,6 +725,9 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       }
       if (req.method !== 'POST' && req.method !== 'PUT' && req.method !== 'DELETE') return fail('Not found.', 404)
       if (!zap) return fail('This mint is not registering names.')
+      // A sunsetting mint takes no new names, and no fee for one that could
+      // never be paid into. Moving or freeing a name stays open.
+      if (config.sunset && req.method === 'POST') return fail('This mint is sunsetting - registration is closed.')
       const body = await readBody(req)
       if (body === null) return fail('Request body too large.')
       const form = new URLSearchParams(body)
@@ -1347,6 +1351,21 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // source's money back at itself; refuse synchronously.
         if (store.mintInvoiceByHash(paymentHash)) {
           return fail('Cannot melt into an invoice this mint issued itself.')
+        }
+        // A LUD-26 address fee is this mint's own invoice too, and LUD-26
+        // lets a wallet pay it by melting a note here. Settled in the store,
+        // never routed: the node would only be paying itself.
+        if (store.holdByHash(paymentHash)) {
+          try {
+            const paid = store.payHoldWithNote(paymentHash, inputIds[0]!)
+            log(paid.registered ? `address ${paid.name} registered: fee paid with a note` : `address fee for ${paid.name} paid with a note, but the name was taken: fee kept`)
+            return send({status: 'OK'})
+          } catch (err) {
+            if (err instanceof NotePendingError) return fail('pending')
+            if (err instanceof NoteUnavailableError) return fail(IN_USE)
+            if (err instanceof HoldUnavailableError) return fail(`Cannot pay that address fee: ${err.message}.`)
+            throw err
+          }
         }
         // The funding source dedupes payments by hash, so a second melt
         // into the same invoice would be "confirmed" against the first

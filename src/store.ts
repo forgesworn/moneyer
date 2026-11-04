@@ -164,6 +164,15 @@ export class KeyUsedError extends Error {
     super('cx1 already used')
   }
 }
+// An address fee invoice that is no longer payable: settled, expired, or
+// never this mint's.
+export class HoldUnavailableError extends Error {}
+
+// How long a hold outlives its invoice. An invoice cannot be paid once it
+// expires, but a payment made in its last seconds is only seen at the next
+// settlement poll; until then nobody else may take the name, or the payer
+// would lose the fee to them.
+export const HOLD_GRACE_MS = 10 * 60_000
 
 // A LUD-26 registration held for its address fee: the name is taken for
 // everyone else until the invoice settles or expires.
@@ -922,7 +931,7 @@ export class NoteStore {
       .prepare(
         'SELECT payment_hash, pr, name, cx1, fee_msat, expires_at, settled FROM address_holds WHERE name = ? AND settled = 0 AND expires_at > ? ORDER BY created_at DESC LIMIT 1'
       )
-      .get(name.toLowerCase(), nowMs) as Record<string, unknown> | undefined
+      .get(name.toLowerCase(), nowMs - HOLD_GRACE_MS) as Record<string, unknown> | undefined
     return row ? this.holdRow(row) : null
   }
 
@@ -973,31 +982,67 @@ export class NoteStore {
     })
   }
 
-  unsettledHolds(): AddressHoldRow[] {
-    return (
-      this.db
-        .prepare('SELECT payment_hash, pr, name, cx1, fee_msat, expires_at, settled FROM address_holds WHERE settled = 0')
-        .all() as Record<string, unknown>[]
-    ).map(row => this.holdRow(row))
+  holdByHash(paymentHash: string): AddressHoldRow | null {
+    const row = this.db
+      .prepare('SELECT payment_hash, pr, name, cx1, fee_msat, expires_at, settled FROM address_holds WHERE payment_hash = ?')
+      .get(paymentHash) as Record<string, unknown> | undefined
+    return row ? this.holdRow(row) : null
   }
 
-  // The fee is paid: register the name, unless the hold lapsed and somebody
-  // else has it now, in which case the fee is kept and nothing registered.
-  // Null if the hold was already settled (a racing poll) or never existed.
-  settleHold(paymentHash: string): {name: string; registered: boolean} | null {
+  // What the settlement poll looks at, bounded: holds cost nothing to ask
+  // for, so the poll must not grow with them. The newest live ones (a
+  // lookup of any other settles it on demand), and the oldest lapsed ones,
+  // each checked once more and then tidied away.
+  unsettledHolds(nowMs: number = Date.now(), limit = 100): {live: AddressHoldRow[]; lapsed: AddressHoldRow[]} {
+    const columns = 'payment_hash, pr, name, cx1, fee_msat, expires_at, settled'
+    const live = this.db
+      .prepare(`SELECT ${columns} FROM address_holds WHERE settled = 0 AND expires_at > ? ORDER BY created_at DESC LIMIT ?`)
+      .all(nowMs - HOLD_GRACE_MS, limit) as Record<string, unknown>[]
+    const lapsed = this.db
+      .prepare(`SELECT ${columns} FROM address_holds WHERE settled = 0 AND expires_at <= ? ORDER BY created_at ASC LIMIT ?`)
+      .all(nowMs - HOLD_GRACE_MS, limit) as Record<string, unknown>[]
+    return {live: live.map(row => this.holdRow(row)), lapsed: lapsed.map(row => this.holdRow(row))}
+  }
+
+  // Inside a transaction: mark the hold paid and register its name, unless
+  // somebody else has it now (registered, or held live by another
+  // registration), in which case the fee is kept and nothing registered.
+  private completeHold(hold: AddressHoldRow, nowMs: number): {name: string; registered: boolean} {
+    this.db.prepare('UPDATE address_holds SET settled = 1 WHERE payment_hash = ?').run(hold.paymentHash)
+    const rival = this.liveHold(hold.name, nowMs)
+    if (this.zapName(hold.name) || (rival && rival.paymentHash !== hold.paymentHash)) {
+      return {name: hold.name, registered: false}
+    }
+    this.db
+      .prepare("INSERT INTO zap_names (name, pubkey, created_at, paid_msat, source, cx1) VALUES (?, '', ?, ?, 'self', ?)")
+      .run(hold.name, Date.now(), hold.feeMsat, hold.cx1)
+    return {name: hold.name, registered: true}
+  }
+
+  // The fee is paid: register the name, or keep the fee if the hold lapsed
+  // and somebody else has the name now. Null if the hold was already
+  // settled (a racing poll) or never existed.
+  settleHold(paymentHash: string, nowMs: number = Date.now()): {name: string; registered: boolean} | null {
     return this.tx(() => {
-      const row = this.db
-        .prepare('SELECT payment_hash, pr, name, cx1, fee_msat, expires_at, settled FROM address_holds WHERE payment_hash = ?')
-        .get(paymentHash) as Record<string, unknown> | undefined
-      if (!row) return null
-      const hold = this.holdRow(row)
-      if (hold.settled) return null
-      this.db.prepare('UPDATE address_holds SET settled = 1 WHERE payment_hash = ?').run(paymentHash)
-      if (this.zapName(hold.name)) return {name: hold.name, registered: false}
-      this.db
-        .prepare("INSERT INTO zap_names (name, pubkey, created_at, paid_msat, source, cx1) VALUES (?, '', ?, ?, 'self', ?)")
-        .run(hold.name, Date.now(), hold.feeMsat, hold.cx1)
-      return {name: hold.name, registered: true}
+      const hold = this.holdByHash(paymentHash)
+      if (!hold || hold.settled) return null
+      return this.completeHold(hold, nowMs)
+    })
+  }
+
+  // LUD-26 lets a wallet pay the address fee by melting a note at this
+  // mint. The invoice is this mint's own, so it is settled here rather than
+  // routed: the note burned and the name registered, or neither.
+  payHoldWithNote(paymentHash: string, noteId: string, nowMs: number = Date.now()): {name: string; registered: boolean} {
+    return this.tx(() => {
+      const hold = this.holdByHash(paymentHash)
+      if (!hold || hold.settled || hold.expiresAt <= nowMs) throw new HoldUnavailableError('that address fee invoice is no longer payable')
+      const note = this.assertOutstanding(noteId)
+      if (note.amountMsat !== hold.feeMsat) {
+        throw new HoldUnavailableError(`the note is worth ${note.amountMsat} msat and the address fee is ${hold.feeMsat} msat`)
+      }
+      this.setNoteState(noteId, 'burned')
+      return this.completeHold(hold, nowMs)
     })
   }
 

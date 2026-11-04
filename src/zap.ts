@@ -377,8 +377,10 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
         continue
       }
       if (!paid) continue
-      // The name's share now, or failing that the one it was paid to.
-      const share = shareOnFile(store.zapName(row.name)?.cx1) ?? shareOnFile(row.cx1)
+      // The share the invoice was made for: a name freed and taken by
+      // someone else since must not take a payment made to the old holder.
+      // An invoice from before shares were recorded takes the name's own.
+      const share = row.cx1 ? shareOnFile(row.cx1) : shareOnFile(store.zapName(row.name)?.cx1)
       if (share) {
         const receipt = buildReceipt(row)
         const landed = store.settleZapInvoiceToKey(row.paymentHash, share, (noteId, index) => ({
@@ -494,24 +496,34 @@ export const createZapBridge = (deps: ZapBridgeDeps): ZapBridge => {
     return settled?.registered ?? false
   }
 
-  // As the zap sweep: an expired hold goes only once the funding source
-  // confirms its invoice unpaid. The name was free again from the moment
-  // the invoice expired; this only tidies the row away.
+  // Each live hold is checked, the newest first and only so many a pass
+  // (a lookup settles any other on demand). A lapsed one gets one last
+  // check, past its grace: paid, it registers if the name is still free;
+  // unpaid, it goes. One the funding source cannot answer for a day after
+  // expiry goes too: the name was free long since, and only the record of a
+  // fee nobody can pay any more is lost.
   const settleHolds = async (nowMs: number = now()): Promise<number> => {
     let registered = 0
-    for (const hold of store.unsettledHolds()) {
-      if (await settleHold(hold.paymentHash)) {
-        registered += 1
+    const {live, lapsed} = store.unsettledHolds(nowMs)
+    for (const hold of live) if (await settleHold(hold.paymentHash)) registered += 1
+    for (const hold of lapsed) {
+      let paid: boolean
+      try {
+        paid = await backend.isInvoiceSettled(hold.paymentHash)
+      } catch {
+        if (nowMs > hold.expiresAt + 86_400_000) store.deleteUnsettledHold(hold.paymentHash)
         continue
       }
-      if (nowMs > hold.expiresAt + 3_600_000) {
-        let paid = true
-        try {
-          paid = await backend.isInvoiceSettled(hold.paymentHash)
-        } catch {
-          continue
+      if (paid) {
+        const settled = store.settleHold(hold.paymentHash)
+        if (settled?.registered) {
+          registered += 1
+          log(`address ${settled.name} registered: its fee settled`)
+        } else if (settled) {
+          log(`address fee for ${settled.name} settled after its hold lapsed and the name was taken: fee kept, nothing registered`)
         }
-        if (!paid) store.deleteUnsettledHold(hold.paymentHash)
+      } else {
+        store.deleteUnsettledHold(hold.paymentHash)
       }
     }
     return registered
