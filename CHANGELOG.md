@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.23.0 - 2026-11-05
+
+Melts follow LUD-25's exact-value rule (luds `cc186e5`). A note that is not a whole sat no longer melts straight into a wallet that only invoices whole sats.
 
 - **A note melts only for its exact value**, as LUD-25 (luds `cc186e5`)
   now requires: `minWithdrawable` and `maxWithdrawable` are both the
