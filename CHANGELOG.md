@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **A note melts only for its exact value**, as LUD-25 (luds `cc186e5`)
+  now requires: `minWithdrawable` and `maxWithdrawable` are both the
+  note's value, and an invoice for any other amount is refused with
+  `Invoice must be for exactly <value> msat.`, the whole-sat floor
+  included. An amountless invoice is paid exactly the note's value, to the
+  msat, where it used to get the whole-sat floor; a note worth less than a
+  sat is no longer refused there. A note that is not a whole sat can no
+  longer be redeemed straight into a wallet that only invoices whole sats:
+  split it to a whole sat in a LNURLcash wallet first, or use an
+  amountless invoice.
+
 ## 0.22.0 - 2026-11-04
 
 Breaking. Follows luds `lnurlcash` through `92e430f` (LUD-26 as plain BIP-32,
