@@ -144,9 +144,6 @@ const readBody = async (req: IncomingMessage, limit = MAX_BODY_BYTES): Promise<s
 
 export {describeFee} from './fee-words.ts'
 
-// A note's value rounded down to a whole sat; unchanged when already whole.
-const wholeSatFloor = (msat: number): number => Math.floor(msat / 1000) * 1000
-
 const backendFor = (config: MoneyerConfig): LightningBackend => {
   switch (config.backend.kind) {
     case 'fake':
@@ -1186,11 +1183,8 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       // reason the mutating callback already gives, and the same one dni's
       // lnurl-mint gives here.
       if (note.state === 'pending') return fail('pending')
-      // maxWithdrawable states the note's value, as the reference does.
-      // minWithdrawable is that value floored to a whole sat: most Lightning
-      // wallets can only invoice whole sats, and a note of 94.9 sat that
-      // insists on exactly 94,900 msat cannot be withdrawn by any of them.
-      // The sub-sat remainder of such a melt is dust the mint keeps.
+      // LUD-25: minWithdrawable and maxWithdrawable are both the note's
+      // value, and a melt for any other amount is refused (see the callback).
       return send({
         tag: 'withdrawRequest',
         callback: `${origin}/w/cb`,
@@ -1198,7 +1192,7 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
         // callback. A lookup by p deliberately does not echo or invent one:
         // the wallet already has its spend.
         ...(hasK1 && k1 ? {k1} : {}),
-        minWithdrawable: wholeSatFloor(note.amountMsat),
+        minWithdrawable: note.amountMsat,
         maxWithdrawable: note.amountMsat,
         defaultDescription: config.description,
         // The way home. A payRequest advertises `withdrawLink`; this is the
@@ -1322,29 +1316,13 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
       if (pr) {
         const decoded = tryDecodeBolt11(pr.trim())
         if (!decoded) return fail('Invalid invoice.')
-        // Exactly the notes' value, or the whole-sat floor of it when the
-        // value is not a whole sat (see the informational GET above). Never
-        // less than the floor: that would let a holder leave real value on
-        // the table by accident, and never more.
-        const floorMsat = wholeSatFloor(totalMsat)
-        // An invoice that states no amount is the easiest case a bearer
-        // note has: the note's value IS the amount, so the mint fills it in
-        // rather than refusing. It sends the whole-sat floor, which is the
-        // arithmetic a whole-value melt already does, and keeps the sub-sat
-        // remainder as the same dust it keeps when a wallet invoices the
-        // floor itself. A note worth less than a single sat has nothing
-        // left once that applies, and is refused as it always was.
-        const payAmountMsat = decoded.amountMsats === null ? floorMsat : null
-        if (payAmountMsat === 0) return fail('insufficient value')
-        if (
-          decoded.amountMsats !== null &&
-          (decoded.amountMsats > BigInt(totalMsat) || decoded.amountMsats < BigInt(floorMsat))
-        ) {
-          return fail(
-            floorMsat === totalMsat
-              ? `Invoice must be for exactly ${totalMsat} msat.`
-              : `Invoice must be for ${totalMsat} msat, or ${floorMsat} msat (the whole-sat floor).`
-          )
+        // LUD-25: a melt's invoice is for exactly the notes' value, and any
+        // other amount is refused. An invoice that states no amount leaves
+        // the amount to the payer, and the note's value IS the amount, so the
+        // mint pays exactly that, to the msat, rather than refusing.
+        const payAmountMsat = decoded.amountMsats === null ? totalMsat : null
+        if (decoded.amountMsats !== null && decoded.amountMsats !== BigInt(totalMsat)) {
+          return fail(`Invoice must be for exactly ${totalMsat} msat.`)
         }
         const paymentHash = decoded.paymentHashHex
         // Paying an invoice this mint itself issued would route the funding

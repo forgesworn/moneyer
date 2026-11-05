@@ -167,7 +167,7 @@ The `/w/cb` parameters, by operation:
 
 | operation | query | answer |
 | --- | --- | --- |
-| melt | `k1=<spend>&pr=<bolt11>` | `{status, pr, verify}` (`pr` and `verify` only while `MONEYER_VERIFY` is on). `pr` must be for the note's whole value, or its whole-sat floor, or state no amount; it cannot be combined with `amount` or several `k1`s |
+| melt | `k1=<spend>&pr=<bolt11>` | `{status, pr, verify}` (`pr` and `verify` only while `MONEYER_VERIFY` is on). `pr` must be for exactly the note's value, or state no amount (the mint then pays exactly that value); it cannot be combined with `amount` or several `k1`s |
 | rotate | `k1=<spend>&p1=<new note>` | `{status, c}` |
 | split | `k1=<spend>&amount=<msat>&p1=<note for amount>&p2=<note for the change>` | `{status, c, c2}`; the base fee, if any, comes out of the change |
 | merge | `k1=<spend>&k1=<spend>...&p1=<new note>` | `{status, c}` |
@@ -505,12 +505,14 @@ word, and the conformance grader accepts both.
 **moneyer rounds, by default.** A mint that deals in fractions of a sat
 issues notes nothing downstream can spend: msat-exact fees make notes like
 94.9 sat, and most Lightning wallets can only invoice whole sats, so such
-a note cannot be withdrawn by them at all. moneyer covers the notes
-already out there by advertising `minWithdrawable` as the note floored to
-a whole sat and accepting a melt for that, keeping the sub-sat remainder
-as dust - a wart it should not need. Rounding at mint time means it never
-comes up, and every note this mint issues for a whole-sat payment is worth
-a whole number of sats.
+a note cannot be withdrawn by them at all. Rounding at mint time means it
+never comes up, and every note this mint issues for a whole-sat payment is
+worth a whole number of sats. A note that is not a whole sat (a wallet's
+split change, or one minted before rounding) is melted only for its exact
+value, as LUD-25 requires: `minWithdrawable` and `maxWithdrawable` are both
+the note's value. A wallet that can only invoice whole sats melts it after
+splitting it to a whole sat in a LNURLcash wallet, or to an amountless
+invoice.
 
 `MONEYER_ROUND_FEE_TO_SAT=false` restores the msat-exact fee. An operator
 upgrading into this default withholds slightly more per mint than before,
@@ -521,14 +523,8 @@ change it quietly.
 
 An invoice that states no amount leaves the sending side to decide, and
 for a bearer note there is nothing to decide: the note's value is the
-amount. moneyer melts a note to one for the whole-sat floor of its value,
-the same figure it accepts from a wallet that fills the amount in itself,
-and keeps the sub-sat remainder as the same dust described above.
-
-A note worth less than a single satoshi has nothing left once the floor
-applies, so an amountless invoice from one is refused with `insufficient
-value`. It can still be melted the ordinary way by a wallet that invoices
-its exact millisatoshi value.
+amount. moneyer melts a note to one for exactly that value, to the
+millisatoshi, so a note that is not a whole sat goes out whole too.
 
 Nothing else about the melt changes. `OK` still means in flight, the note
 still burns only on confirmed payment and restores only on confirmed

@@ -45,28 +45,27 @@ const meltAnswer = async (mint: TestMint, amountMsat = 21_000) => {
 const noteState = (mint: TestMint, noteId: string) => mint.moneyer.store.noteById(noteId)?.state
 
 describe('a note that is not a whole sat', () => {
-  // Most Lightning wallets can only invoice whole sats. A 94.9 sat note
-  // that insists on exactly 94,900 msat cannot be withdrawn by any of them.
-  it('advertises its whole-sat floor as the minimum and melts for it, keeping the dust', async () => {
+  // LUD-25: minWithdrawable and maxWithdrawable are both the note's value,
+  // and a melt for any other amount MUST be refused, the whole-sat floor too.
+  it('advertises its exact value as both bounds and melts only for that', async () => {
     active = await startMint()
     const k1 = freshK1()
     active.moneyer.store.creditNote(noteIdOf(k1), 94_900)
     const info = await fetchNoteInfo(buildNoteUrl(`${active.moneyer.url}/w`, k1, 94_900))
     expect(info.maxWithdrawable).toBe(94_900)
-    expect(info.minWithdrawable).toBe(94_000)
+    expect(info.minWithdrawable).toBe(94_900)
 
-    // Below the floor, or above the value: refused, note untouched.
-    for (const wrong of [93_000, 95_000, 94_901]) {
+    // The floor, below it, or above the value: refused, note untouched.
+    for (const wrong of [94_000, 93_000, 95_000, 94_901]) {
       const res = await fetch(`${info.callback}?k1=${k1}&pr=${fakeBolt11({amountMsat: wrong, paymentHashHex: hashK1(freshK1())})}`)
       const body = (await res.json()) as {status: string; reason?: string}
       expect(body.status).toBe('ERROR')
-      expect(body.reason).toMatch(/94900 msat, or 94000 msat/)
+      expect(body.reason).toMatch(/exactly 94900 msat/)
     }
     expect(noteState(active, noteIdOf(k1))).toBe('outstanding')
 
-    // The whole-sat floor pays out; the 900 msat of dust stays with the mint.
     const paymentHash = hashK1(freshK1())
-    await meltNote(info.callback, k1, fakeBolt11({amountMsat: 94_000, paymentHashHex: paymentHash}))
+    await meltNote(info.callback, k1, fakeBolt11({amountMsat: 94_900, paymentHashHex: paymentHash}))
     await waitFor(() => noteState(active!, noteIdOf(k1)) === 'burned')
     expect(active.moneyer.store.meltByHash(paymentHash)).toMatchObject({amountMsat: 94_900, outcome: 'paid'})
   })
