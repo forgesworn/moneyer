@@ -33,10 +33,10 @@ the known limitations in `THREAT-MODEL.md`. Zeroing the fee buys a weaker
 posture than the one you already have, at the cost of a real vector.
 
 Keep it at cost recovery instead, and keep it **below** cost. The melt
-routing budget is `max(0.5% of the amount, 5000 msat, the mint fee)`
+routing budget is `max(1% of the amount, 5000 msat, the mint fee)`
 (`meltFeeLimitMsat`, `src/server.ts`), so a fee of `5000 msat + 1000 ppm`
-under-recovers on every note above about 1,250 sats, and by better than
-threefold at the top of a 10k sat range. That is the useful fact: the fee
+under-recovers on every note above about 560 sats, and by better than
+sixfold at the top of a 10k sat range. That is the useful fact: the fee
 is structurally incapable of being a margin, which is a far stronger
 statement about what it is for than charging nothing would be. Note that
 "it does not cover my costs" is not the same argument and does not work -
@@ -200,7 +200,7 @@ MONEYER_FEE_PPM=1000
 ```
 
 The base fee is not just revenue: it is what funds the melt's routing-fee
-budget, which is floored at 0.5% of the amount or 5000 msat so that even a
+budget, which is floored at 1% of the amount or 5000 msat so that even a
 fee-free mint still routes. A fee-free mint pays that floor out of its own
 channel balance on every melt, and nothing stops a griefer cycling
 mint-and-melt at minimum amounts to bleed it - each round trip returns
