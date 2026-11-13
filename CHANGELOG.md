@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.23.1 - 2026-11-13
+
+- **The melt routing budget is floored at 1%**, up from 0.5%, still with
+  the 5000 msat minimum and never below the mint fee. Custodial wallets
+  reached through route hints can need more than 0.5%: a 2,096 sat melt
+  to a Wallet of Satoshi address needed 0.55%, and lnd timed out without
+  a single attempt. A mint operator pays the difference from its own
+  channel balance; DEPLOY.md's fee figures are updated to match.
+
 ## 0.23.0 - 2026-11-05
 
 Melts follow LUD-25's exact-value rule (luds `cc186e5`). A note that is not a whole sat no longer melts straight into a wallet that only invoices whole sats.
