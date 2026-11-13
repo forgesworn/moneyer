@@ -249,10 +249,13 @@ export const createMoneyer = async (config: MoneyerConfig, deps: MoneyerDeps = {
 
   // The routing-fee budget for a melt. LUD-25 has the mint fee cover the
   // eventual payout's routing cost, so the budget follows what this mint
-  // actually charges, floored at 0.5%-or-5000msat so fee-free mints still
-  // route.
+  // actually charges, floored at 1%-or-5000msat so fee-free mints still
+  // route. 0.5% was too tight for custodial wallets reached through route
+  // hints: a 2,096 sat melt to a Wallet of Satoshi address needed 0.55%, and
+  // lnd timed out without a single attempt. The 5000 msat floor stays, so a
+  // tiny note cannot cost the mint more than five sats to route.
   const meltFeeLimitMsat = (amountMsat: number): number =>
-    Math.max(Math.round(amountMsat * 0.005), 5_000, mintFeeMsat(amountMsat))
+    Math.max(Math.round(amountMsat * 0.01), 5_000, mintFeeMsat(amountMsat))
 
   const mintFeeLine = config.mintFee ? `Mint fees: ${config.mintFee.baseFeeMsat},${config.mintFee.feePpm}` : null
   // LUD-26's address fee is what registering a name costs, so it is the
