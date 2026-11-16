@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.23.2 - 2026-11-16
+
+- Use padded URL-safe Base64 for payment hashes in LND REST tracking paths.
+  Hashes containing a slash previously returned 404 even for successful
+  payments, leaving melt verification without a preimage and NWC callers
+  waiting for proof until they timed out. Payment completion checks use the
+  corrected encoding too; JSON request bodies retain ordinary Base64.
+
 ## 0.23.1 - 2026-11-13
 
 - **The melt routing budget is floored at 1%**, up from 0.5%, still with
