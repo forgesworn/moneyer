@@ -32,6 +32,12 @@ const isIdleTimeout = (err: unknown): boolean => {
 
 const hexToBase64 = (hex: string): string => Buffer.from(hexToBytes(hex)).toString('base64')
 
+// grpc-gateway unescapes a path before matching its segments, so even %2F
+// breaks a hash containing '/'. It accepts padded URL-safe Base64 too.
+// Keep ordinary Base64 for bytes in JSON request bodies.
+const paymentHashPath = (hex: string): string =>
+  encodeURIComponent(hexToBase64(hex).replaceAll('+', '-').replaceAll('/', '_'))
+
 const decodeHexOrBase64 = (value: string): string => {
   if (/^[0-9a-fA-F]{64}$/.test(value)) return value.toLowerCase()
   return Buffer.from(value, 'base64').toString('hex')
@@ -197,7 +203,7 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
 
     async isPaymentComplete(paymentHashHex) {
       const {status, result} = await streamUntil(
-        `/v2/router/track/${encodeURIComponent(hexToBase64(paymentHashHex))}?no_inflight_updates=true`,
+        `/v2/router/track/${paymentHashPath(paymentHashHex)}?no_inflight_updates=true`,
         {timeoutMs: 15_000},
         payment => {
           if (payment?.status === 'SUCCEEDED') return true
@@ -246,7 +252,7 @@ export const createLndBackend = (config: {url: string; macaroon: string}): Light
 
     async paymentPreimage(paymentHashHex) {
       const {result} = await streamUntil(
-        `/v2/router/track/${encodeURIComponent(hexToBase64(paymentHashHex))}?no_inflight_updates=true`,
+        `/v2/router/track/${paymentHashPath(paymentHashHex)}?no_inflight_updates=true`,
         {timeoutMs: 15_000},
         payment => {
           if (payment?.status === 'SUCCEEDED') return payment.payment_preimage ?? null
