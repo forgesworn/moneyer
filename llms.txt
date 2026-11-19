@@ -23,6 +23,12 @@ Conformance: https://github.com/lnurlcash/lnurlcash-conformance
 Companion wallet: @forgesworn/notecase
 Client library to build against a mint: @lnurlcash/kit
 
+## ForgeSworn ecosystem
+
+- [ForgeSworn library guide](https://forgesworn.dev/llms.txt): Find related libraries, tools and integration guides by task and runtime.
+- [ForgeSworn on GitHub](https://github.com/forgesworn): Browse the organisation’s public repositories.
+- [Project source](https://github.com/forgesworn/moneyer): Canonical source repository, documentation and release information.
+
 ## Rules this SERVICE follows (and any mint MUST)
 
 1. A mint quote MUST be named. The payer sends `comment=hex(sha256(secret))`
